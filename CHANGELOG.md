@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-08-31
+
 ### Added
 - `attributed()` - attach an actor and arbitrary facts to every event fired
   inside a block. Nested blocks layer rather than replace, so a request-level
@@ -163,6 +165,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Artui/django-domain-events/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Artui/django-domain-events/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Artui/django-domain-events/compare/v0.0.0...v0.1.0
