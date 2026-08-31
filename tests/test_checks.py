@@ -13,6 +13,7 @@ from django_domain_events.fire import fire
 from django_domain_events.registry import registry
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_receiver import RegisteredReceiver
+from tests.conftest import receiver_deleted
 from tests.testapp.events import OrderPlaced
 
 
@@ -30,6 +31,7 @@ def _receiver_registered(key: str, event_class: type):
         mode=DeliveryMode.DURABLE,
         takes_context=False,
         max_attempts=5,
+        eager=False,
     )
     registry.register_receiver(entry)
     try:
@@ -73,11 +75,8 @@ def test_pending_rows_for_a_deleted_receiver_are_reported(
     with transaction.atomic():
         fire(order)
 
-    removed = registry._receivers.pop("testapp.durable_receiver")
-    try:
-        problems = checks.check_no_orphaned_deliveries()
-    finally:
-        registry._receivers["testapp.durable_receiver"] = removed
+    with receiver_deleted("testapp.durable_receiver"):
+        problems = checks.check_no_orphaned_deliveries(databases=["default"])
 
     assert [p.id for p in problems] == ["django_domain_events.W001"]
     assert "testapp.durable_receiver" in problems[0].msg
@@ -85,4 +84,31 @@ def test_pending_rows_for_a_deleted_receiver_are_reported(
 
 @pytest.mark.django_db(transaction=True)
 def test_no_pending_rows_is_clean() -> None:
+    assert checks.check_no_orphaned_deliveries(databases=["default"]) == []
+
+
+def test_it_does_nothing_without_a_database_to_look_at() -> None:
+    """``check``, ``showmigrations`` and ``makemigrations`` pass no databases.
+    Querying anyway is how a check registered under the database tag ends up
+    running where there is no database to run against."""
     assert checks.check_no_orphaned_deliveries() == []
+    assert checks.check_no_orphaned_deliveries(databases=[]) == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_it_does_nothing_before_the_table_exists() -> None:
+    """The one that made the package uninstallable: ``migrate`` does pass a
+    database, and runs this before creating the tables. Querying there kills the
+    first command a new project runs, and no tables are created at all.
+    """
+    from django.db import connection
+
+    from django_domain_events.models.delivery_record import DeliveryRecord
+
+    with connection.schema_editor() as editor:
+        editor.delete_model(DeliveryRecord)
+    try:
+        assert checks.check_no_orphaned_deliveries(databases=["default"]) == []
+    finally:
+        with connection.schema_editor() as editor:
+            editor.create_model(DeliveryRecord)

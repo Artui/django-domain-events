@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from django.db import transaction
 
@@ -10,6 +10,7 @@ from django_domain_events.registry import registry
 from django_domain_events.settings import get_codec, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
+from django_domain_events.write_alias import write_alias
 
 
 def fire(
@@ -35,7 +36,11 @@ def fire(
             f"and make sure the module declaring it is imported."
         )
 
-    if setting("WARN_OUTSIDE_ATOMIC") and not transaction.get_connection().in_atomic_block:
+    alias = write_alias()
+    if (
+        setting("WARN_OUTSIDE_ATOMIC")
+        and not transaction.get_connection(using=alias).in_atomic_block
+    ):
         warnings.warn(
             f"fire({entry.name}) ran outside a transaction. The event row is its "
             f"own transaction, so it can commit while the change that caused it "
@@ -61,7 +66,7 @@ def fire(
     receivers = registry.receivers_for(type(event))
     durable = [r for r in receivers if r.mode is DeliveryMode.DURABLE]
     if durable:
-        DeliveryRecord.objects.bulk_create(
+        rows = DeliveryRecord.objects.bulk_create(
             [
                 DeliveryRecord(
                     event=record,
@@ -72,6 +77,9 @@ def fire(
                 for r in durable
             ]
         )
+        eager_ids = [row.pk for row, r in zip(rows, durable, strict=True) if r.eager]
+        if eager_ids:
+            transaction.on_commit(_deliver_eagerly(eager_ids), using=alias, robust=True)
 
     for r in receivers:
         if r.mode is DeliveryMode.INLINE:
@@ -80,9 +88,37 @@ def fire(
             # robust=True is not optional: without it an uncaught exception in one
             # on_commit callback cancels every later one in the same transaction,
             # silently deleting the other receivers' work.
-            transaction.on_commit(_bind(r.func, r.takes_context, event, context), robust=True)
+            transaction.on_commit(
+                _bind(r.func, r.takes_context, event, context), using=alias, robust=True
+            )
 
     return record.pk
+
+
+def _deliver_eagerly(delivery_ids: list[int]) -> Callable[[], None]:
+    """Attempt these deliveries in the firing process, once, after commit.
+
+    Best effort by construction: whatever this loses to a crash is still owed,
+    because the delivery row is the record and the relay reclaims it when the
+    lease lapses.
+    """
+
+    def run() -> None:
+        from django_domain_events.claim_batch import claim_batch
+        from django_domain_events.deliver import deliver_one
+
+        now = datetime.now(timezone.utc)
+        claimed = claim_batch(
+            worker_id="eager",
+            now=now,
+            lease=timedelta(seconds=setting("LEASE_SECONDS")),
+            limit=len(delivery_ids),
+            only_ids=delivery_ids,
+        )
+        for delivery_id in claimed:
+            deliver_one(delivery_id)
+
+    return run
 
 
 def call_receiver(

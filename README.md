@@ -24,6 +24,19 @@ durable attribution for who caused what, and an event log you can query.
 pip install django-domain-events
 ```
 
+Add it to `INSTALLED_APPS` and migrate:
+
+```python
+INSTALLED_APPS = [..., "django.contrib.auth", "django_domain_events"]
+```
+
+`django.contrib.auth` is required: the event row carries a nullable foreign key
+to `AUTH_USER_MODEL` so attribution survives, and the migration depends on it.
+
+```bash
+python manage.py migrate
+```
+
 Nested event payloads need the decode half of the codec:
 
 ```bash
@@ -61,7 +74,20 @@ with transaction.atomic():
 ```
 
 The event row and one delivery row per durable receiver are written in that same
-transaction. Deliver what is owed with `python manage.py deliver_events --once`.
+transaction. Run the relay to deliver what is owed:
+
+```bash
+python manage.py deliver_events          # claim and deliver continuously
+python manage.py deliver_events --once   # one pass, for cron or CI
+```
+
+The relay claims with `SELECT ... FOR UPDATE SKIP LOCKED` under a lease, so you
+can run as many as you like: two workers never take the same row, and one that
+dies without acknowledging has its rows reclaimed when the lease lapses. Failed
+deliveries retry with exponential backoff and full jitter, then dead-letter.
+
+Add `eager=True` to a receiver to also attempt it immediately after commit, in
+the firing process, with the relay as the fallback.
 
 In tests, `drain_outbox()` runs the real delivery path to completion, and
 `assert_fired(OrderPlaced, times=1)` reads the log rather than a mock.

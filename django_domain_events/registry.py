@@ -28,12 +28,21 @@ class Registry:
         self._events_by_name[entry.name] = entry
 
     def register_receiver(self, receiver: RegisteredReceiver) -> None:
+        # Equality, not identity of the callable. Tolerating "same function"
+        # was meant to survive a double import, but stacked decorators are
+        # exactly that shape - one function, two events, one derived key - so
+        # the second registration silently replaced the first and an event
+        # fired to nothing. Comparing the whole record keeps double imports
+        # working and catches stacking, a changed mode and a changed
+        # max_attempts alike.
         existing = self._receivers.get(receiver.key)
-        if existing is not None and existing.func is not receiver.func:
+        if existing is not None and existing != receiver:
             raise ValueError(
-                f"Receiver key {receiver.key!r} is already registered to "
-                f"{existing.func!r}. Delivery rows address receivers by this "
-                f"key, so it has to name exactly one; pass an explicit key=."
+                f"Receiver key {receiver.key!r} is already registered for "
+                f"{existing.event_class.__name__} and cannot be reused for "
+                f"{receiver.event_class.__name__}. Delivery rows address "
+                f"receivers by this key, so it has to name exactly one "
+                f"registration; give each an explicit key=."
             )
         self._receivers[receiver.key] = receiver
 

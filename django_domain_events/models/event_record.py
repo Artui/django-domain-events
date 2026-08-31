@@ -44,7 +44,12 @@ class EventRecord(models.Model):
     causation_id = models.BigIntegerField(null=True, blank=True, db_index=True)
 
     suppressed_reason = models.CharField(max_length=255, blank=True)
-    """Set means recorded deliberately and deliberately not delivered."""
+    """Reserved for the suppression scope, which does not exist yet.
+
+    Nothing writes or reads it at this version. The column is here because the
+    schema lands whole rather than growing with the milestones, and saying so is
+    better than a docstring describing behaviour a reader cannot find.
+    """
 
     class Meta:
         indexes = [models.Index(fields=["name", "recorded_at"])]

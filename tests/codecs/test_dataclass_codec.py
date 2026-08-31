@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
+from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -199,3 +200,65 @@ def test_any_refuses_too() -> None:
 
     with pytest.raises(UnsupportedPayloadType, match="value"):
         codec.decode(Loose, {"value": 1}, 1)
+
+
+class Colour(Enum):
+    """A plain Enum, not the str-mixin kind the fixtures happen to use."""
+
+    RED = "red"
+
+
+@dataclass(frozen=True)
+class Painted:
+    colour: Colour
+
+
+@dataclass(frozen=True)
+class Stamped:
+    at: datetime
+    clock: time
+
+
+def test_a_plain_enum_round_trips() -> None:
+    """The decode side always claimed enums; the encode side had no Enum branch,
+    so only a str-mixin enum survived - which is what the fixtures use, so the
+    suite agreed with the gap."""
+    value = Painted(colour=Colour.RED)
+    assert codec.encode(value) == {"colour": "red"}
+    assert codec.decode(Painted, codec.encode(value), 1) == value
+
+
+def test_microseconds_survive_the_round_trip() -> None:
+    """DjangoJSONEncoder truncates to milliseconds, so an event came back with
+    different data and nothing failed - assert_fired least of all, which is the
+    helper most likely to be pointed at exactly this."""
+    value = Stamped(
+        at=datetime(2026, 8, 31, 12, 0, 0, 123456, tzinfo=timezone.utc),
+        clock=time(12, 0, 0, 123456),
+    )
+    assert codec.decode(Stamped, codec.encode(value), 1) == value
+
+
+def test_a_value_that_cannot_be_written_names_its_field() -> None:
+    """The raw error from json names a type and no field, and it surfaces inside
+    the caller's transaction - taking the business change with it."""
+
+    @dataclass(frozen=True)
+    class Bad:
+        ok: int
+        payload: Any
+
+    with pytest.raises(UnsupportedPayloadType, match=r"Bad\.payload"):
+        codec.encode(Bad(ok=1, payload={object()}))
+
+
+def test_the_refusal_falls_back_when_no_single_field_is_at_fault() -> None:
+    """The per-field search is a best effort at naming the culprit. Tested
+    directly because a payload that fails as a whole while every field passes
+    alone is not something JSON can actually produce - and a fallback that
+    cannot be reached should not be written on faith."""
+    from django_domain_events.codecs.dataclass_codec import _unencodable
+
+    problem = _unencodable(Painted(colour=Colour.RED), {}, TypeError("nope"))
+    assert isinstance(problem, UnsupportedPayloadType)
+    assert "Painted" in str(problem)

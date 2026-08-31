@@ -25,10 +25,13 @@ def assert_fired(event_class: type[E], *, times: int | None = None) -> list[E]:
         )
 
     rows = list(EventRecord.objects.filter(name=entry.name).order_by("pk"))
-    if times is None:
-        assert rows, f"Expected {entry.name} to have been fired, but it was not."
-    else:
-        assert len(rows) == times, (
+    # Raised rather than asserted: this is a published helper, and `python -O`
+    # strips a bare assert, so the version of it that ships to a consumer
+    # running optimised would pass on any input at all.
+    if times is None and not rows:
+        raise AssertionError(f"Expected {entry.name} to have been fired, but it was not.")
+    if times is not None and len(rows) != times:
+        raise AssertionError(
             f"Expected {entry.name} to have been fired {times} time(s), found {len(rows)}."
         )
 

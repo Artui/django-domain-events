@@ -101,6 +101,16 @@ Two rules specific to this package:
 - **Concurrency is tested with real connections.** A `SKIP LOCKED` test that
   runs on a single connection proves nothing. Those tests need two threads and
   `transaction=True`, and they only mean something on Postgres.
+- **The SQLite matrix is the coverage gate; the Postgres job is a correctness
+  gate.** Every line is reachable on SQLite, which is why the relay's
+  concurrency guard is a separate function from its loop. Two of those lines
+  only run where locks cannot be skipped, so they are unreachable on Postgres by
+  definition, and that job runs with `--cov-fail-under=0`.
+- **A test whose outcome depends on the backend must say so.** One that passes
+  only because SQLite refuses something is passing for the wrong reason: the
+  relay command test hung the entire Postgres suite until it was guarded,
+  because without `--passes` the relay runs forever and only SQLite was
+  stopping it.
 
 ## Type checking
 
@@ -131,6 +141,10 @@ configured and enforced. isort order is stdlib, third party, first party.
 | Python | 3.10 | 3.10 through 3.14 |
 | Django | 4.2 | 4.2, 5.0, 5.1, 5.2, 6.0, 6.1 |
 | Postgres | 12 | 17 (the relay half only) |
+
+`django.contrib.auth` must be installed: the event row's `actor` foreign key
+targets `AUTH_USER_MODEL` and the migration declares a swappable dependency on
+it, so a project without it cannot migrate at all.
 
 The Django floor is **4.2 for a reason**: `transaction.on_commit(robust=True)`.
 Without it, one best-effort receiver raising cancels every later callback

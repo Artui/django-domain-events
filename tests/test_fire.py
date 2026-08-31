@@ -13,7 +13,7 @@ from django_domain_events.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.types.delivery_status import DeliveryStatus
-from tests.testapp.events import OrderPlaced, PinnedName
+from tests.testapp.events import Eagerly, OrderPlaced, PinnedName
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -122,3 +122,51 @@ def test_max_attempts_is_copied_onto_the_row(order: OrderPlaced, record: list[st
     with transaction.atomic():
         fire(order)
     assert set(DeliveryRecord.objects.values_list("max_attempts", flat=True)) == {5}
+
+
+def test_an_eager_receiver_delivers_at_commit_without_a_relay(record: list[str]) -> None:
+    """What stops DURABLE feeling slow: outbox durability at on-commit latency.
+
+    The row is still written in the transaction, so what this buys is only the
+    attempt - anything a crash loses is still owed and the relay reclaims it.
+    """
+    with transaction.atomic():
+        fire(Eagerly(value=3))
+    assert "eager:3" in record
+
+    row = DeliveryRecord.objects.get(receiver_key="testapp.eager")
+    assert row.status == DeliveryStatus.SUCCEEDED
+
+
+def test_a_non_eager_receiver_waits_for_the_relay(order: OrderPlaced, record: list[str]) -> None:
+    with transaction.atomic():
+        fire(order)
+    assert "durable:7" not in record
+    assert (
+        DeliveryRecord.objects.get(receiver_key="testapp.durable_receiver").status
+        == DeliveryStatus.PENDING
+    )
+
+
+def test_an_eager_receiver_raising_leaves_the_row_owed(record: list[str]) -> None:
+    """The relay is the fallback, so an eager failure is a retry rather than a
+    loss. robust=True also keeps it from cancelling the other callbacks."""
+    from django_domain_events.registry import registry
+
+    entry = registry.receiver_for_key("testapp.eager")
+    original = entry.func
+
+    def explode(evt: OrderPlaced) -> None:
+        raise RuntimeError("not yet")
+
+    object.__setattr__(entry, "func", explode)
+    try:
+        with transaction.atomic():
+            fire(Eagerly(value=3))
+    finally:
+        object.__setattr__(entry, "func", original)
+
+    row = DeliveryRecord.objects.get(receiver_key="testapp.eager")
+    assert row.status == DeliveryStatus.FAILED
+    assert row.attempts == 1
+    assert row.available_at > row.event.recorded_at

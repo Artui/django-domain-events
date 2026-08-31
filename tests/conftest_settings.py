@@ -42,3 +42,9 @@ else:
             "NAME": ":memory:",
         }
     }
+
+# A second alias so the router tests have somewhere to route to. Nothing uses it
+# unless a test installs DATABASE_ROUTERS: a package whose transactions name the
+# default connection passes every single-database test and still breaks the
+# moment an event log is given its own database.
+DATABASES["events"] = dict(DATABASES["default"])

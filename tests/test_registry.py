@@ -34,6 +34,7 @@ def _receiver(key: str, cls: type, func) -> RegisteredReceiver:
         mode=DeliveryMode.DURABLE,
         takes_context=False,
         max_attempts=5,
+        eager=False,
     )
 
 
