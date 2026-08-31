@@ -450,6 +450,7 @@ dacite = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "dacite" },
     { name = "django-stubs", version = "6.0.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "django-stubs", version = "6.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "flake8-tidy-imports" },
@@ -477,6 +478,7 @@ provides-extras = ["dacite"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "dacite", specifier = ">=1.9.2" },
     { name = "django-stubs", specifier = ">=5.1.0" },
     { name = "flake8-tidy-imports", specifier = ">=4.12.0" },
     { name = "pre-commit", specifier = ">=4.0.0" },

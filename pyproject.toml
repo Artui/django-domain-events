@@ -74,6 +74,12 @@ dev = [
     # The Postgres half of the suite talks to a real server; the SQLite half
     # never imports this.
     "psycopg[binary]>=3.2.0",
+    # Also a runtime extra, and needed here for a different reason: CI's lint and
+    # test jobs sync --all-groups without --all-extras, so without this ty cannot
+    # resolve the import in dacite_codec and its tests cannot run at all. An
+    # optional dependency for consumers is a required one for developing the
+    # module that wraps it.
+    "dacite>=1.9.2",
 ]
 docs = [
     "mkdocs>=1.6.0",

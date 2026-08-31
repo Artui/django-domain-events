@@ -11,6 +11,7 @@ from uuid import UUID
 import dacite
 
 from django_domain_events.codecs.dataclass_codec import DataclassCodec
+from django_domain_events.utils import parse_datetime
 
 E = TypeVar("E")
 
@@ -19,7 +20,7 @@ _CONFIG = dacite.Config(
     type_hooks={
         Decimal: Decimal,
         UUID: UUID,
-        datetime: datetime.fromisoformat,
+        datetime: parse_datetime,
         date: date.fromisoformat,
         time: time.fromisoformat,
     },

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+from datetime import datetime
 from typing import Any, cast
 
 from django.apps import apps
@@ -55,3 +56,19 @@ def require_frozen_dataclass(event_class: type) -> None:
             f"at-least-once delivery hands a different instance to every attempt, "
             f"so a receiver mutating one is writing to a copy."
         )
+
+
+def parse_datetime(value: str) -> datetime:
+    """Parse a datetime the way ``DjangoJSONEncoder`` writes one.
+
+    The encoder emits UTC with a trailing ``Z``, and ``datetime.fromisoformat``
+    only learned to read that in Python 3.11. On this package's floor of 3.10 the
+    bare parser raises ``Invalid isoformat string``, so every UTC datetime in a
+    payload would fail to decode -- on the oldest supported interpreter only,
+    which is the configuration least likely to be the one anybody develops on.
+
+    Found by the version matrix rather than by review: the suite was green on
+    3.14 and red on 3.10, 3.11 and 3.12 for exactly this. The two halves of a
+    round trip have to agree, and they only agreed on the newest Python.
+    """
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))

@@ -15,6 +15,7 @@ from uuid import UUID
 from django.core.serializers.json import DjangoJSONEncoder
 
 from django_domain_events.codecs.unsupported_payload_type import UnsupportedPayloadType
+from django_domain_events.utils import parse_datetime
 
 E = TypeVar("E")
 
@@ -28,7 +29,7 @@ two halves of the round trip are defined by the same table.
 _PARSERS: dict[type, Any] = {
     Decimal: Decimal,
     UUID: UUID,
-    datetime: datetime.fromisoformat,
+    datetime: parse_datetime,
     date: date.fromisoformat,
     time: time.fromisoformat,
 }

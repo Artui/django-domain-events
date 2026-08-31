@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - System checks for a receiver listening to an undeclared event, an unimportable
   codec, and delivery rows addressed to a receiver that no longer exists.
 
+### Fixed
+- Datetimes in a payload could not be decoded on Python 3.10 to 3.12.
+  `DjangoJSONEncoder` writes UTC with a trailing `Z`, which
+  `datetime.fromisoformat` only learned to read in 3.11, so every UTC datetime
+  failed to decode on the oldest supported interpreters. Both codecs now parse
+  what the encoder actually writes.
+
 ### Notes
 - A single delivery pass, with no leased claim and no `SELECT ... FOR UPDATE
   SKIP LOCKED`. Two passes running at once will both claim the same rows and
