@@ -2,28 +2,21 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TypeVar
 
 from django_domain_events.registry import registry
+from django_domain_events.settings import get_codec
 
-if TYPE_CHECKING:
-    # Annotation-only. ``from __future__ import annotations`` keeps these out
-    # of the runtime import graph, which is what lets the model imports stay
-    # inside the functions that query them.
-    from django_domain_events.models.event_record import EventRecord
+E = TypeVar("E")
 
 
-def assert_fired(event_class: type, *, times: int | None = None) -> list[EventRecord]:
-    """Assert an event was fired, and return the rows.
+def assert_fired(event_class: type[E], *, times: int | None = None) -> list[E]:
+    """Assert an event was fired, and return the decoded events.
 
-    Reads the log rather than patching ``fire``, so it asserts what a consumer
-    would actually find: a mock records that a function was called, while the row
-    is the thing the rest of the system reacts to. If the payload could not be
-    encoded, a mock still passes.
-
-    ``times=None`` asserts at least one.
+    Reads the log rather than patching ``fire``: a mock records that a function
+    was called, while the row is what the rest of the system reacts to. Decoding
+    on the way out means a payload that cannot round-trip fails here too.
     """
-    # See fire(): a module-level model import would run during app loading.
     from django_domain_events.models.event_record import EventRecord
 
     entry = registry.event_for_class(event_class)
@@ -40,4 +33,6 @@ def assert_fired(event_class: type, *, times: int | None = None) -> list[EventRe
         assert len(rows) == times, (
             f"Expected {entry.name} to have been fired {times} time(s), found {len(rows)}."
         )
-    return rows
+
+    codec = get_codec()
+    return [codec.decode(event_class, row.payload, row.version) for row in rows]

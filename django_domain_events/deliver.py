@@ -1,40 +1,35 @@
-"""Running what is owed. One delivery, and a pass over all of them."""
+"""Running what is owed."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import Any
 
 from django.db import transaction
 
-from django_domain_events.fire import context_for
+from django_domain_events.fire import call_receiver
 from django_domain_events.registry import registry
 from django_domain_events.settings import get_codec
+from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_status import DeliveryStatus
 
-if TYPE_CHECKING:
-    # Annotation-only. ``from __future__ import annotations`` keeps these out
-    # of the runtime import graph, which is what lets the model imports stay
-    # inside the functions that query them.
-    from django_domain_events.models.delivery_record import DeliveryRecord
 
-
-def deliver_one(delivery: DeliveryRecord) -> DeliveryStatus:
+def deliver_one(delivery_id: int) -> DeliveryStatus:
     """Run one delivery and record its outcome, in a single transaction.
 
-    The receiver's work and the acknowledgement commit together. For a receiver
-    that touches only this database that makes delivery *effectively once*: the
-    duplicate an at-least-once system owes you cannot be observed, because a
-    crash before the commit rolls back the work along with the acknowledgement.
-    Receivers with side effects outside the database are at-least-once, as
-    promised, and that difference is worth stating in the README rather than
-    burying here.
+    The receiver's work and the acknowledgement commit together, so a receiver
+    touching only this database is effectively once: the duplicate at-least-once
+    owes you cannot be observed. Side effects outside the database are
+    at-least-once, as promised.
     """
+    from django_domain_events.models.delivery_record import DeliveryRecord
+
+    delivery = DeliveryRecord.objects.select_related("event").get(pk=delivery_id)
+
     receiver = registry.receiver_for_key(delivery.receiver_key)
     if receiver is None:
-        # The cost of freezing the receiver set at fire time. Terminal rather
-        # than retried: no amount of waiting brings back a deleted receiver, and
-        # a row retrying forever is indistinguishable from a broken one.
+        # Terminal: no amount of waiting brings back a deleted receiver, and a
+        # row retrying forever is indistinguishable from a broken one.
         delivery.status = DeliveryStatus.ORPHANED
         delivery.last_error = (
             f"No receiver is registered under {delivery.receiver_key!r}. It was "
@@ -57,9 +52,8 @@ def deliver_one(delivery: DeliveryRecord) -> DeliveryStatus:
             event_entry.event_class, delivery.event.payload, delivery.event.version
         )
     except Exception as exc:
-        # A payload that cannot be decoded will not decode on the next attempt
-        # either, so this is terminal. One undecodable row must not stop the
-        # other four thousand, and the message names the field and the vintage.
+        # Terminal: it will not decode on the next attempt either, and one
+        # undecodable row must not stop the other four thousand.
         delivery.status = DeliveryStatus.DEAD
         delivery.attempts += 1
         delivery.last_error = f"{type(exc).__name__}: {exc}"[:2000]
@@ -68,12 +62,16 @@ def deliver_one(delivery: DeliveryRecord) -> DeliveryStatus:
         return DeliveryStatus.DEAD
 
     attempt = delivery.attempts + 1
+    context = DeliveryContext(
+        event_id=delivery.event.pk,
+        event_name=delivery.event.name,
+        attempt=attempt,
+        actor_key=delivery.event.actor_key,
+        scope=delivery.event.scope,
+    )
     try:
         with transaction.atomic():
-            if receiver.takes_context:
-                receiver.func(event, context_for(delivery.event, attempt))
-            else:
-                receiver.func(event)
+            call_receiver(receiver.func, receiver.takes_context, event, context)
             delivery.status = DeliveryStatus.SUCCEEDED
             delivery.attempts = attempt
             delivery.completed_at = datetime.now(timezone.utc)
@@ -83,46 +81,35 @@ def deliver_one(delivery: DeliveryRecord) -> DeliveryStatus:
     return DeliveryStatus.SUCCEEDED
 
 
-def _fail(delivery: DeliveryRecord, message: str, attempt: int | None = None) -> DeliveryStatus:
-    """Record a failed attempt, dead-lettering once the budget is spent.
-
-    ``max_attempts`` is read off the row rather than off the live declaration,
-    so lowering the limit later cannot retroactively dead-letter work already in
-    flight under the old one.
-    """
-    delivery.attempts = attempt if attempt is not None else delivery.attempts + 1
-    delivery.last_error = message[:2000]
-    exhausted = delivery.attempts >= delivery.max_attempts
-    delivery.status = DeliveryStatus.DEAD if exhausted else DeliveryStatus.FAILED
-    delivery.completed_at = datetime.now(timezone.utc) if exhausted else None
-    delivery.save(update_fields=["status", "attempts", "last_error", "completed_at"])
-    return delivery.status
+def _fail(row: Any, message: str, attempt: int | None = None) -> DeliveryStatus:
+    """Record a failed attempt, dead-lettering once the budget is spent."""
+    row.attempts = attempt if attempt is not None else row.attempts + 1
+    row.last_error = message[:2000]
+    exhausted = row.attempts >= row.max_attempts
+    row.status = DeliveryStatus.DEAD if exhausted else DeliveryStatus.FAILED
+    row.completed_at = datetime.now(timezone.utc) if exhausted else None
+    row.save(update_fields=["status", "attempts", "last_error", "completed_at"])
+    return row.status
 
 
 def deliver_pending(limit: int | None = None) -> dict[DeliveryStatus, int]:
     """Deliver everything currently owed, once, and report what happened.
 
-    A single pass with no leasing and no ``SELECT ... FOR UPDATE SKIP LOCKED``.
-    That is a real limitation and it is stated rather than implied: two of these
-    running at once will both claim the same rows and deliver twice. At-least-
-    once already requires receivers to tolerate a duplicate, so this is safe
-    rather than merely tolerable, but it is not the concurrent relay -- that
-    arrives with the leased claim, and this function's callers do not change
-    when it does.
+    A single pass, with no leased claim and no ``SELECT ... FOR UPDATE SKIP
+    LOCKED``: two of these running at once will both claim the same rows and
+    deliver twice. At-least-once already requires receivers to tolerate that, but
+    this is not the concurrent relay.
     """
-    # See fire(): a module-level model import would run during app loading.
     from django_domain_events.models.delivery_record import DeliveryRecord
 
-    query = (
-        DeliveryRecord.objects.filter(status__in=[DeliveryStatus.PENDING, DeliveryStatus.FAILED])
-        .select_related("event")
-        .order_by("available_at", "pk")
-    )
+    query = DeliveryRecord.objects.filter(
+        status__in=[DeliveryStatus.PENDING, DeliveryStatus.FAILED]
+    ).order_by("available_at", "pk")
     if limit is not None:
         query = query[:limit]
 
     counts: dict[DeliveryStatus, int] = {}
-    for delivery in list(query):
-        outcome = deliver_one(delivery)
+    for delivery_id in list(query.values_list("pk", flat=True)):
+        outcome = deliver_one(delivery_id)
         counts[outcome] = counts.get(outcome, 0) + 1
     return counts

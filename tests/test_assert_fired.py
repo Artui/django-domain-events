@@ -14,14 +14,13 @@ from tests.testapp.events import OrderPlaced, PinnedName
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
-def test_it_reads_the_log_rather_than_a_mock(order: OrderPlaced, record: list[str]) -> None:
-    """A mock records that a function was called; the row is what the rest of the
-    system reacts to. If the payload could not be encoded, a mock still passes."""
+def test_it_returns_the_events_decoded_from_the_log(order: OrderPlaced, record: list[str]) -> None:
+    """Decoding on the way out means a payload that cannot round-trip fails here
+    too, which a mock would not catch."""
     with transaction.atomic():
         fire(order)
-    rows = assert_fired(OrderPlaced)
-    assert len(rows) == 1
-    assert rows[0].payload["order_id"] == 7
+    fired = assert_fired(OrderPlaced)
+    assert fired == [order]
 
 
 def test_an_exact_count_can_be_required(record: list[str]) -> None:

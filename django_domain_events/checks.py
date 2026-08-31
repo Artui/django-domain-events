@@ -14,9 +14,8 @@ from django_domain_events.settings import setting
 def check_receivers_have_events(**kwargs: Any) -> list[Any]:
     """Every receiver listens for something that was declared.
 
-    A receiver registered against an undeclared class never fires, and nothing
-    else would ever say so: the event simply cannot be fired, so there is no
-    failure to observe.
+    Nothing else would say so: the event cannot be fired, so there is no failure
+    to observe, only silence.
     """
     problems = []
     for receiver in registry.receivers():
@@ -33,12 +32,10 @@ def check_receivers_have_events(**kwargs: Any) -> list[Any]:
 
 
 def check_codec_dependency_is_installed(**kwargs: Any) -> list[Any]:
-    """The configured codec can actually be imported.
+    """The configured codec can be imported.
 
-    Reported at startup rather than at the moment an event fires. A codec is
-    imported lazily, so without this the first symptom of a missing extra is a
-    delivery failing in a worker, which is both later and further from the
-    setting that caused it.
+    At startup rather than when an event fires: a codec is imported lazily, so
+    the first symptom of a missing extra would otherwise be a failed delivery.
     """
     path = setting("CODEC")
     try:
@@ -49,8 +46,7 @@ def check_codec_dependency_is_installed(**kwargs: Any) -> list[Any]:
                 f"CODEC is set to {path!r}, which cannot be imported: {exc}",
                 hint=(
                     "DaciteCodec needs the 'dacite' extra: "
-                    "pip install 'django-domain-events[dacite]'. Its path is "
-                    "django_domain_events.codecs.dacite_codec.DaciteCodec"
+                    "pip install 'django-domain-events[dacite]'"
                 ),
                 id="django_domain_events.E002",
             )
@@ -59,12 +55,7 @@ def check_codec_dependency_is_installed(**kwargs: Any) -> list[Any]:
 
 
 def check_no_orphaned_deliveries(**kwargs: Any) -> list[Any]:
-    """No pending delivery names a receiver the registry no longer has.
-
-    The cost of freezing the receiver set at fire time, surfaced as a question
-    rather than discovered in a log. Registered against the database tag, so it
-    runs only when checks are asked to touch the database.
-    """
+    """No pending delivery names a receiver the registry no longer has."""
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.types.delivery_status import DeliveryStatus
 

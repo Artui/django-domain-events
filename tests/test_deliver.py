@@ -27,11 +27,15 @@ def _delivery(key: str) -> DeliveryRecord:
     return DeliveryRecord.objects.select_related("event").get(receiver_key=key)
 
 
+def _delivery_id(key: str) -> int:
+    return DeliveryRecord.objects.values_list("pk", flat=True).get(receiver_key=key)
+
+
 def test_a_successful_delivery_records_its_outcome(order: OrderPlaced, record: list[str]) -> None:
     _fire(order)
     record.clear()
 
-    assert deliver_one(_delivery("testapp.durable_receiver")) is DeliveryStatus.SUCCEEDED
+    assert deliver_one(_delivery_id("testapp.durable_receiver")) is DeliveryStatus.SUCCEEDED
 
     row = _delivery("testapp.durable_receiver")
     assert (row.status, row.attempts) == (DeliveryStatus.SUCCEEDED, 1)
@@ -61,7 +65,7 @@ def test_a_receiver_taking_context_is_told_its_attempt(
 ) -> None:
     _fire(order)
     record.clear()
-    deliver_one(_delivery("testapp.with_context"))
+    deliver_one(_delivery_id("testapp.with_context"))
     assert record == ["context:testapp.OrderPlaced:1"]
 
 
@@ -69,9 +73,8 @@ def test_a_deleted_receiver_leaves_the_row_orphaned(order: OrderPlaced, record: 
     """The cost of freezing the receiver set at fire time. Terminal rather than
     retried: no amount of waiting brings a deleted receiver back."""
     _fire(order)
-    row = _delivery("testapp.durable_receiver")
     with _receiver_deleted("testapp.durable_receiver"):
-        assert deliver_one(row) is DeliveryStatus.ORPHANED
+        assert deliver_one(_delivery_id("testapp.durable_receiver")) is DeliveryStatus.ORPHANED
 
     refreshed = _delivery("testapp.durable_receiver")
     assert refreshed.status == DeliveryStatus.ORPHANED
@@ -120,12 +123,12 @@ def test_a_failing_receiver_is_retried_then_dead_lettered(
         raise RuntimeError("downstream is down")
 
     with _receiver_replaced("testapp.durable_receiver", explode):
-        assert deliver_one(_delivery("testapp.durable_receiver")) is DeliveryStatus.FAILED
+        assert deliver_one(_delivery_id("testapp.durable_receiver")) is DeliveryStatus.FAILED
         first = _delivery("testapp.durable_receiver")
         assert (first.attempts, first.completed_at) == (1, None)
         assert "downstream is down" in first.last_error
 
-        assert deliver_one(_delivery("testapp.durable_receiver")) is DeliveryStatus.DEAD
+        assert deliver_one(_delivery_id("testapp.durable_receiver")) is DeliveryStatus.DEAD
         second = _delivery("testapp.durable_receiver")
         assert second.attempts == 2
         assert second.completed_at is not None
@@ -149,7 +152,7 @@ def test_a_receiver_raising_rolls_back_its_own_writes(
         raise RuntimeError("after the write")
 
     with _receiver_replaced("testapp.durable_receiver", write_then_explode):
-        deliver_one(_delivery("testapp.durable_receiver"))
+        deliver_one(_delivery_id("testapp.durable_receiver"))
 
     assert not EventRecord.objects.filter(name="testapp.side_effect").exists()
 
@@ -164,7 +167,7 @@ def test_an_undecodable_payload_is_terminal_not_a_stuck_loop(
     stored.payload = {**stored.payload, "currency": "GBP"}
     stored.save(update_fields=["payload"])
 
-    assert deliver_one(_delivery("testapp.durable_receiver")) is DeliveryStatus.DEAD
+    assert deliver_one(_delivery_id("testapp.durable_receiver")) is DeliveryStatus.DEAD
     row = _delivery("testapp.durable_receiver")
     assert row.status == DeliveryStatus.DEAD
     assert "GBP" in row.last_error
@@ -178,7 +181,7 @@ def test_an_unregistered_event_name_fails_the_delivery(
     stored.name = "testapp.NoSuchEvent"
     stored.save(update_fields=["name"])
 
-    assert deliver_one(_delivery("testapp.durable_receiver")) is DeliveryStatus.FAILED
+    assert deliver_one(_delivery_id("testapp.durable_receiver")) is DeliveryStatus.FAILED
     assert "No event is registered" in _delivery("testapp.durable_receiver").last_error
 
 

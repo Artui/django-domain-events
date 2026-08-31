@@ -1,20 +1,13 @@
 """A Django domain-event log with in-process fan-out.
 
-The public surface is re-exported eagerly, which takes some arranging: Django
-imports an app's package *before* the app registry is ready, so anything reached
-from here must not import a model at module level. The four modules that touch
-models therefore import them inside their functions, each saying so inline. That
-is this package's one standing exception to the top-level-imports rule, and it
-buys something worth the cost.
+The re-exports are eager, so the modules reached from here must not import a
+model at module level: Django imports an app's package before the app registry
+is ready. The four that touch models import them inside their functions.
 
-A lazy PEP 562 re-export was the obvious alternative and it does not work here.
-Under one-symbol-per-file the module and the symbol share a name -- ``fire``
-lives in ``fire.py`` -- and importing that submodule makes the import system bind
-the *module* as an attribute of this package. From then on ordinary lookup
-succeeds with the module and ``__getattr__`` is never consulted, so
-``from django_domain_events import fire`` hands back a module. Caching the
-resolved value only wins if nothing imports the submodule afterwards, and this
-package's own internals do exactly that.
+A lazy PEP 562 re-export does not work here. Under one-symbol-per-file the
+module and the symbol share a name, so importing the submodule binds the module
+as an attribute of this package and ``from django_domain_events import fire``
+then hands back a module.
 """
 
 from django_domain_events.assert_fired import assert_fired

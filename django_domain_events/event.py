@@ -19,23 +19,10 @@ def event(*, name: str | None = None, version: int = 1) -> Callable[[E], E]: ...
 def event(
     cls: type | None = None, *, name: str | None = None, version: int = 1
 ) -> type | Callable[[type], type]:
-    """Register a frozen dataclass as an event.
-
-    Usable bare or called::
-
-        @event
-        @dataclass(frozen=True, slots=True)
-        class OrderPlaced:
-            order_id: int
-
-        @event(name="orders.placed", version=2)
-        @dataclass(frozen=True, slots=True)
-        class OrderPlacedV2:
-            order_id: int
+    """Register a frozen dataclass as an event, bare or called.
 
     The default name is ``<app_label>.<ClassName>``. Pin it with ``name=`` when
-    renaming the class would otherwise strand rows already written under the old
-    one: the name is what a delivery row carries, not the class.
+    renaming the class would otherwise strand rows written under the old one.
     """
 
     def decorate(target: type) -> type:

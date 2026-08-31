@@ -27,7 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuses everything else by name; `DaciteCodec`, behind the `dacite` extra,
   handles nested shapes.
 - `deliver_events --once`, `drain_outbox()` and `assert_fired()`. The test
-  helper runs the real delivery path rather than bypassing it.
+  helper runs the real delivery path rather than bypassing it, and
+  `assert_fired()` returns the events decoded from the log, so a payload that
+  cannot round-trip fails the assertion too.
 - System checks for a receiver listening to an undeclared event, an unimportable
   codec, and delivery rows addressed to a receiver that no longer exists.
 

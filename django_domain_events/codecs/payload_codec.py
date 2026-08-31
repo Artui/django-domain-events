@@ -10,26 +10,12 @@ E = TypeVar("E")
 class PayloadCodec(Protocol):
     """How an event instance becomes a payload, and comes back.
 
-    A seam rather than a hard choice, because the two halves have very different
-    costs. Encoding needs nothing this package does not already have: stdlib
-    ``asdict`` plus Django's own ``DjangoJSONEncoder`` already handles every
-    scalar a domain event carries. Decoding a nested payload back into a frozen
-    dataclass is the part worth a dependency, and the part a consumer may
-    reasonably want to choose.
-
-    Every codec consumes an ordinary frozen dataclass, so which one is configured
-    never reaches how a consumer declares an event.
+    A seam because the two halves cost differently: encoding needs nothing this
+    package does not have, while decoding a nested payload back into a frozen
+    dataclass is worth a dependency. Every codec consumes an ordinary frozen
+    dataclass, so the choice never reaches how events are declared.
     """
 
-    def encode(self, event: object) -> dict[str, Any]:
-        """Return a JSON-safe dict for the event instance."""
-        ...
+    def encode(self, event: object) -> dict[str, Any]: ...
 
-    def decode(self, event_class: type[E], payload: dict[str, Any], version: int) -> E:
-        """Rebuild an instance, raising for a payload this codec cannot honour.
-
-        ``version`` is the schema version recorded on the row. A codec that does
-        not migrate reads it only to name it in an error, which is still worth
-        more than a decode failure that cannot say which vintage it choked on.
-        """
-        ...
+    def decode(self, event_class: type[E], payload: dict[str, Any], version: int) -> E: ...

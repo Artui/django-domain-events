@@ -45,22 +45,12 @@ def receiver(
 ) -> Callable[[Callable[..., None]], Callable[..., None]]:
     """Register a callable to receive one event type.
 
-    ``takes_context`` is the spelling Django uses for the same idea in
-    ``django.tasks.task``: an opt-in flag rather than inspecting the callable's
-    parameters, because deciding what to pass by counting parameters is what
-    makes a library feel haunted. The overloads above mean a checker enforces the
-    arity the flag implies, so declaring one and writing the other is an error at
-    the decorator rather than a ``TypeError`` in the relay three hours later.
+    ``takes_context`` is the spelling ``django.tasks.task`` uses for the same
+    idea. The overloads make a checker enforce the arity it implies, so
+    declaring one and writing the other fails at the decorator rather than in
+    the relay hours later.
 
-        @receiver(OrderPlaced)
-        def reserve_funds(evt: OrderPlaced) -> None: ...
-
-        @receiver(OrderPlaced, takes_context=True, max_attempts=10)
-        def notify(evt: OrderPlaced, ctx: DeliveryContext) -> None: ...
-
-    ``max_attempts`` is copied onto each delivery row at fire time, so lowering
-    it later does not retroactively dead-letter rows already in flight under the
-    old limit.
+    ``max_attempts`` is copied onto each delivery row at fire time.
     """
 
     def decorate(func: Callable[..., None]) -> Callable[..., None]:
@@ -80,18 +70,11 @@ def receiver(
 
 
 def _derived_key(func: Callable[..., None]) -> str:
-    """Build the default key from the declaring app and the callable's name.
-
-    Refuses for a callable with no ``__name__`` -- a ``functools.partial``, or an
-    instance with ``__call__``. There is no stable identity to derive there, and
-    inventing one would write a key onto delivery rows that nothing can address
-    later. ``key=`` is the answer, and the message says so.
-    """
+    """Build the default key from the declaring app and the callable's name."""
     name = getattr(func, "__name__", None)
     if name is None:
         raise TypeError(
             f"{func!r} has no __name__, so no stable receiver key can be derived "
-            f"from it. Delivery rows address receivers by key, so pass an "
-            f"explicit key=."
+            f"from it. Delivery rows address receivers by key, so pass key=."
         )
     return label_for(func.__module__, name)
