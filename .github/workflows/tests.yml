@@ -234,8 +234,14 @@ jobs:
         run: uv sync --all-groups --all-extras --python 3.13
       - name: Pin Django 6.1
         run: uv pip install --reinstall-package django "django~=6.1.0"
+      # Coverage is gated by the SQLite matrix, not here. Every line is reachable
+      # on SQLite -- the relay's concurrency guard is separate from its loop
+      # precisely so it stays that way -- while two of those lines are the ones
+      # that only run where locks *cannot* be skipped, so they are unreachable on
+      # this backend by definition. Gating both would mean neither could be 100%.
+      # This job's job is the behaviour SQLite cannot express: real contention.
       - name: pytest against Postgres
-        run: uv run --no-sync pytest
+        run: uv run --no-sync pytest --cov-fail-under=0
 
   coverage-badge:
     # Publishes a shields.io-compatible coverage.json to gh-pages so the README

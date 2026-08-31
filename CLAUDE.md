@@ -101,6 +101,16 @@ Two rules specific to this package:
 - **Concurrency is tested with real connections.** A `SKIP LOCKED` test that
   runs on a single connection proves nothing. Those tests need two threads and
   `transaction=True`, and they only mean something on Postgres.
+- **The SQLite matrix is the coverage gate; the Postgres job is a correctness
+  gate.** Every line is reachable on SQLite, which is why the relay's
+  concurrency guard is a separate function from its loop. Two of those lines
+  only run where locks cannot be skipped, so they are unreachable on Postgres by
+  definition, and that job runs with `--cov-fail-under=0`.
+- **A test whose outcome depends on the backend must say so.** One that passes
+  only because SQLite refuses something is passing for the wrong reason: the
+  relay command test hung the entire Postgres suite until it was guarded,
+  because without `--passes` the relay runs forever and only SQLite was
+  stopping it.
 
 ## Type checking
 
