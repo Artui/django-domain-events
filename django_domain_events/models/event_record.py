@@ -1,5 +1,3 @@
-"""The immutable log row: one per ``fire()``."""
-
 from __future__ import annotations
 
 from django.conf import settings

@@ -1,5 +1,3 @@
-"""System checks: the questions a registry can answer and signals cannot."""
-
 from __future__ import annotations
 
 from typing import Any

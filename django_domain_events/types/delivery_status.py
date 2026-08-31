@@ -1,5 +1,3 @@
-"""The lifecycle of a single durable delivery."""
-
 from __future__ import annotations
 
 from django.db import models

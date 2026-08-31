@@ -1,5 +1,3 @@
-"""Helpers shared across more than one module in this package."""
-
 from __future__ import annotations
 
 import dataclasses

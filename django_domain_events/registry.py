@@ -1,5 +1,3 @@
-"""Declared events and their receivers."""
-
 from __future__ import annotations
 
 from django_domain_events.types.registered_event import RegisteredEvent

@@ -1,5 +1,3 @@
-"""The test helper for asserting an event was recorded."""
-
 from __future__ import annotations
 
 from typing import TypeVar

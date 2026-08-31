@@ -1,5 +1,3 @@
-"""``@receiver`` - declare a callable as something that listens."""
-
 from __future__ import annotations
 
 from collections.abc import Callable

@@ -1,5 +1,3 @@
-"""One row per (event, durable receiver): the debt, and its state."""
-
 from __future__ import annotations
 
 from django.db import models

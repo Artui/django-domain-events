@@ -1,5 +1,3 @@
-"""Raised when a codec is asked for something it will not approximate."""
-
 from __future__ import annotations
 
 

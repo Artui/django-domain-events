@@ -1,5 +1,3 @@
-"""The default codec: stdlib only, narrow on purpose, and loud at the edge."""
-
 from __future__ import annotations
 
 import dataclasses

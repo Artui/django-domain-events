@@ -1,5 +1,3 @@
-"""What a receiver is told about the delivery it is running under."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

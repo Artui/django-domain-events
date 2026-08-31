@@ -1,5 +1,3 @@
-"""The test helper that runs the real delivery path."""
-
 from __future__ import annotations
 
 from django_domain_events.deliver import deliver_pending

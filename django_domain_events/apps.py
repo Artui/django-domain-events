@@ -1,5 +1,3 @@
-"""App configuration: autodiscovery and check registration."""
-
 from __future__ import annotations
 
 from django.apps import AppConfig

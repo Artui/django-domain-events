@@ -1,5 +1,3 @@
-"""What the registry knows about one declared event class."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

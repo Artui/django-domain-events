@@ -55,6 +55,28 @@ Non-negotiable. They keep the package navigable.
 7. **Types live in `types/`.** Value-shape carriers live under `types/`;
    behavioural code lives at the package root.
 
+## Three constraints that look like tidy-ups
+
+Each of these reads as an oversight and is not. They are here rather than as
+comments in the files because the code cannot carry the reason at the point
+someone would change it.
+
+- **The re-exports in `__init__.py` are eager, and must stay eager.** A lazy PEP
+  562 `__getattr__` is the obvious alternative and it does not hold: under
+  one-symbol-per-file the module and the symbol share a name, so importing
+  `django_domain_events.fire` binds the *module* as an attribute of the package
+  and `from django_domain_events import fire` then returns a module. Caching the
+  resolved value only wins if nothing imports the submodule afterwards, and the
+  internals do.
+- **The four model-touching modules import models inside their functions.**
+  Django imports an app's package before the app registry is ready, and
+  `__init__` re-exports those functions, so a module-level model import raises
+  `AppRegistryNotReady` at startup. Nothing outside `models/` names a model in a
+  signature, so the annotations need no import either.
+- **`codecs/__init__.py` does not export `DaciteCodec`.** It imports an optional
+  extra; re-exporting it would pull `dacite` in for anyone touching the package
+  at all. It is referenced by full dotted path in settings.
+
 ## Adding a feature
 
 Branch first, always. Three touchpoints per change: the source file, the

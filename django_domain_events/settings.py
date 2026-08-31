@@ -1,5 +1,3 @@
-"""Reading this package's settings, with the defaults in one place."""
-
 from __future__ import annotations
 
 from typing import Any

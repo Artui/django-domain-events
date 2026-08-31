@@ -1,5 +1,3 @@
-"""``@event`` - declare a class as something that can be fired."""
-
 from __future__ import annotations
 
 from collections.abc import Callable

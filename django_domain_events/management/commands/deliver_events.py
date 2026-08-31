@@ -1,5 +1,3 @@
-"""``deliver_events`` - run what the outbox owes."""
-
 from __future__ import annotations
 
 from typing import Any

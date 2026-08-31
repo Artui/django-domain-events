@@ -1,5 +1,3 @@
-"""When a receiver runs relative to the firing transaction."""
-
 from __future__ import annotations
 
 from enum import Enum

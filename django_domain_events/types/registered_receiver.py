@@ -1,5 +1,3 @@
-"""What the registry knows about one declared receiver."""
-
 from __future__ import annotations
 
 from collections.abc import Callable

@@ -1,5 +1,3 @@
-"""The seam between a declared event class and the JSON column it lands in."""
-
 from __future__ import annotations
 
 from typing import Any, Protocol, TypeVar

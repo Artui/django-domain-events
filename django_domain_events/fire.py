@@ -1,5 +1,3 @@
-"""``fire()`` - record that something happened, and owe it to its receivers."""
-
 from __future__ import annotations
 
 import warnings

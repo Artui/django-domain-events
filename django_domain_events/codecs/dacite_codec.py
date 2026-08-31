@@ -1,5 +1,3 @@
-"""The codec for payloads the default one refuses: nested, and richer."""
-
 from __future__ import annotations
 
 from datetime import date, datetime, time
