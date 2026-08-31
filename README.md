@@ -24,6 +24,16 @@ durable attribution for who caused what, and an event log you can query.
 pip install django-domain-events
 ```
 
+Add it to `INSTALLED_APPS` and migrate:
+
+```python
+INSTALLED_APPS = [..., "django_domain_events"]
+```
+
+```bash
+python manage.py migrate
+```
+
 Nested event payloads need the decode half of the codec:
 
 ```bash
