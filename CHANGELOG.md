@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The package could not be installed.** `manage.py migrate` failed on a fresh
+  database with `no such table: django_domain_events_deliveryrecord`, creating
+  no tables at all, on every supported Django version. The orphaned-delivery
+  system check queried its table unconditionally: it needs a `databases` guard,
+  because `check`, `makemigrations` and `showmigrations` pass none, and a
+  table-existence guard, because `migrate` does pass one and runs the check
+  before creating the tables.
+
 ## [0.1.0] — 2026-08-31
 
 ### Added

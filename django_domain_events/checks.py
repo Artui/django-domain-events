@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from django.core.checks import Error, Warning
@@ -52,16 +53,38 @@ def check_codec_dependency_is_installed(**kwargs: Any) -> list[Any]:
     return []
 
 
-def check_no_orphaned_deliveries(**kwargs: Any) -> list[Any]:
-    """No pending delivery names a receiver the registry no longer has."""
+def check_no_orphaned_deliveries(
+    *, databases: Sequence[str] | None = None, **kwargs: Any
+) -> list[Any]:
+    """No pending delivery names a receiver the registry no longer has.
+
+    Two guards, and both are load-bearing. Without the first this runs under
+    ``check``, ``showmigrations`` and ``makemigrations``, which pass no
+    databases. Without the second it runs under ``migrate`` - which does pass
+    one - and queries a table migrate has not created yet, so the first command
+    a new project runs dies and no tables are created at all.
+    """
+    from django.db import connections
+
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.types.delivery_status import DeliveryStatus
 
-    keys = set(
-        DeliveryRecord.objects.filter(status__in=[DeliveryStatus.PENDING, DeliveryStatus.FAILED])
-        .values_list("receiver_key", flat=True)
-        .distinct()
-    )
+    if not databases:
+        return []
+
+    table = DeliveryRecord._meta.db_table
+    keys: set[str] = set()
+    for alias in databases:
+        connection = connections[alias]
+        with connection.cursor() as cursor:
+            if table not in connection.introspection.table_names(cursor):
+                continue
+        keys |= set(
+            DeliveryRecord.objects.using(alias)
+            .filter(status__in=[DeliveryStatus.PENDING, DeliveryStatus.FAILED])
+            .values_list("receiver_key", flat=True)
+            .distinct()
+        )
     missing = sorted(k for k in keys if registry.receiver_for_key(k) is None)
     if not missing:
         return []
