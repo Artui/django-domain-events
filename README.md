@@ -30,6 +30,59 @@ Nested event payloads need the decode half of the codec:
 pip install "django-domain-events[dacite]"
 ```
 
+## Quickstart
+
+Declare an event and something that listens for it:
+
+```python
+# orders/events.py
+from dataclasses import dataclass
+
+from django_domain_events import DURABLE, event, receiver
+
+
+@event
+@dataclass(frozen=True, slots=True)
+class OrderPlaced:
+    order_id: int
+    total_cents: int
+
+
+@receiver(OrderPlaced, mode=DURABLE)
+def reserve_stock(evt: OrderPlaced) -> None: ...
+```
+
+Fire it inside the transaction that makes the change:
+
+```python
+with transaction.atomic():
+    order = Order.objects.create(...)
+    fire(OrderPlaced(order_id=order.id, total_cents=order.total_cents))
+```
+
+The event row and one delivery row per durable receiver are written in that same
+transaction. Deliver what is owed with `python manage.py deliver_events --once`.
+
+In tests, `drain_outbox()` runs the real delivery path to completion, and
+`assert_fired(OrderPlaced, times=1)` reads the log rather than a mock.
+
+## Delivery modes
+
+Two independent knobs, not one enum. Timing is what a receiver promises about the
+transaction; where its code runs is a separate question, and only meaningful for
+`DURABLE`.
+
+| Mode | Runs | Can veto | Recoverable |
+| --- | --- | --- | --- |
+| `INLINE` | inside the transaction | yes, by raising | not needed: its failure is a rollback |
+| `ON_COMMIT` | after commit, in the firing process | no | no |
+| `DURABLE` (default) | after commit, at-least-once, retried | no | yes |
+
+For a receiver that touches only this database, the work and the acknowledgement
+commit together, so delivery is *effectively once*: the duplicate an
+at-least-once system owes you cannot be observed. Receivers with side effects
+outside the database are at-least-once, as promised.
+
 ## Status
 
 Early development. The API is not stable and the package is not yet usable;
