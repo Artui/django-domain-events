@@ -23,6 +23,7 @@ def receiver(
     takes_context: Literal[False] = False,
     key: str | None = None,
     max_attempts: int = 5,
+    eager: bool = False,
 ) -> Callable[[Plain[E]], Plain[E]]: ...
 @overload
 def receiver(
@@ -32,6 +33,7 @@ def receiver(
     takes_context: Literal[True],
     key: str | None = None,
     max_attempts: int = 5,
+    eager: bool = False,
 ) -> Callable[[WithContext[E]], WithContext[E]]: ...
 def receiver(
     event_class: type[E],
@@ -40,6 +42,7 @@ def receiver(
     takes_context: bool = False,
     key: str | None = None,
     max_attempts: int = 5,
+    eager: bool = False,
 ) -> Callable[[Callable[..., None]], Callable[..., None]]:
     """Register a callable to receive one event type.
 
@@ -49,6 +52,12 @@ def receiver(
     the relay hours later.
 
     ``max_attempts`` is copied onto each delivery row at fire time.
+
+    ``eager`` additionally attempts delivery immediately after commit, in the
+    firing process, with the relay as the fallback for whatever process death
+    loses. It is what stops ``DURABLE`` feeling slow: outbox durability at
+    on-commit latency, at the cost of a duplicate when the process dies
+    mid-receiver - which at-least-once already required everyone to tolerate.
     """
 
     def decorate(func: Callable[..., None]) -> Callable[..., None]:
@@ -60,6 +69,7 @@ def receiver(
                 mode=mode,
                 takes_context=takes_context,
                 max_attempts=max_attempts,
+                eager=eager,
             )
         )
         return func

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import random
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from django.db import transaction
 
+from django_domain_events.backoff import backoff
+from django_domain_events.claim_batch import claim_batch
 from django_domain_events.fire import call_receiver
 from django_domain_events.registry import registry
-from django_domain_events.settings import get_codec
+from django_domain_events.settings import get_codec, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_status import DeliveryStatus
 
@@ -81,33 +84,40 @@ def deliver_one(delivery_id: int) -> DeliveryStatus:
 
 def _fail(row: Any, message: str, attempt: int | None = None) -> DeliveryStatus:
     """Record a failed attempt, dead-lettering once the budget is spent."""
+    now = datetime.now(timezone.utc)
     row.attempts = attempt if attempt is not None else row.attempts + 1
     row.last_error = message[:2000]
     exhausted = row.attempts >= row.max_attempts
     row.status = DeliveryStatus.DEAD if exhausted else DeliveryStatus.FAILED
-    row.completed_at = datetime.now(timezone.utc) if exhausted else None
-    row.save(update_fields=["status", "attempts", "last_error", "completed_at"])
+    row.completed_at = now if exhausted else None
+    row.available_at = now + backoff(
+        row.attempts,
+        base=setting("BACKOFF_BASE_SECONDS"),
+        cap=setting("BACKOFF_CAP_SECONDS"),
+        jitter=random.random(),
+    )
+    row.save(update_fields=["status", "attempts", "last_error", "completed_at", "available_at"])
     return row.status
 
 
-def deliver_pending(limit: int | None = None) -> dict[DeliveryStatus, int]:
-    """Deliver everything currently owed, once, and report what happened.
+def deliver_pending(
+    limit: int | None = None, *, worker_id: str = "deliver_pending"
+) -> dict[DeliveryStatus, int]:
+    """Claim everything currently owed, deliver it once, and report the outcome.
 
-    A single pass, with no leased claim and no ``SELECT ... FOR UPDATE SKIP
-    LOCKED``: two of these running at once will both claim the same rows and
-    deliver twice. At-least-once already requires receivers to tolerate that, but
-    this is not the concurrent relay.
+    Claims through the same leased path the relay uses, so a pass here and a
+    running relay do not hand the same row to two receivers.
     """
-    from django_domain_events.models.delivery_record import DeliveryRecord
-
-    query = DeliveryRecord.objects.filter(
-        status__in=[DeliveryStatus.PENDING, DeliveryStatus.FAILED]
-    ).order_by("available_at", "pk")
-    if limit is not None:
-        query = query[:limit]
+    now = datetime.now(timezone.utc)
+    ids = claim_batch(
+        worker_id=worker_id,
+        now=now,
+        lease=timedelta(seconds=setting("LEASE_SECONDS")),
+        limit=limit if limit is not None else setting("BATCH_SIZE"),
+    )
 
     counts: dict[DeliveryStatus, int] = {}
-    for delivery_id in list(query.values_list("pk", flat=True)):
+    for delivery_id in ids:
         outcome = deliver_one(delivery_id)
         counts[outcome] = counts.get(outcome, 0) + 1
     return counts

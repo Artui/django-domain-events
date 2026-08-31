@@ -82,3 +82,21 @@ def inline_context_receiver(evt: OrderPlaced, ctx: DeliveryContext) -> None:
     transaction back instead.
     """
     calls.append(f"inline_context:{ctx.event_name}:{ctx.attempt}")
+
+
+@event
+@dataclass(frozen=True, slots=True)
+class Eagerly:
+    """Its own event, so the eager fan-out does not perturb OrderPlaced's."""
+
+    value: int
+
+
+@receiver(Eagerly, mode=DURABLE, eager=True, key="testapp.eager")
+def eager_receiver(evt: Eagerly) -> None:
+    calls.append(f"eager:{evt.value}")
+
+
+@receiver(Eagerly, mode=DURABLE, key="testapp.not_eager")
+def not_eager_receiver(evt: Eagerly) -> None:
+    calls.append(f"not_eager:{evt.value}")

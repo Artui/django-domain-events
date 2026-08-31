@@ -15,3 +15,4 @@ class RegisteredReceiver:
     mode: DeliveryMode
     takes_context: bool
     max_attempts: int
+    eager: bool

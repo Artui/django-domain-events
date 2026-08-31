@@ -1,29 +1,30 @@
 from __future__ import annotations
 
+import os
+import socket
 from typing import Any
 
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand
 
 from django_domain_events.deliver import deliver_pending
+from django_domain_events.run_relay import run_relay
 
 
 class Command(BaseCommand):
-    help = "Deliver pending outbox rows once, then exit."
+    help = "Deliver outbox rows: one pass with --once, or run as a relay."
 
     def add_arguments(self, parser: Any) -> None:
-        parser.add_argument("--once", action="store_true", help="Required. One pass, then exit.")
+        parser.add_argument("--once", action="store_true", help="One pass, then exit.")
         parser.add_argument("--limit", type=int, default=None, help="Deliver at most this many.")
+        parser.add_argument("--passes", type=int, default=None, help="Stop after this many passes.")
+        parser.add_argument("--worker-id", default=None, help="Defaults to host:pid.")
 
     def handle(self, *args: Any, **options: Any) -> None:
-        # Required rather than defaulted: a continuous relay needs the leased
-        # claim that makes two workers safe, so a flag defaulting now would
-        # silently mean something different when that lands.
-        if not options["once"]:
-            raise CommandError(
-                "Pass --once. A continuous relay needs the leased claim that "
-                "makes two workers safe, which this version does not have."
-            )
-        counts = deliver_pending(limit=options["limit"])
+        worker_id = options["worker_id"] or f"{socket.gethostname()}:{os.getpid()}"
+        if options["once"]:
+            counts = deliver_pending(limit=options["limit"], worker_id=worker_id)
+        else:
+            counts = run_relay(worker_id=worker_id, passes=options["passes"])
         if not counts:
             self.stdout.write("Nothing owed.")
             return

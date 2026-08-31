@@ -6,7 +6,6 @@ from io import StringIO
 
 import pytest
 from django.core.management import call_command
-from django.core.management.base import CommandError
 from django.db import transaction
 
 from django_domain_events.fire import fire
@@ -37,9 +36,9 @@ def test_a_limit_is_passed_through(order: OrderPlaced, record: list[str]) -> Non
     assert "succeeded: 1" in out.getvalue()
 
 
-def test_once_is_required_rather_than_defaulted() -> None:
-    """A command that looks like a daemon would be one, and a continuous relay
-    needs the leased claim that makes two workers safe. Requiring the flag now
-    means the flag cannot silently change meaning when that lands."""
-    with pytest.raises(CommandError, match="leased claim"):
+def test_the_relay_refuses_where_locks_cannot_be_skipped() -> None:
+    """SQLite cannot express a skipped lock, so two relays on it would hand the
+    same row to two receivers on every pass. Refuse at the worker rather than at
+    import: import time is the test suite, which has every right to run here."""
+    with pytest.raises(RuntimeError, match="SKIP LOCKED"):
         call_command("deliver_events")

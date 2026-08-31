@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The relay. `deliver_events` without `--once` claims and delivers continuously;
+  `run_relay()` is the same loop as a function.
+- Leased claims over `SELECT ... FOR UPDATE SKIP LOCKED`. A claim carries an
+  expiry, so a worker that dies without acknowledging becomes re-claimable when
+  its lease lapses - the same path as an ordinary retry rather than a special
+  case. Two workers never take the same row.
+- Exponential backoff with full jitter, expressed as `available_at`, so the
+  claim query is what honours a wait and nothing else has to remember it.
+- `eager=True` on a receiver: attempt delivery immediately after commit in the
+  firing process, with the relay as the fallback. Outbox durability at
+  on-commit latency, at the cost of a duplicate when the process dies
+  mid-receiver.
+- `claim_batch()` and `backoff()` are public, so a consumer building its own
+  worker does not have to reimplement the claim protocol.
+
+### Changed
+- `deliver_events --once` and `drain_outbox()` now claim through the same leased
+  path, so a one-shot pass and a running relay cannot hand the same row to two
+  receivers.
+- The relay refuses to start where the backend cannot skip locks.
+  `allow_unsafe_concurrency=True` lifts that for a deployment running exactly
+  one relay.
+
 ## [0.1.0] — 2026-08-31
 
 ### Added
