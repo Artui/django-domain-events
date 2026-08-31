@@ -71,6 +71,14 @@ def receiver(
 
     if site not in ("relay", "task"):
         raise ValueError(f"site must be 'relay' or 'task', not {site!r}")
+    if site == "task" and mode is not DeliveryMode.DURABLE:
+        # INLINE and ON_COMMIT have no delivery row, so there is nothing to hand
+        # to a backend. Accepting the combination would run the receiver in the
+        # firing process while the declaration says otherwise.
+        raise ValueError(
+            f"site='task' needs mode=DURABLE; {mode.name} receivers run in the "
+            f"firing process and have no delivery row to hand over."
+        )
 
     def decorate(func: Callable[..., None]) -> Callable[..., None]:
         registry.register_receiver(

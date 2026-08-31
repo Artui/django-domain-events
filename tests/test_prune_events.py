@@ -108,3 +108,35 @@ def test_a_limit_stops_it_early(record: list[str]) -> None:
 
     assert prune_events(limit=3) == 3
     assert EventRecord.objects.count() == 4
+
+
+def test_a_replay_between_the_select_and_the_delete_is_respected(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Settledness is re-checked at the delete. A replay landing in between makes
+    rows owed again, and the cascade would take them with no record that anything
+    was lost - after the operator had been told they were reopened."""
+    from django_domain_events.replay_events import replay_events
+
+    with transaction.atomic():
+        event_id = fire(order)
+    drain_outbox()
+    _age(365)
+
+    # The interleaving, made deterministic: the event is settled when prune
+    # chooses it and owed again by the time prune writes.
+    assert replay_events([event_id])["reopened"] == 2
+    assert prune_events() == 0
+    assert EventRecord.objects.filter(pk=event_id).exists()
+
+
+def test_it_counts_events_not_cascaded_rows(order: OrderPlaced, record: list[str]) -> None:
+    """delete() reports every object it removed, including the delivery rows the
+    cascade takes - so a caller asking how many events went would be told how
+    many rows went."""
+    with transaction.atomic():
+        fire(order)
+    drain_outbox()
+    _age(365)
+
+    assert prune_events() == 1

@@ -114,3 +114,20 @@ def test_a_lost_row_does_not_stop_the_pass(order: OrderPlaced, record: list[str]
     lost = DeliveryRecord.objects.filter(claimed_by="someone-else").count()
     assert lost >= 2, "nothing was lost mid-pass, so the loop was never resumed"
     assert counts == {DeliveryStatus.SUCCEEDED: 2}
+
+
+def test_a_failure_while_idling_does_not_kill_the_daemon() -> None:
+    """The relay spends nearly all its life waiting. The wait reaches past
+    Django's cursor to the driver, so a connection dropped there raises the
+    driver's own exception rather than a translated django.db.Error - which a
+    supervisor written to catch the latter would miss entirely."""
+    calls: list[float] = []
+
+    def explode(timeout: float) -> bool:
+        calls.append(timeout)
+        raise RuntimeError("the database went away mid-wait")
+
+    counts = run_relay(worker_id="w1", passes=2, wait=explode, **UNSAFE)
+
+    assert counts == {}
+    assert len(calls) == 2, "the relay stopped at the first failed wait"

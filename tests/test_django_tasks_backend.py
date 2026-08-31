@@ -114,3 +114,114 @@ def test_the_django_tasks_adapter_enqueues(order: OrderPlaced, record: list[str]
         DeliveryRecord.objects.values_list("status", flat=True).get(pk=delivery_id)
         == DeliveryStatus.SUCCEEDED
     )
+
+
+def test_the_adapter_falls_back_to_the_backport() -> None:
+    """Core gained django.tasks in 6.0; below that the backport is the only
+    path. Forcing the fallback here rather than relying on the interpreter's
+    Django means both branches are covered on every version in the matrix -
+    otherwise the branch that does not apply is uncovered, and the coverage gate
+    fails on exactly the versions the other branch is for.
+    """
+    import sys
+    from unittest import mock
+
+    from django_domain_events.django_tasks_backend import _task
+
+    with mock.patch.dict(sys.modules, {"django.tasks": None}):
+        assert _task().__module__.startswith("django_tasks")
+
+
+def test_the_adapter_prefers_core_when_it_is_there() -> None:
+    """A project that has moved past 6.0 should not keep resolving a backport it
+    no longer needs."""
+    import django
+
+    from django_domain_events.django_tasks_backend import _task
+
+    if django.VERSION < (6, 0):
+        pytest.skip("core has no django.tasks below 6.0")
+    assert _task().__module__.startswith("django.tasks")
+
+
+def test_every_delivery_path_honours_the_site(
+    order: OrderPlaced, record: list[str], settings
+) -> None:
+    """dispatch_one was reachable only from run_relay, so deliver_pending,
+    drain_outbox and the eager path all ran a site='task' receiver in process.
+
+    drain_outbox is the sharpest of the three: its docstring promises it "runs
+    the same claim, encode, decode and acknowledgement as the relay", so a
+    consumer's tests took a path production does not - the exact failure that
+    docstring exists to prevent.
+    """
+    settings.DJANGO_DOMAIN_EVENTS = {
+        "TASK_BACKEND": "tests.test_django_tasks_backend.RecordingBackend"
+    }
+    from django_domain_events.drain_outbox import drain_outbox
+    from django_domain_events.registry import registry
+
+    entry = registry.receiver_for_key("testapp.durable_receiver")
+    object.__setattr__(entry, "site", "task")
+    try:
+        with transaction.atomic():
+            fire(order)
+        record.clear()
+        drain_outbox()
+    finally:
+        object.__setattr__(entry, "site", "relay")
+
+    assert len(ENQUEUED) == 1
+    assert "durable:7" not in record
+
+
+def test_a_task_site_with_no_backend_refuses(order: OrderPlaced, record: list[str]) -> None:
+    """Silently running in the relay makes the declaration a lie, and the only
+    symptom is work happening in the wrong process."""
+    from django.core.exceptions import ImproperlyConfigured
+
+    from django_domain_events.registry import registry
+
+    entry = registry.receiver_for_key("testapp.durable_receiver")
+    object.__setattr__(entry, "site", "task")
+    try:
+        with transaction.atomic():
+            fire(order)
+        delivery_id = DeliveryRecord.objects.values_list("pk", flat=True).get(
+            receiver_key="testapp.durable_receiver"
+        )
+        with pytest.raises(ImproperlyConfigured, match="no TASK_BACKEND"):
+            dispatch_one(delivery_id)
+    finally:
+        object.__setattr__(entry, "site", "relay")
+
+
+def test_a_broken_backend_does_not_break_relay_site_receivers(
+    order: OrderPlaced, record: list[str], settings
+) -> None:
+    """The backend is built only for a receiver that asked for one, so a typo in
+    TASK_BACKEND cannot break receivers that never wanted it."""
+    settings.DJANGO_DOMAIN_EVENTS = {"TASK_BACKEND": "nope.NotThere"}
+    with transaction.atomic():
+        fire(order)
+    delivery_id = DeliveryRecord.objects.values_list("pk", flat=True).get(
+        receiver_key="testapp.durable_receiver"
+    )
+    record.clear()
+
+    assert dispatch_one(delivery_id) is DeliveryStatus.SUCCEEDED
+    assert record == ["durable:7"]
+
+
+def test_a_backend_can_be_configured_with_options(settings) -> None:
+    """A dotted path alone gives the constructor no arguments, so a backend with
+    any options is unreachable through the documented setting."""
+    from django_domain_events.settings import get_task_backend
+
+    settings.DJANGO_DOMAIN_EVENTS = {
+        "TASK_BACKEND": {
+            "BACKEND": "django_domain_events.django_tasks_backend.DjangoTasksBackend",
+            "queue_name": "events",
+        }
+    }
+    assert get_task_backend().queue_name == "events"

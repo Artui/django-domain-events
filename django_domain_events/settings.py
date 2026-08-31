@@ -28,9 +28,19 @@ def setting(key: str) -> Any:
 
 
 def get_task_backend() -> Any | None:
-    """The configured task backend, or None when receivers run in the relay."""
-    path = setting("TASK_BACKEND")
-    return None if path is None else import_string(path)()
+    """The configured task backend, or None when receivers run in the relay.
+
+    Accepts a dotted path, or a mapping with ``BACKEND`` and the rest passed to
+    the constructor - otherwise a backend with any options at all is
+    unreachable through the documented setting and only a subclass can use it.
+    """
+    configured = setting("TASK_BACKEND")
+    if configured is None:
+        return None
+    if isinstance(configured, str):
+        return import_string(configured)()
+    options = dict(configured)
+    return import_string(options.pop("BACKEND"))(**options)
 
 
 def get_codec() -> PayloadCodec:

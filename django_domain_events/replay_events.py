@@ -8,6 +8,7 @@ from django.db import transaction
 from django_domain_events.registry import registry
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.wake import notify_relay
 from django_domain_events.write_alias import write_alias
 
 
@@ -38,8 +39,11 @@ def replay_events(
     now = datetime.now(timezone.utc)
     counts = {"reopened": 0, "added": 0}
 
-    with transaction.atomic(using=alias):
-        for record in EventRecord.objects.filter(pk__in=list(event_ids)).order_by("pk"):
+    for record in EventRecord.objects.filter(pk__in=list(event_ids)).order_by("pk"):
+        # One transaction per event, not one for the whole call: a collision on
+        # any single event would otherwise discard the reopens for every other
+        # event the operator asked for.
+        with transaction.atomic(using=alias):
             entry = registry.event_for_name(record.name)
             if entry is None:
                 continue
@@ -55,8 +59,12 @@ def replay_events(
                 )
             )
             reopen = [k for k, status in existing.items() if status in _TERMINAL]
+            # The status predicate is what keeps this from wiping a live lease.
+            # Between reading the statuses above and this update, a relay can
+            # claim a row - and clearing claimed_by on it would hand the same
+            # work to two workers, which is the one thing the lease prevents.
             counts["reopened"] += DeliveryRecord.objects.filter(
-                event=record, receiver_key__in=reopen
+                event=record, receiver_key__in=reopen, status__in=_TERMINAL
             ).update(
                 status=DeliveryStatus.PENDING,
                 attempts=0,
@@ -69,6 +77,10 @@ def replay_events(
             )
             missing = keys - set(existing)
             if missing:
+                # ignore_conflicts, because a concurrent replay of the same
+                # event races the unique constraint on (event, receiver_key) -
+                # and losing that race means the row exists, which is what was
+                # wanted.
                 DeliveryRecord.objects.bulk_create(
                     [
                         DeliveryRecord(
@@ -78,9 +90,20 @@ def replay_events(
                             available_at=now,
                         )
                         for key in sorted(missing)
-                    ]
+                    ],
+                    ignore_conflicts=True,
                 )
-                counts["added"] += len(missing)
+                # Counted by asking what is there now rather than by what
+                # bulk_create returned: with ignore_conflicts most backends
+                # return no primary keys, and a row a concurrent replay created
+                # is owed either way, which is what the operator asked for.
+                counts["added"] += DeliveryRecord.objects.filter(
+                    event=record, receiver_key__in=missing
+                ).count()
+    if counts["reopened"] or counts["added"]:
+        # The operations make rows owed just as fire() does, so they wake a
+        # waiting relay too; otherwise replayed work sits until the next poll.
+        notify_relay()
     return counts
 
 

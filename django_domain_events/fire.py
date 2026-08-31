@@ -149,7 +149,7 @@ def _deliver_eagerly(delivery_ids: list[int]) -> Callable[[], None]:
 
     def run() -> None:
         from django_domain_events.claim_batch import claim_batch
-        from django_domain_events.deliver import deliver_one
+        from django_domain_events.deliver import dispatch_one
 
         now = datetime.now(timezone.utc)
         claimed = claim_batch(
@@ -160,7 +160,7 @@ def _deliver_eagerly(delivery_ids: list[int]) -> Callable[[], None]:
             only_ids=delivery_ids,
         )
         for delivery_id in claimed:
-            deliver_one(delivery_id)
+            dispatch_one(delivery_id)
 
     return run
 

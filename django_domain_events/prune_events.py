@@ -52,8 +52,21 @@ def prune_events(
         if not ids:
             return deleted
         with transaction.atomic(using=alias):
-            # Cascade takes the delivery rows, so retention stays a single
-            # delete rather than an ordering problem.
-            EventRecord.objects.filter(pk__in=ids).delete()
-        deleted += len(ids)
+            # Settledness is re-checked here, not only in the select above. A
+            # replay landing in between makes rows owed again, and the cascade
+            # would take them with no record that anything was lost - after the
+            # operator was told they had been reopened.
+            # The per-model count, not delete()'s total: that includes the
+            # cascaded delivery rows, so a caller asking how many events went
+            # would be told how many rows went.
+            removed = (
+                EventRecord.objects.filter(pk__in=ids)
+                .exclude(models.Exists(unsettled))
+                .delete()[1]
+                .get(EventRecord._meta.label, 0)
+            )
+        # No early exit when the delete removes fewer than it selected: a row
+        # re-owed in between is excluded by the next select, so the loop
+        # converges on its own and needs no second way out.
+        deleted += removed
     return deleted

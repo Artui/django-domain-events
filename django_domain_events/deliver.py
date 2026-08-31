@@ -4,6 +4,7 @@ import random
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 
 from django_domain_events.backoff import backoff
@@ -161,11 +162,19 @@ def dispatch_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryS
         DeliveryRecord.objects.filter(pk=delivery_id).values_list("receiver_key", flat=True).first()
     )
     receiver = registry.receiver_for_key(receiver_key) if receiver_key else None
+    if receiver is None or receiver.site != "task":
+        return deliver_one(delivery_id, worker_id=worker_id)
+
+    # Looked up only for a receiver that asked for it, so a misconfigured
+    # TASK_BACKEND cannot break receivers that never wanted one.
     backend = get_task_backend()
-    if receiver is not None and receiver.site == "task" and backend is not None:
-        backend.enqueue(delivery_id)
-        return None
-    return deliver_one(delivery_id, worker_id=worker_id)
+    if backend is None:
+        raise ImproperlyConfigured(
+            f"Receiver {receiver.key!r} declares site='task' but no TASK_BACKEND "
+            f"is configured, so there is nothing to hand it to."
+        )
+    backend.enqueue(delivery_id)
+    return None
 
 
 def _fail(
@@ -217,7 +226,7 @@ def deliver_pending(
             ignore_backoff=ignore_backoff,
         )
         for delivery_id in ids:
-            outcome = deliver_one(delivery_id, worker_id=worker_id)
+            outcome = dispatch_one(delivery_id, worker_id=worker_id)
             if outcome is not None:
                 counts[outcome] = counts.get(outcome, 0) + 1
         if limit is not None or not ids:
