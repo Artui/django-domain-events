@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-31
+
 ### Added
 - The relay. `deliver_events` without `--once` claims and delivers continuously;
   `run_relay()` is the same loop as a function.
@@ -45,7 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one relay.
 
 ### Fixed
-- **The package could not be installed.** `manage.py migrate` failed on a fresh
+- **0.1.0 could not be installed.** `manage.py migrate` failed on a fresh
   database with `no such table: django_domain_events_deliveryrecord`, creating
   no tables at all, on every supported Django version. The orphaned-delivery
   system check queried its table unconditionally: it needs a `databases` guard,
@@ -91,5 +93,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Artui/django-domain-events/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Artui/django-domain-events/compare/v0.0.0...v0.1.0
