@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `prune_events()` and `manage.py prune_events` - retention. An outbox without
+  a prune story becomes the largest table in the database, and it becomes it
+  quietly. Only settled events go: one with a delivery still pending, failed or
+  claimed is still owed, and deleting it would drop work nobody recorded as
+  lost. Deletes in batches, because a single statement over a year of rows holds
+  a lock for as long as it runs on the table the relay claims from.
+- `replay_events()` and `manage.py replay_events` - make events owed again. The
+  receiver set freezes at fire time so a deploy never hands a new receiver a
+  backlog; this is the other half of that, and it counts reopening a terminal
+  delivery separately from adding one for a receiver that did not exist.
+- `requeue_dead()` and `manage.py requeue_dead` - give dead-lettered deliveries
+  their attempt budget back, scoped to one receiver when the reason is that one
+  downstream was broken.
+- `LISTEN`/`NOTIFY` on Postgres. The relay waits on a notification instead of
+  sleeping, so an event fired a moment ago is delivered in milliseconds. The
+  poll stays as the floor: a notification sent while nobody is listening is
+  lost, so this removes latency and never carries the obligation.
+- The `task` execution site. `@receiver(..., site="task")` hands the delivery to
+  the configured `TASK_BACKEND` instead of running it in the relay; the task
+  acknowledges the row when it finishes. Django Tasks is the first adapter, and
+  it works through `django.tasks` on 6.0+ and the `django-tasks` backport below
+  that.
+- Settings: `RETENTION_DAYS` (90) and `TASK_BACKEND` (none).
+
+### Notes
+- An enqueued delivery stays claimed under its lease and is counted as no
+  outcome, because nothing has happened to it yet. If the enqueue is lost the
+  lease lapses and the relay reclaims it - which is what makes handing work to a
+  lossy queue safe, and why the adapter protocol is a single method.
+
 ## [0.3.0] — 2026-08-31
 
 ### Added

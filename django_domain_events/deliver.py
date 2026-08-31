@@ -11,7 +11,7 @@ from django_domain_events.causation import caused_by
 from django_domain_events.claim_batch import claim_batch
 from django_domain_events.fire import call_receiver
 from django_domain_events.registry import registry
-from django_domain_events.settings import get_codec, setting
+from django_domain_events.settings import get_codec, get_task_backend, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.write_alias import write_alias
@@ -145,6 +145,27 @@ class _Fence:
         if not self._owned().update(**fields):
             return None
         return fields["status"]
+
+
+def dispatch_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryStatus | None:
+    """Deliver this row, or hand it to the task backend if that is its site.
+
+    An enqueued row stays CLAIMED under its lease and is not counted as an
+    outcome: nothing has happened to it yet. If the enqueue is lost the lease
+    lapses and the relay reclaims it, which is what makes handing work to a
+    lossy queue safe.
+    """
+    from django_domain_events.models.delivery_record import DeliveryRecord
+
+    receiver_key = (
+        DeliveryRecord.objects.filter(pk=delivery_id).values_list("receiver_key", flat=True).first()
+    )
+    receiver = registry.receiver_for_key(receiver_key) if receiver_key else None
+    backend = get_task_backend()
+    if receiver is not None and receiver.site == "task" and backend is not None:
+        backend.enqueue(delivery_id)
+        return None
+    return deliver_one(delivery_id, worker_id=worker_id)
 
 
 def _fail(

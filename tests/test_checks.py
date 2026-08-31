@@ -32,6 +32,7 @@ def _receiver_registered(key: str, event_class: type):
         takes_context=False,
         max_attempts=5,
         eager=False,
+        site="relay",
     )
     registry.register_receiver(entry)
     try:

@@ -17,12 +17,20 @@ DEFAULTS: dict[str, Any] = {
     "POLL_SECONDS": 1.0,
     "BACKOFF_BASE_SECONDS": 2.0,
     "BACKOFF_CAP_SECONDS": 3600.0,
+    "RETENTION_DAYS": 90,
+    "TASK_BACKEND": None,
 }
 
 
 def setting(key: str) -> Any:
     configured = getattr(settings, SETTINGS_NAME, {})
     return configured.get(key, DEFAULTS[key])
+
+
+def get_task_backend() -> Any | None:
+    """The configured task backend, or None when receivers run in the relay."""
+    path = setting("TASK_BACKEND")
+    return None if path is None else import_string(path)()
 
 
 def get_codec() -> PayloadCodec:

@@ -92,6 +92,21 @@ the firing process, with the relay as the fallback.
 In tests, `drain_outbox()` runs the real delivery path to completion, and
 `assert_fired(OrderPlaced, times=1)` reads the log rather than a mock.
 
+## Operations
+
+```bash
+python manage.py prune_events                 # delete settled events past the window
+python manage.py replay_events 41 42          # make those events owed again
+python manage.py requeue_dead --receiver k    # give dead deliveries their budget back
+```
+
+Pruning only removes *settled* events: one with a delivery still owed is kept,
+because deleting it would drop work nothing recorded as lost.
+
+On Postgres the relay waits on `LISTEN`/`NOTIFY` rather than polling, so an
+event fired a moment ago is delivered in milliseconds. The poll remains the
+floor.
+
 ## Attribution
 
 ```python

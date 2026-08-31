@@ -35,6 +35,7 @@ def _receiver(key: str, cls: type, func) -> RegisteredReceiver:
         takes_context=False,
         max_attempts=5,
         eager=False,
+        site="relay",
     )
 
 
