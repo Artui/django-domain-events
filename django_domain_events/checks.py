@@ -9,7 +9,7 @@ from django.utils.module_loading import import_string
 
 from django_domain_events.registry import registry
 from django_domain_events.settings import setting
-from django_domain_events.utils import has_table
+from django_domain_events.utils import TERMINAL, has_table
 
 
 def check_receivers_have_events(**kwargs: Any) -> list[Any]:
@@ -58,7 +58,13 @@ def check_codec_dependency_is_installed(**kwargs: Any) -> list[Any]:
 def check_no_orphaned_deliveries(
     *, databases: Sequence[str] | None = None, **kwargs: Any
 ) -> list[Any]:
-    """No pending delivery names a receiver the registry no longer has.
+    """No delivery still owed names a receiver the registry no longer has.
+
+    Owed means "not terminal", the same definition the relay claims by and the
+    prune settles by. Listing the owed statuses instead is how this check came
+    to omit CLAIMED: a worker that died between claiming a row and the deploy
+    that deleted its receiver leaves the row claimed with a lapsed lease, and it
+    read as settled until a relay happened to reclaim it.
 
     Two guards, and both are load-bearing. Without the first this runs under
     ``check``, ``showmigrations`` and ``makemigrations``, which pass no
@@ -67,7 +73,6 @@ def check_no_orphaned_deliveries(
     a new project runs dies and no tables are created at all.
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
-    from django_domain_events.types.delivery_status import DeliveryStatus
 
     if not databases:
         return []
@@ -79,7 +84,7 @@ def check_no_orphaned_deliveries(
             continue
         keys |= set(
             DeliveryRecord.objects.using(alias)
-            .filter(status__in=[DeliveryStatus.PENDING, DeliveryStatus.FAILED])
+            .exclude(status__in=TERMINAL)
             .values_list("receiver_key", flat=True)
             .distinct()
         )
@@ -114,16 +119,12 @@ def check_recorded_events_are_declared(
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.models.event_record import EventRecord
-    from django_domain_events.types.delivery_status import DeliveryStatus
 
     if not databases:
         return []
 
     table = EventRecord._meta.db_table
-    owed = DeliveryRecord.objects.filter(
-        event=models.OuterRef("pk"),
-        status__in=[DeliveryStatus.PENDING, DeliveryStatus.FAILED, DeliveryStatus.CLAIMED],
-    )
+    owed = DeliveryRecord.objects.filter(event=models.OuterRef("pk")).exclude(status__in=TERMINAL)
     names: set[str] = set()
     for alias in databases:
         # One table answers for both: they are created by the same

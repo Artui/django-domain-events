@@ -169,3 +169,32 @@ def test_the_receiver_and_id_scopes_intersect(order: OrderPlaced, record: list[s
     DeliveryRecord.objects.update(status=DeliveryStatus.DEAD, attempts=5)
     ids = list(DeliveryRecord.objects.values_list("pk", flat=True))
     assert requeue_dead(receiver_key="testapp.with_context", delivery_ids=ids) == 1
+
+
+def test_a_huge_id_list_does_not_reach_the_parameter_ceiling(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """SQLite refuses more than 32,766 parameters in one statement, and an
+    admin select-all over a dead-letter queue past that is an ordinary outcome
+    of one bad deploy. The UPDATE chunks; the SELECT has to as well."""
+    with transaction.atomic():
+        fire(order)
+    DeliveryRecord.objects.update(status=DeliveryStatus.DEAD, attempts=5)
+    real = list(DeliveryRecord.objects.values_list("pk", flat=True))
+
+    assert requeue_dead(delivery_ids=[*real, *range(10_000, 50_000)]) == 2
+
+
+def test_the_limit_stops_the_chunked_scan_early(
+    order: OrderPlaced, record: list[str], settings
+) -> None:
+    """Once the limit is filled there is nothing left to select, and walking
+    the rest of a select-all id list would be work with no result."""
+    settings.DJANGO_DOMAIN_EVENTS = {"BATCH_SIZE": 1}
+    with transaction.atomic():
+        fire(order)
+    DeliveryRecord.objects.update(status=DeliveryStatus.DEAD, attempts=5)
+    ids = list(DeliveryRecord.objects.values_list("pk", flat=True))
+
+    assert requeue_dead(delivery_ids=ids, limit=1) == 1
+    assert DeliveryRecord.objects.filter(status=DeliveryStatus.DEAD).count() == 1

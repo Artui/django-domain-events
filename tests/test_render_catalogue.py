@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -17,7 +18,6 @@ def test_markdown_names_every_event_and_its_receivers() -> None:
     assert "## `testapp.OrderPlaced` (v1)" in document
     assert "`testapp.durable_receiver`" in document
     assert "| `tags` | `list[str]` | yes | - |" in document
-    assert "| `note` | `str | None` | no | `None` |" in document
 
 
 def test_markdown_says_when_nothing_listens() -> None:
@@ -65,3 +65,35 @@ def test_every_document_ends_with_exactly_one_newline() -> None:
         document = render_catalogue(catalogue(), format=form)
         assert document.endswith("\n")
         assert not document.endswith("\n\n")
+
+
+def _cells(row: str) -> list[str]:
+    """Split a row the way a GitHub-flavoured table parser does.
+
+    On pipes that are not escaped, and before any inline parsing - which is
+    exactly why a backtick does not protect one.
+    """
+    parts = re.split(r"(?<!\\)\|", row)
+    return [p.strip() for p in parts[1:-1]]
+
+
+def test_a_union_type_stays_inside_its_cell() -> None:
+    """``str | None`` is the commonest annotation there is, and an unescaped
+    pipe shifts every later column - reporting an optional field as required,
+    in the artefact whose whole purpose is being read and diffed."""
+    document = render_catalogue(catalogue())
+    row = next(line for line in document.splitlines() if line.startswith("| `note`"))
+    assert _cells(row) == ["`note`", "`str \\| None`", "no", "`None`"]
+
+
+def test_every_table_row_has_the_width_of_its_header() -> None:
+    """The failure this guards is silent: a shifted column still renders, it
+    just says something false."""
+    width = None
+    for line in render_catalogue(catalogue()).splitlines():
+        if not line.startswith("|"):
+            width = None
+            continue
+        if width is None:
+            width = len(_cells(line))
+        assert len(_cells(line)) == width, line

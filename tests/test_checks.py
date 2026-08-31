@@ -190,3 +190,44 @@ def test_the_declaration_check_does_nothing_before_the_table_exists() -> None:
         with connection.schema_editor() as editor:
             editor.create_model(EventRecord)
             editor.create_model(DeliveryRecord)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_claimed_row_for_a_deleted_receiver_is_still_owed(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """A worker that died between claiming a row and the deploy that deleted
+    its receiver leaves the row claimed with a lapsed lease. Listing the owed
+    statuses instead of excluding the terminal ones read that as settled, so
+    ``check`` called the log clean until a relay happened to reclaim it."""
+    from django_domain_events.models.delivery_record import DeliveryRecord
+    from django_domain_events.types.delivery_status import DeliveryStatus
+
+    with transaction.atomic():
+        fire(order)
+    DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").update(
+        status=DeliveryStatus.CLAIMED, claimed_by="dead-worker"
+    )
+
+    with receiver_deleted("testapp.durable_receiver"):
+        problems = checks.check_no_orphaned_deliveries(databases=["default"])
+
+    assert [p.id for p in problems] == ["django_domain_events.W001"]
+    assert "testapp.durable_receiver" in problems[0].msg
+
+
+@pytest.mark.django_db(transaction=True)
+def test_both_warnings_agree_on_what_is_still_owed(order: OrderPlaced, record: list[str]) -> None:
+    """The docs say they do, and they did not: one omitted CLAIMED."""
+    from django_domain_events.models.delivery_record import DeliveryRecord
+    from django_domain_events.types.delivery_status import DeliveryStatus
+
+    with transaction.atomic():
+        fire(order)
+    DeliveryRecord.objects.update(status=DeliveryStatus.CLAIMED, claimed_by="dead-worker")
+
+    with receiver_deleted("testapp.durable_receiver"), event_deleted("testapp.OrderPlaced"):
+        orphaned = checks.check_no_orphaned_deliveries(databases=["default"])
+        undeclared = checks.check_recorded_events_are_declared(databases=["default"])
+    assert [p.id for p in orphaned] == ["django_domain_events.W001"]
+    assert [p.id for p in undeclared] == ["django_domain_events.W002"]

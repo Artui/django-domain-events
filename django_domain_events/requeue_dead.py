@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import datetime, timezone
+from typing import Any
+
+from django.db.models import QuerySet
 
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_status import DeliveryStatus
@@ -35,20 +38,10 @@ def requeue_dead(
     dead = DeliveryRecord.objects.filter(status=DeliveryStatus.DEAD).order_by("pk")
     if receiver_key is not None:
         dead = dead.filter(receiver_key=receiver_key)
-    if delivery_ids is not None:
-        dead = dead.filter(pk__in=list(delivery_ids))
-
-    # `is not None`, not truthiness: limit=0 is an operator asking for the
-    # smallest possible blast radius, and reading it as "no limit" gives them
-    # the largest one.
-    ids = list(
-        dead.values_list("pk", flat=True)[:limit]
-        if limit is not None
-        else dead.values_list("pk", flat=True)
-    )
 
     now = datetime.now(timezone.utc)
     chunk = setting("BATCH_SIZE")
+    ids = _owed_ids(dead, delivery_ids, chunk=chunk, limit=limit)
     requeued = 0
     for start in range(0, len(ids), chunk):
         # Chunked: SQLite refuses more than 32,766 parameters in one statement,
@@ -71,3 +64,31 @@ def requeue_dead(
     if requeued:
         notify_relay()
     return requeued
+
+
+def _owed_ids(
+    dead: QuerySet[Any], delivery_ids: Iterable[int] | None, *, chunk: int, limit: int | None
+) -> list[int]:
+    """Which dead rows to requeue, without binding an unbounded IN list.
+
+    The UPDATE below chunks, and the SELECT has to for the same reason: passing
+    the whole id list in one statement is how an admin select-all over a
+    dead-letter queue larger than SQLite's 32,766-parameter ceiling turns a
+    routine requeue into an OperationalError.
+
+    ``limit is not None``, not truthiness: limit=0 is an operator asking for the
+    smallest possible blast radius, and reading it as "no limit" gives them the
+    largest one.
+    """
+    if delivery_ids is None:
+        owed = dead.values_list("pk", flat=True)
+        return list(owed if limit is None else owed[:limit])
+
+    wanted = list(delivery_ids)
+    found: list[int] = []
+    for start in range(0, len(wanted), chunk):
+        if limit is not None and len(found) >= limit:
+            break
+        batch = dead.filter(pk__in=wanted[start : start + chunk]).values_list("pk", flat=True)
+        found.extend(batch if limit is None else batch[: limit - len(found)])
+    return found

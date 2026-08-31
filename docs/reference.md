@@ -55,5 +55,7 @@ Everything below is exported from `django_domain_events` directly.
 ::: django_domain_events.types.catalogue_field.CatalogueField
 ::: django_domain_events.types.catalogue_receiver.CatalogueReceiver
 ::: django_domain_events.types.quiet_receiver.QuietReceiver
+::: django_domain_events.types.registered_event.RegisteredEvent
+::: django_domain_events.types.registered_receiver.RegisteredReceiver
 ::: django_domain_events.types.task_backend.TaskBackend
 ::: django_domain_events.codecs.payload_codec.PayloadCodec

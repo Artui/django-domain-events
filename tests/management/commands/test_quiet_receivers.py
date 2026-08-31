@@ -5,6 +5,7 @@ from __future__ import annotations
 from io import StringIO
 
 import pytest
+from django.core.management import call_command
 from django.db import transaction
 
 from django_domain_events.drain_outbox import drain_outbox
@@ -16,8 +17,6 @@ pytestmark = pytest.mark.django_db
 
 def _run(*args: str) -> str:
     out = StringIO()
-    from django.core.management import call_command
-
     call_command("quiet_receivers", *args, stdout=out)
     return out.getvalue()
 

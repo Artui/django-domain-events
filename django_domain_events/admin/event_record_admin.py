@@ -7,6 +7,8 @@ from django.db.models import QuerySet
 from django.http import HttpRequest
 from django.utils.timesince import timesince
 
+from django_domain_events.admin.event_name_filter import EventNameFilter
+from django_domain_events.admin.utils import may_change
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.replay_events import replay_events
 from django_domain_events.types.delivery_status import DeliveryStatus
@@ -23,10 +25,14 @@ class EventRecordAdmin(admin.ModelAdmin):
     """
 
     list_display = ("name", "version", "actor_label", "owed", "suppressed_reason", "age")
-    list_filter = ("name", "version", "recorded_at")
+    list_filter = (EventNameFilter,)
     search_fields = ("name", "actor_key", "actor_label", "dedupe_key")
-    date_hierarchy = "recorded_at"
     ordering = ("-pk",)
+    # Both off because both scan the whole log on every page load: the
+    # second COUNT(*) that show_full_result_count adds, and the MIN/MAX plus
+    # SELECT DISTINCT date_trunc(...) that a date hierarchy needs. This is
+    # the page an operator opens during an incident.
+    show_full_result_count = False
     actions = ("replay",)
 
     def get_queryset(self, request: HttpRequest) -> QuerySet[EventRecord]:
@@ -43,7 +49,7 @@ class EventRecordAdmin(admin.ModelAdmin):
     def age(self, obj: EventRecord) -> str:
         return timesince(obj.recorded_at)
 
-    @admin.action(description="Replay selected events")
+    @admin.action(description="Replay selected events", permissions=["replay"])
     def replay(self, request: HttpRequest, queryset: QuerySet[EventRecord]) -> None:
         counts = replay_events(queryset.values_list("pk", flat=True))
         self.message_user(
@@ -51,6 +57,13 @@ class EventRecordAdmin(admin.ModelAdmin):
             f"Reopened {counts['reopened']} deliveries and added {counts['added']}.",
             messages.SUCCESS,
         )
+
+    def has_replay_permission(self, request: HttpRequest) -> bool:
+        """Who may replay, checked separately from who may open the changelist.
+
+        See ``may_change`` for why an action needs its own predicate.
+        """
+        return may_change(request, self.opts)
 
     def has_add_permission(self, request: HttpRequest) -> bool:
         return False

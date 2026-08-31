@@ -7,7 +7,6 @@ from django.db import models
 from django_domain_events.registry import registry
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_mode import DeliveryMode
-from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.quiet_receiver import QuietReceiver
 
 
@@ -28,6 +27,13 @@ def quiet_receivers(
     ON_COMMIT receiver has no delivery history to be quiet about, and listing it
     as silent forever would train the reader to ignore the output.
 
+    Read off ``succeeded_at`` rather than ``completed_at``, and with no status
+    filter at all. Both of those describe the *current* cycle: replay and
+    requeue reopen a row and clear them, so an operator who replays yesterday's
+    events would then be told the receiver had never run. ``Max`` ignores nulls,
+    so a receiver whose every delivery failed still reads as never having
+    succeeded without a predicate saying so.
+
     The window defaults to RETENTION_DAYS, which is not a coincidence of
     numbers: past that point the prune has deleted the evidence, so "quiet for
     longer than retention" is the longest answer this can honestly give.
@@ -42,11 +48,9 @@ def quiet_receivers(
         key=lambda r: r.key,
     )
     rows = (
-        DeliveryRecord.objects.filter(
-            receiver_key__in=[r.key for r in durable], status=DeliveryStatus.SUCCEEDED
-        )
+        DeliveryRecord.objects.filter(receiver_key__in=[r.key for r in durable])
         .values("receiver_key")
-        .annotate(last=models.Max("completed_at"))
+        .annotate(last=models.Max("succeeded_at"))
     )
     last_seen = {row["receiver_key"]: row["last"] for row in rows}
 

@@ -6,6 +6,8 @@ from django.contrib import admin, messages
 from django.db.models import QuerySet
 from django.http import HttpRequest
 
+from django_domain_events.admin.receiver_key_filter import ReceiverKeyFilter
+from django_domain_events.admin.utils import may_change
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.requeue_dead import requeue_dead
 
@@ -19,14 +21,17 @@ class DeliveryRecordAdmin(admin.ModelAdmin):
     """
 
     list_display = ("receiver_key", "event", "status", "attempts", "available_at", "claimed_by")
-    list_filter = ("status", "receiver_key")
+    list_filter = ("status", ReceiverKeyFilter)
     search_fields = ("receiver_key", "last_error")
-    date_hierarchy = "available_at"
     ordering = ("-pk",)
+    # No date hierarchy on available_at: the model keeps no plain index on
+    # it on purpose, and a hierarchy would put MIN/MAX and a SELECT DISTINCT
+    # date_trunc over that column on every page load.
+    show_full_result_count = False
     actions = ("requeue",)
     list_select_related = ("event",)
 
-    @admin.action(description="Requeue selected dead deliveries")
+    @admin.action(description="Requeue selected dead deliveries", permissions=["requeue"])
     def requeue(self, request: HttpRequest, queryset: QuerySet[DeliveryRecord]) -> None:
         # Through requeue_dead rather than queryset.update(): it resets the
         # attempt budget, clears the lease and the stale error, and wakes the
@@ -40,6 +45,13 @@ class DeliveryRecordAdmin(admin.ModelAdmin):
         skipped = len(ids) - count
         note = f" {skipped} were not dead and were left alone." if skipped else ""
         self.message_user(request, f"Requeued {count} deliveries.{note}", messages.SUCCESS)
+
+    def has_requeue_permission(self, request: HttpRequest) -> bool:
+        """Who may requeue, checked separately from who may open the changelist.
+
+        See ``may_change`` for why an action needs its own predicate.
+        """
+        return may_change(request, self.opts)
 
     def has_add_permission(self, request: HttpRequest) -> bool:
         return False

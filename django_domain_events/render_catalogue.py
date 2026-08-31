@@ -35,9 +35,9 @@ def _markdown(catalogue: Catalogue) -> str:
         lines += ["| Field | Type | Required | Default |", "| --- | --- | --- | --- |"]
         for field in event.fields:
             required = "yes" if field.required else "no"
+            default = "-" if field.default is None else f"`{_cell(field.default)}`"
             lines.append(
-                f"| `{field.name}` | `{field.type}` | {required} | "
-                f"{'-' if field.default is None else f'`{field.default}`'} |"
+                f"| `{_cell(field.name)}` | `{_cell(field.type)}` | {required} | {default} |"
             )
         lines.append("")
         if not event.receivers:
@@ -52,11 +52,25 @@ def _markdown(catalogue: Catalogue) -> str:
         ]
         for receiver in event.receivers:
             lines.append(
-                f"| `{receiver.key}` | {receiver.mode} | {receiver.site} | "
-                f"{receiver.max_attempts} | {'yes' if receiver.eager else 'no'} |"
+                f"| `{_cell(receiver.key)}` | {_cell(receiver.mode)} | "
+                f"{_cell(receiver.site)} | {receiver.max_attempts} | "
+                f"{'yes' if receiver.eager else 'no'} |"
             )
         lines.append("")
     return _joined(lines)
+
+
+def _cell(value: str) -> str:
+    """Escape a pipe so it stays inside its table cell.
+
+    A GitHub-flavoured table is split on pipes *before* inline parsing, so
+    backticks do not protect one: ``str | None`` - the commonest annotation
+    there is - silently becomes two cells, shifting every later column and
+    reporting an optional field as required. The escape survives inside a code
+    span, and Python-Markdown tolerates it too, which is why a mkdocs preview
+    cannot catch the unescaped version.
+    """
+    return value.replace("|", "\\|")
 
 
 def _joined(lines: list[str]) -> str:

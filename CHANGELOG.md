@@ -11,8 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `catalogue()` and `render_catalogue()` - every declared event, its payload
   schema and its receivers, generated from the declarations so it cannot drift
   from them. Markdown for a person onboarding, JSON for a pipeline that fails a
-  pull request when a field other teams consume disappears. Sorted throughout
-  and ending in exactly one newline, so a checked-in catalogue diffs cleanly.
+  pull request when a field other teams consume disappears. Sorted throughout,
+  ending in exactly one newline, and escaping pipes inside table cells, so a
+  checked-in catalogue diffs cleanly and `str | None` does not silently shift
+  every later column of its row.
 - `manage.py export_catalogue [--format markdown|json] [--output PATH]`.
 - `what_listens_to(EventClass)` - every receiver, across all modes, sorted by
   key. A Django signal's receivers are weak references behind an opaque dispatch
@@ -37,17 +39,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   if and only if the change committed, and a form that can write one is a way to
   break it. Deleting is refused too - it would cascade owed deliveries away with
   no record that anything was lost, which is what `prune_events` re-checks for.
+  Its filters come from the registry rather than `SELECT DISTINCT` over the
+  log, so opening the changelist scans nothing and a declared-but-never-fired
+  event is still listed.
 - `requeue_dead(delivery_ids=...)` - scope a requeue to named rows, for an
   operator reading a dead-letter list and picking the ones they understand. An
   empty list requeues nothing, and the id list narrows the selection rather than
-  widening it past `DEAD`.
+  widening it past `DEAD`. The selection is chunked like the update it feeds,
+  so an admin select-all over a dead-letter queue past SQLite's
+  32,766-parameter ceiling does not turn a routine requeue into an error.
 - A documentation site with pages for declaring, delivery, scope, operations,
   introspection, settings and the API reference.
+- `DeliveryRecord.succeeded_at` - when a delivery last succeeded, never cleared.
+  Separate from `completed_at`, which replay and requeue clear because a
+  reopened row has not settled again yet. Reading the quiet-receiver query off
+  the cleared column meant an operator who replayed yesterday's events to re-run
+  a receiver they had just fixed was then told it had never run at all.
 
-### Fixed
-- `render_catalogue()` output ends in exactly one newline in both formats. The
-  Markdown ended in a blank line and the JSON in none at all, so a checked-in
-  catalogue reported a change on its last line forever.
+### Changed
+- `check_no_orphaned_deliveries` (`W001`) now treats **any non-terminal**
+  delivery as owed, where it listed `pending` and `failed` and so missed
+  `claimed`. A worker that dies between claiming a row and the deploy that
+  deletes its receiver leaves the row claimed under a lapsed lease; that read as
+  settled until a relay happened to reclaim it. Both checks and the prune now
+  share one definition of owed, which is also the one the relay claims by.
+
+### Security
+- Both admin actions now require the model's **change** permission. Django
+  offers an action with no declared permission to anyone who can reach the
+  changelist, and `has_change_permission` gates the change *form* alone - so
+  view-only staff could replay the entire log, re-running every durable
+  receiver, and empty the dead-letter queue. The edit form stays refused either
+  way.
 
 ## [0.4.0] — 2026-08-31
 

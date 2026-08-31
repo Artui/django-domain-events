@@ -5,10 +5,8 @@ from datetime import datetime, timedelta, timezone
 from django.db import models, transaction
 
 from django_domain_events.settings import setting
-from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.utils import TERMINAL
 from django_domain_events.write_alias import write_alias
-
-TERMINAL = (DeliveryStatus.SUCCEEDED, DeliveryStatus.DEAD, DeliveryStatus.ORPHANED)
 
 
 def prune_events(

@@ -6,6 +6,8 @@ from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.quiet_receiver import QuietReceiver
+from django_domain_events.types.registered_event import RegisteredEvent
+from django_domain_events.types.registered_receiver import RegisteredReceiver
 
 __all__ = [
     "Catalogue",
@@ -16,4 +18,6 @@ __all__ = [
     "DeliveryMode",
     "DeliveryStatus",
     "QuietReceiver",
+    "RegisteredEvent",
+    "RegisteredReceiver",
 ]

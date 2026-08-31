@@ -54,11 +54,11 @@ def catalogue() -> Catalogue:
 def _doc(cls: type) -> str:
     """The class docstring, or empty when the dataclass machinery wrote it.
 
-    ``@dataclass`` fills ``__doc__`` with the signature when there is none, so
-    reading it naively puts ``OrderPlaced(order_id: int)`` in the catalogue
-    where a description belongs. ``cls.__doc__`` rather than ``getdoc`` for the
-    same reason in the other direction: an inherited docstring describes the
-    base, not this event.
+    ``@dataclass`` fills ``__doc__`` with the signature whenever the class has
+    none of its own - a subclass of a documented base included, because a class
+    always carries its own ``__doc__`` and never inherits one. Reading it
+    naively puts ``OrderPlaced(order_id: int)`` in the catalogue where a
+    description belongs.
     """
     doc = cls.__doc__
     if not doc or doc.startswith(f"{cls.__name__}("):

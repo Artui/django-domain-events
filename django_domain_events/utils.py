@@ -7,6 +7,18 @@ from typing import Any, cast
 from django.apps import apps
 from django.db import connections
 
+from django_domain_events.types.delivery_status import DeliveryStatus
+
+TERMINAL = (DeliveryStatus.SUCCEEDED, DeliveryStatus.DEAD, DeliveryStatus.ORPHANED)
+"""Statuses a delivery does not come back from.
+
+Everything else is still owed. Named once because three callers ask the
+question and an explicit list of the owed statuses is what let two of them
+disagree: one omitted CLAIMED, so a row whose worker died between the claim
+and the deploy that deleted its receiver read as settled until a relay
+happened to reclaim it.
+"""
+
 
 def label_for(module: str, fallback_name: str) -> str:
     """Build a ``<app_label>.<name>`` identity for a declaration.

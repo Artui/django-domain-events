@@ -30,6 +30,8 @@ from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.quiet_receiver import QuietReceiver
+from django_domain_events.types.registered_event import RegisteredEvent
+from django_domain_events.types.registered_receiver import RegisteredReceiver
 from django_domain_events.types.scope import Scope
 from django_domain_events.types.task_backend import TaskBackend
 from django_domain_events.version import __version__
@@ -54,6 +56,8 @@ __all__ = [
     "ON_COMMIT",
     "PayloadCodec",
     "QuietReceiver",
+    "RegisteredEvent",
+    "RegisteredReceiver",
     "Registry",
     "Scope",
     "TaskBackend",

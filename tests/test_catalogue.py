@@ -80,22 +80,52 @@ class WithFactory:
     tags: list[str] = field(default_factory=list)
 
 
-def test_a_default_factory_is_named_and_never_called() -> None:
+def test_a_default_factory_is_named_not_called() -> None:
+    """Named ``list`` rather than ``factory``: the fallback string in _default
+    is the literal ``factory``, so a factory called ``factory`` produces the
+    same answer whether the code reads __name__ or falls through it."""
+    with event_registered(WithFactory, "tests.with_factory"):
+        entry = _by_name("tests.with_factory")
+    assert entry.fields[0].required is False
+    assert entry.fields[0].default == "list()"
+
+
+def test_building_a_catalogue_never_runs_consumer_code() -> None:
+    """A default_factory is arbitrary code from the consumer's codebase, and
+    generating a document is not a reason to execute it."""
     called = []
 
-    def factory() -> list[str]:
+    def make() -> list[str]:
         called.append(1)
         return []
 
     @dataclass(frozen=True)
     class Built:
-        tags: list[str] = field(default_factory=factory)
+        tags: list[str] = field(default_factory=make)
 
     with event_registered(Built, "tests.built"):
-        entry = _by_name("tests.built")
-    assert entry.fields[0].required is False
-    assert entry.fields[0].default == "factory()"
-    assert called == [], "building a catalogue must not run consumer code"
+        assert _by_name("tests.built").fields[0].default == "make()"
+    assert called == []
+
+
+@dataclass(frozen=True)
+class Documented:
+    """A description that belongs to the base."""
+
+    value: int
+
+
+@dataclass(frozen=True)
+class Undocumented(Documented):
+    pass
+
+
+def test_a_subclass_of_a_documented_event_publishes_no_description() -> None:
+    """A class always carries its own __doc__ and never inherits one, so
+    ``@dataclass`` writes the signature here too - and the catalogue must blank
+    that rather than publish ``Undocumented(value: int)`` as a description."""
+    with event_registered(Undocumented, "tests.undocumented"):
+        assert _by_name("tests.undocumented").doc == ""
 
 
 @dataclass(frozen=True)

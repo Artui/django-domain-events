@@ -114,9 +114,11 @@ now decodes to nothing and spends one attempt budget at a time finding out. Fix
 it by pinning the old identity with `@event(name=...)` on the class that replaced
 it.
 
-Both warnings are limited to work **still owed**. A settled row naming a retired
-event is history, and warning about history on every `check` run teaches the
-reader to skip the output.
+Both warnings are limited to work **still owed**, and both mean the same thing
+by it: any status the relay would still claim - which includes `claimed`, since
+a worker that dies leaves the row claimed under a lapsed lease. A settled row
+naming a retired event is history, and warning about history on every `check`
+run teaches the reader to skip the output.
 
 ## The admin
 
@@ -139,3 +141,16 @@ route, because it re-checks settledness at the delete itself.
 The requeue action goes through `requeue_dead()` rather than a bulk update, so it
 resets the attempt budget, clears the stale lease and error, and wakes the relay.
 It reports what it skipped: a mixed selection requeues only the dead rows.
+
+!!! warning "Both actions need the model's **change** permission"
+    Django offers an action with no declared permission to anyone who can reach
+    the changelist, and `has_change_permission` gates the form alone. Replay
+    re-runs every durable receiver - re-sent emails, re-called webhooks - so a
+    view-only grant must not carry it. Give `change_eventrecord` /
+    `change_deliveryrecord` to whoever may run them; the edit form stays refused
+    either way.
+
+The filters are built from the **registry**, not from the table: a
+`SELECT DISTINCT name` over an event log is a full scan on every page load, and
+an event declared but never fired would not appear. Selecting one and seeing an
+empty list is itself the finding.
