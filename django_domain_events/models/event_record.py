@@ -3,6 +3,8 @@ from __future__ import annotations
 from django.conf import settings
 from django.db import models
 
+from django_domain_events.models.delivery_record import DeliveryRecord
+
 
 class EventRecord(models.Model):
     """One fired event, recorded inside the caller's transaction.
@@ -10,6 +12,13 @@ class EventRecord(models.Model):
     ``EventRecord`` rather than ``Event`` because the consumer's declared class is
     the event; this is the row recording that one was fired.
     """
+
+    # Django adds the reverse accessor at runtime. The bare annotation makes it
+    # visible to the type checker without entering the class dict, the same
+    # trick DeliveryRecord uses for event_id. Importing DeliveryRecord here is
+    # safe in one direction only: its FK names this model by string, so it does
+    # not import back.
+    deliveries: models.Manager[DeliveryRecord]
 
     name = models.CharField(max_length=255, db_index=True)
     version = models.PositiveSmallIntegerField(default=1)

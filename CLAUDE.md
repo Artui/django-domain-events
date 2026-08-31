@@ -73,6 +73,16 @@ someone would change it.
   `__init__` re-exports those functions, so a module-level model import raises
   `AppRegistryNotReady` at startup. Nothing outside `models/` names a model in a
   signature, so the annotations need no import either.
+- **`admin/` is the one package that may import models at module level.**
+  Django's `autodiscover_modules("admin")` runs from `AdminConfig.ready()`,
+  after the app registry is populated, and nothing re-exports these modules from
+  the package `__init__`. The rule above applies to the modules `__init__`
+  re-exports, not to every module that names a model.
+- **The test settings install `django.contrib.admin` for real**, with the
+  middleware, templates and URLconf it wants. A hand-built `ModelAdmin` in a
+  test would pass with `django_domain_events/admin/` never imported at all, and
+  whether Django's autodiscovery finds it is the integration worth testing.
+
 - **`codecs/__init__.py` does not export `DaciteCodec`.** It imports an optional
   extra; re-exporting it would pull `dacite` in for anyone touching the package
   at all. It is referenced by full dotted path in settings.

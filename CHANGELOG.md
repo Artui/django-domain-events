@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `catalogue()` and `render_catalogue()` - every declared event, its payload
+  schema and its receivers, generated from the declarations so it cannot drift
+  from them. Markdown for a person onboarding, JSON for a pipeline that fails a
+  pull request when a field other teams consume disappears. Sorted throughout
+  and ending in exactly one newline, so a checked-in catalogue diffs cleanly.
+- `manage.py export_catalogue [--format markdown|json] [--output PATH]`.
+- `what_listens_to(EventClass)` - every receiver, across all modes, sorted by
+  key. A Django signal's receivers are weak references behind an opaque dispatch
+  uid, so "who reacts to this" is otherwise answerable only by grepping.
+- `listens_for(receiver_key)` - the inverse, and the direction an operator needs:
+  a dead-letter row names a key, and the next question is what it was owed.
+- `quiet_receivers()` and `manage.py quiet_receivers [--days N]` - durable
+  receivers that have succeeded at nothing inside the window. Driven by the
+  registry rather than the table, so a receiver that has **never** received
+  anything appears; a query over delivery rows alone cannot produce that answer,
+  because there is no row to find. The window defaults to `RETENTION_DAYS`,
+  which is the longest honest answer: past it the prune deleted the evidence.
+- `W002`, a system check for **deliveries owed under an event name the registry
+  no longer has**. This is the renamed event, and `W001` structurally cannot see
+  it: the receivers keep their keys, so nothing looks orphaned, while every row
+  written under the old name decodes to nothing and spends one attempt budget at
+  a time finding out. Limited to work still owed, because warning about settled
+  history on every `check` run teaches the reader to skip the output.
+- A read-only admin for both models, registered by Django's own autodiscovery,
+  with **Replay selected events** and **Requeue selected dead deliveries**.
+  Read-only on purpose: the one guarantee this package sells is that a row exists
+  if and only if the change committed, and a form that can write one is a way to
+  break it. Deleting is refused too - it would cascade owed deliveries away with
+  no record that anything was lost, which is what `prune_events` re-checks for.
+- `requeue_dead(delivery_ids=...)` - scope a requeue to named rows, for an
+  operator reading a dead-letter list and picking the ones they understand. An
+  empty list requeues nothing, and the id list narrows the selection rather than
+  widening it past `DEAD`.
+- A documentation site with pages for declaring, delivery, scope, operations,
+  introspection, settings and the API reference.
+
+### Fixed
+- `render_catalogue()` output ends in exactly one newline in both formats. The
+  Markdown ended in a blank line and the JSON in none at all, so a checked-in
+  catalogue reported a change on its last line forever.
+
 ## [0.4.0] — 2026-08-31
 
 ### Added

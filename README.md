@@ -107,6 +107,38 @@ On Postgres the relay waits on `LISTEN`/`NOTIFY` rather than polling, so an
 event fired a moment ago is delivered in milliseconds. The poll remains the
 floor.
 
+Add `django.contrib.admin` and both tables appear, read-only, with **Replay
+selected events** and **Requeue selected dead deliveries** as actions.
+
+## Introspection
+
+The second reason to use this rather than signals. All of it is generated from
+the declarations, so none of it can drift.
+
+```bash
+python manage.py export_catalogue --format json --output events.json
+python manage.py quiet_receivers --days 30
+```
+
+```python
+what_listens_to(OrderPlaced)  # every receiver, sorted, across all modes
+listens_for("orders.reserve_stock")  # the inverse: what a dead row was owed
+quiet_receivers(within=timedelta(days=30))
+```
+
+The catalogue is every declared event, its payload schema and its receivers, as
+Markdown for a person or JSON for a pipeline that fails a pull request when a
+field other teams consume disappears.
+
+`quiet_receivers()` answers *"this receiver has not received anything in ninety
+days"* as a query rather than a guess - including the receivers that have never
+received anything at all, which is the answer worth having and the one a query
+over delivery rows alone cannot produce.
+
+`manage.py check` adds four checks, including one for the **renamed event**: the
+receivers keep their keys, so nothing looks orphaned, while every row written
+under the old name now decodes to nothing.
+
 ## Attribution
 
 ```python
@@ -144,7 +176,12 @@ commit together, so delivery is *effectively once*: the duplicate an
 at-least-once system owes you cannot be observed. Receivers with side effects
 outside the database are at-least-once, as promised.
 
+## Documentation
+
+<https://artui.github.io/django-domain-events/>
+
 ## Status
 
-Early development. The API is not stable and the package is not yet usable;
-see the changelog for what has landed.
+Early development, and usable: the contract, the relay, ambient scope, the
+operations surface and introspection have all landed. The API is not stable
+until 1.0 - see the [changelog](CHANGELOG.md) for what changed in each release.

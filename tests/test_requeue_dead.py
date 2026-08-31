@@ -124,3 +124,48 @@ def test_it_chunks_the_update(order: OrderPlaced, record: list[str], settings) -
         fire(order)
     DeliveryRecord.objects.update(status=DeliveryStatus.DEAD)
     assert requeue_dead() == 2
+
+
+def test_it_can_be_scoped_to_named_rows(order: OrderPlaced, record: list[str]) -> None:
+    """The other reason to requeue: an operator reading a dead-letter list and
+    picking the ones they understand."""
+    with transaction.atomic():
+        fire(order)
+    DeliveryRecord.objects.update(status=DeliveryStatus.DEAD, attempts=5)
+    chosen = DeliveryRecord.objects.order_by("pk").first()
+
+    assert requeue_dead(delivery_ids=[chosen.pk]) == 1
+    chosen.refresh_from_db()
+    assert chosen.status == DeliveryStatus.PENDING
+    others = DeliveryRecord.objects.exclude(pk=chosen.pk)
+    assert set(others.values_list("status", flat=True)) == {DeliveryStatus.DEAD}
+
+
+def test_naming_rows_that_are_not_dead_requeues_nothing(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The id list narrows the selection; it does not widen it past DEAD. An
+    admin action handed a mixed selection must not reset a live claim."""
+    with transaction.atomic():
+        fire(order)
+    ids = list(DeliveryRecord.objects.values_list("pk", flat=True))
+    assert requeue_dead(delivery_ids=ids) == 0
+    assert set(DeliveryRecord.objects.values_list("status", flat=True)) == {DeliveryStatus.PENDING}
+
+
+def test_an_empty_id_list_requeues_nothing(order: OrderPlaced, record: list[str]) -> None:
+    """``[]`` is an operator selecting nothing, and must not mean "no filter"
+    the way ``None`` does."""
+    with transaction.atomic():
+        fire(order)
+    DeliveryRecord.objects.update(status=DeliveryStatus.DEAD, attempts=5)
+    assert requeue_dead(delivery_ids=[]) == 0
+    assert set(DeliveryRecord.objects.values_list("status", flat=True)) == {DeliveryStatus.DEAD}
+
+
+def test_the_receiver_and_id_scopes_intersect(order: OrderPlaced, record: list[str]) -> None:
+    with transaction.atomic():
+        fire(order)
+    DeliveryRecord.objects.update(status=DeliveryStatus.DEAD, attempts=5)
+    ids = list(DeliveryRecord.objects.values_list("pk", flat=True))
+    assert requeue_dead(receiver_key="testapp.with_context", delivery_ids=ids) == 1

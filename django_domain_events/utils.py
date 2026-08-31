@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, cast
 
 from django.apps import apps
+from django.db import connections
 
 
 def label_for(module: str, fallback_name: str) -> str:
@@ -46,3 +47,15 @@ def parse_datetime(value: str) -> datetime:
     learned to read in Python 3.11. Bare parsing fails on the 3.10 floor.
     """
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def has_table(alias: str, table: str) -> bool:
+    """Whether a table exists on one connection.
+
+    Both database checks need it. Without it they run under ``migrate`` - which
+    passes a database - and query a table ``migrate`` has not created yet, so
+    the first command a new project runs dies and no tables are created at all.
+    """
+    connection = connections[alias]
+    with connection.cursor() as cursor:
+        return table in connection.introspection.table_names(cursor)

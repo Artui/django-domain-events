@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime, timezone
 
 from django_domain_events.settings import setting
@@ -8,7 +9,12 @@ from django_domain_events.wake import notify_relay
 from django_domain_events.write_alias import write_alias
 
 
-def requeue_dead(*, receiver_key: str | None = None, limit: int | None = None) -> int:
+def requeue_dead(
+    *,
+    receiver_key: str | None = None,
+    delivery_ids: Iterable[int] | None = None,
+    limit: int | None = None,
+) -> int:
     """Give dead-lettered deliveries their attempt budget back.
 
     Dead is where a delivery stops on its own; it is not where it stops for
@@ -17,7 +23,9 @@ def requeue_dead(*, receiver_key: str | None = None, limit: int | None = None) -
     operator learns nothing they did not already know.
 
     Scoped by receiver, because the usual reason to requeue is that one
-    downstream was broken and now is not.
+    downstream was broken and now is not. Scoped by row as well, because the
+    other reason is an operator reading a dead-letter list and picking the four
+    they understand.
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
 
@@ -27,6 +35,8 @@ def requeue_dead(*, receiver_key: str | None = None, limit: int | None = None) -
     dead = DeliveryRecord.objects.filter(status=DeliveryStatus.DEAD).order_by("pk")
     if receiver_key is not None:
         dead = dead.filter(receiver_key=receiver_key)
+    if delivery_ids is not None:
+        dead = dead.filter(pk__in=list(delivery_ids))
 
     # `is not None`, not truthiness: limit=0 is an operator asking for the
     # smallest possible blast radius, and reading it as "no limit" gives them

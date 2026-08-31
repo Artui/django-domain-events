@@ -4,10 +4,12 @@ from collections.abc import Sequence
 from typing import Any
 
 from django.core.checks import Error, Warning
+from django.db import models
 from django.utils.module_loading import import_string
 
 from django_domain_events.registry import registry
 from django_domain_events.settings import setting
+from django_domain_events.utils import has_table
 
 
 def check_receivers_have_events(**kwargs: Any) -> list[Any]:
@@ -64,8 +66,6 @@ def check_no_orphaned_deliveries(
     one - and queries a table migrate has not created yet, so the first command
     a new project runs dies and no tables are created at all.
     """
-    from django.db import connections
-
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.types.delivery_status import DeliveryStatus
 
@@ -75,10 +75,8 @@ def check_no_orphaned_deliveries(
     table = DeliveryRecord._meta.db_table
     keys: set[str] = set()
     for alias in databases:
-        connection = connections[alias]
-        with connection.cursor() as cursor:
-            if table not in connection.introspection.table_names(cursor):
-                continue
+        if not has_table(alias, table):
+            continue
         keys |= set(
             DeliveryRecord.objects.using(alias)
             .filter(status__in=[DeliveryStatus.PENDING, DeliveryStatus.FAILED])
@@ -96,5 +94,59 @@ def check_no_orphaned_deliveries(
                 "to ORPHANED on the next delivery pass."
             ),
             id="django_domain_events.W001",
+        )
+    ]
+
+
+def check_recorded_events_are_declared(
+    *, databases: Sequence[str] | None = None, **kwargs: Any
+) -> list[Any]:
+    """No event still owed names something the registry cannot decode.
+
+    Renaming an event is the case this catches and the orphan warning cannot:
+    the receivers keep their keys, so nothing looks orphaned, while every row
+    written under the old name now decodes to nothing and dead-letters one
+    attempt budget at a time.
+
+    Limited to rows still owed. A settled row naming a retired event is
+    history, and warning about history every time ``check`` runs teaches the
+    reader to skip the output.
+    """
+    from django_domain_events.models.delivery_record import DeliveryRecord
+    from django_domain_events.models.event_record import EventRecord
+    from django_domain_events.types.delivery_status import DeliveryStatus
+
+    if not databases:
+        return []
+
+    table = EventRecord._meta.db_table
+    owed = DeliveryRecord.objects.filter(
+        event=models.OuterRef("pk"),
+        status__in=[DeliveryStatus.PENDING, DeliveryStatus.FAILED, DeliveryStatus.CLAIMED],
+    )
+    names: set[str] = set()
+    for alias in databases:
+        # One table answers for both: they are created by the same
+        # migration, so neither exists without the other.
+        if not has_table(alias, table):
+            continue
+        names |= set(
+            EventRecord.objects.using(alias)
+            .filter(models.Exists(owed))
+            .values_list("name", flat=True)
+            .distinct()
+        )
+    missing = sorted(n for n in names if registry.event_for_name(n) is None)
+    if not missing:
+        return []
+    return [
+        Warning(
+            f"Deliveries are owed for events no longer declared: {', '.join(missing)}.",
+            hint=(
+                "Most often a renamed event. Pin the old identity with "
+                "@event(name=...) on the class that replaced it, or replay the "
+                "rows under the new name."
+            ),
+            id="django_domain_events.W002",
         )
     ]

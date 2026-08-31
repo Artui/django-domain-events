@@ -70,3 +70,10 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Declaring: declaring.md
+  - Delivery: delivery.md
+  - Scope and attribution: scope.md
+  - Operations: operations.md
+  - Introspection: introspection.md
+  - Settings: settings.md
+  - API reference: reference.md

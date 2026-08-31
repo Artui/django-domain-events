@@ -11,6 +11,8 @@ from uuid import UUID
 import pytest
 
 from django_domain_events.registry import registry
+from django_domain_events.types.registered_event import RegisteredEvent
+from django_domain_events.types.registered_receiver import RegisteredReceiver
 from tests.testapp.events import Currency, OrderPlaced, calls
 
 
@@ -64,3 +66,41 @@ def receiver_replaced(key: str, func: object) -> Iterator[None]:
         yield
     finally:
         object.__setattr__(entry, "func", original)
+
+
+@contextmanager
+def event_deleted(name: str) -> Iterator[None]:
+    """Take one event out of the live registry, and put it back.
+
+    Both indexes, because the registry keeps two and a check reading one while
+    a test cleared the other would pass on a registry no consumer can produce.
+    """
+    entry = registry.event_for_name(name)
+    assert entry is not None, f"{name} is not registered"
+    del registry._events_by_name[name]
+    del registry._events_by_class[entry.event_class]
+    try:
+        yield
+    finally:
+        registry.register_event(entry)
+
+
+@contextmanager
+def event_registered(event_class: type, name: str, version: int = 1) -> Iterator[None]:
+    """Add an ad-hoc event for the duration of a test."""
+    registry.register_event(RegisteredEvent(event_class=event_class, name=name, version=version))
+    try:
+        yield
+    finally:
+        registry._events_by_name.pop(name, None)
+        registry._events_by_class.pop(event_class, None)
+
+
+@contextmanager
+def receiver_registered(entry: RegisteredReceiver) -> Iterator[None]:
+    """Add an ad-hoc receiver for the duration of a test."""
+    registry.register_receiver(entry)
+    try:
+        yield
+    finally:
+        registry._receivers.pop(entry.key, None)
