@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
-from contextvars import copy_context
 from typing import Any, TypeVar
 
 R = TypeVar("R")
@@ -15,18 +15,37 @@ def propagate_scope(func: Callable[..., R]) -> Callable[..., R]:
     attribution of whoever spawned it. This is the gotcha that actually bites,
     because nothing fails: events simply arrive with no actor.
 
-    ``executor.submit(propagate_scope(fn), *args)`` runs ``fn`` in a copy of the
-    context taken now, at submit time, which is the moment the scope is still
-    the caller's.
+        executor.submit(propagate_scope(fn), *args)
 
-    Not needed across ``sync_to_async`` / ``async_to_sync``: asgiref copies
-    context both ways. Not needed for ``asyncio`` tasks either, which inherit a
-    copy at creation. And it cannot help across a process boundary, where the
-    answer is the event row rather than a context at all.
+    Call it at submit time, not as a ``@propagate_scope`` decorator. It
+    captures the scope when it is called, and at decoration time - import time -
+    there is none, so the decorator form silently carries nothing, which is the
+    exact failure it exists to prevent.
+
+    It captures the scope's *values* rather than a ``contextvars.Context``, so
+    the wrapper is reusable: one Context cannot be entered twice, and a fan-out
+    that submits the same wrapped callable per item would raise on the second.
+
+    Not needed across ``sync_to_async`` / ``async_to_sync``, which carry context
+    both ways, nor for ``asyncio`` tasks, which inherit a copy at creation. And
+    it cannot help across a process boundary, where the answer is the event row.
     """
-    context = copy_context()
+    from django_domain_events.attributed import _scope, current_scope
+    from django_domain_events.causation import _cause
+    from django_domain_events.suppressed import _stack
 
+    scope = current_scope()
+    cause = _cause.get()
+    suppressions = _stack.get()
+
+    @functools.wraps(func)
     def run(*args: Any, **kwargs: Any) -> R:
-        return context.run(func, *args, **kwargs)
+        tokens = (_scope.set(scope), _cause.set(cause), _stack.set(suppressions))
+        try:
+            return func(*args, **kwargs)
+        finally:
+            _scope.reset(tokens[0])
+            _cause.reset(tokens[1])
+            _stack.reset(tokens[2])
 
     return run

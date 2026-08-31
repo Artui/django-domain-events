@@ -14,9 +14,9 @@ _cause: ContextVar[tuple[int, UUID | None] | None] = ContextVar(
 def caused_by(event_id: int, correlation_id: UUID | None = None) -> Iterator[None]:
     """Mark events fired inside this block as descended from ``event_id``.
 
-    Set by the delivery path around each receiver, so an event a receiver fires
-    records its parent with no ceremony at the call site - a parameter threaded
-    through every receiver is a parameter someone forgets.
+    Set around every receiver, at every execution site, so an event a receiver
+    fires records its parent with no ceremony at the call site - a parameter
+    threaded through every receiver is a parameter someone forgets.
 
     Both values come off the parent's row, never from a ``ContextVar``: by the
     time a durable delivery runs, the block that attributed the parent has long

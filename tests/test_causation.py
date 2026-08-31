@@ -64,3 +64,58 @@ def test_causation_does_not_leak_past_the_delivery(order: OrderPlaced, record: l
     with transaction.atomic():
         fire(PinnedName(value=2))
     assert EventRecord.objects.get(name="testapp.pinned").causation_id is None
+
+
+def test_an_inline_receiver_records_the_parent(order: OrderPlaced, record: list[str]) -> None:
+    """Causation is about descent, not about which execution site a receiver
+    happens to use."""
+
+    def fires_another(evt: OrderPlaced) -> None:
+        fire(PinnedName(value=1))
+
+    with receiver_replaced("testapp.inline_receiver", fires_another), transaction.atomic():
+        parent = fire(order)
+
+    assert EventRecord.objects.get(name="testapp.pinned").causation_id == parent
+
+
+def test_an_on_commit_receiver_records_the_parent_and_the_chain(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The callback runs at commit, after the attributed() block has exited, so
+    the cause has to have been captured at fire time like everything else."""
+
+    def fires_another(evt: OrderPlaced) -> None:
+        # An on-commit receiver runs after the commit, so it is in autocommit and
+        # the package rightly warns. Wrapping is what a consumer should do, and
+        # it is what makes this child's own row atomic with its work.
+        with transaction.atomic():
+            fire(PinnedName(value=1))
+
+    with receiver_replaced("testapp.on_commit_receiver", fires_another), transaction.atomic():  # noqa: SIM117 - the nesting is what this asserts
+        with attributed(source="web") as scope:
+            parent = fire(order)
+
+    child = EventRecord.objects.get(name="testapp.pinned")
+    assert (child.causation_id, child.correlation_id) == (parent, scope.correlation_id)
+
+
+def test_a_block_inside_a_receiver_stays_in_the_chain(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Naming yourself inside a receiver is the obvious thing to do, and minting
+    a fresh chain there detaches everything the receiver fires from the request
+    that caused it."""
+
+    def fires_another(evt: OrderPlaced) -> None:
+        with attributed(actor_key="system:fulfilment"):
+            fire(PinnedName(value=1))
+
+    with attributed(source="checkout") as scope, transaction.atomic():
+        fire(order)
+    with receiver_replaced("testapp.durable_receiver", fires_another):
+        drain_outbox()
+
+    child = EventRecord.objects.get(name="testapp.pinned")
+    assert child.correlation_id == scope.correlation_id
+    assert child.actor_key == "system:fulfilment"

@@ -69,3 +69,47 @@ def test_suppression_does_not_leak_past_the_block(order: OrderPlaced, record: li
     with transaction.atomic():
         fire(order)
     assert EventRecord.objects.get().suppressed_reason == ""
+
+
+def test_nested_blocks_accumulate_rather_than_replace(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """A library suppressing its own event type inside your block must not
+    re-enable yours. Replacing the whole suppression is how a suppressed event
+    gets recorded as normal and delivered."""
+    with suppressed(OrderPlaced, reason="outer"):  # noqa: SIM117 - the nesting is what this asserts
+        with suppressed(PinnedName, reason="inner"), transaction.atomic():
+            fire(order)
+            fire(PinnedName(value=1))
+
+    reasons = dict(EventRecord.objects.values_list("name", "suppressed_reason"))
+    assert reasons == {"testapp.OrderPlaced": "outer", "testapp.pinned": "inner"}
+    assert record == []
+
+
+def test_the_innermost_matching_reason_is_the_one_recorded(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    with suppressed(OrderPlaced, reason="outer"):  # noqa: SIM117 - the nesting is what this asserts
+        with suppressed(OrderPlaced, reason="inner"), transaction.atomic():
+            fire(order)
+    assert EventRecord.objects.get().suppressed_reason == "inner"
+
+
+def test_an_outer_record_false_is_not_undone_by_an_inner_block(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The safer half of the disagreement wins: a block that asked for no rows
+    should not get them because something nested inside it asked for rows."""
+    with suppressed(OrderPlaced, reason="bulk", record=False):  # noqa: SIM117 - the nesting is what this asserts
+        with suppressed(OrderPlaced, reason="inner"), transaction.atomic():
+            assert fire(order) is None
+    assert not EventRecord.objects.exists()
+
+
+def test_it_refuses_something_that_is_not_a_class() -> None:
+    """Passing a name or an instance otherwise fails much later, inside fire(),
+    with issubclass complaining about its second argument."""
+    with pytest.raises(TypeError, match="event classes"):  # noqa: SIM117 - the nesting is what this asserts
+        with suppressed("testapp.OrderPlaced", reason="oops"):
+            pass

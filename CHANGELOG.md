@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spawned it. Nothing fails; events simply arrive with no actor.
 - `Scope` and `current_scope()` for reading what is in effect.
 
+### Changed
+- `fire()` now returns `int | None` rather than `int`. It returns `None` when a
+  `suppressed(..., record=False)` block discarded the event without recording
+  it, and a caller annotating the result as `int` will stop type-checking.
+
 ### Notes
 - Scope is captured at fire time, in the firing process, and every downstream
   reader takes attribution off the row. That is a rule rather than an

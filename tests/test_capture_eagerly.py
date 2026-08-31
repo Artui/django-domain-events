@@ -31,7 +31,7 @@ def test_the_scope_is_read_at_fire_time_not_at_commit(
     with transaction.atomic():
         with attributed(actor_key="system:inside"):
             fire(order)
-        assert current_scope().actor_key == ""
+        assert current_scope().actor.key == ""
 
     assert EventRecord.objects.get().actor_key == "system:inside"
 
@@ -68,7 +68,7 @@ def test_a_receiver_reading_the_live_scope_gets_nothing(
         fire(order)
 
     with receiver_replaced(
-        "testapp.durable_receiver", lambda evt: seen.append(current_scope().actor_key)
+        "testapp.durable_receiver", lambda evt: seen.append(current_scope().actor.key)
     ):
         drain_outbox()
 

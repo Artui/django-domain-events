@@ -89,7 +89,7 @@ def test_the_scope_does_not_leak_past_the_block(order: OrderPlaced, record: list
     bug with a privacy flavour rather than untidiness."""
     with attributed(actor_key="system:first"):
         pass
-    assert current_scope().actor_key == ""
+    assert current_scope().actor.key == ""
 
     with transaction.atomic():
         fire(order)
@@ -99,7 +99,7 @@ def test_the_scope_does_not_leak_past_the_block(order: OrderPlaced, record: list
 def test_a_raise_still_resets_the_scope() -> None:
     with pytest.raises(RuntimeError), attributed(actor_key="system:boom"):
         raise RuntimeError("boom")
-    assert current_scope().actor_key == ""
+    assert current_scope().actor.key == ""
 
 
 def test_a_spawned_thread_loses_the_scope_without_help() -> None:
@@ -109,7 +109,7 @@ def test_a_spawned_thread_loses_the_scope_without_help() -> None:
     seen: list[str] = []
 
     with attributed(actor_key="system:parent"):
-        thread = threading.Thread(target=lambda: seen.append(current_scope().actor_key))
+        thread = threading.Thread(target=lambda: seen.append(current_scope().actor.key))
         thread.start()
         thread.join()
 
@@ -120,7 +120,7 @@ def test_propagate_scope_carries_it_into_a_thread() -> None:
     seen: list[str] = []
 
     with attributed(actor_key="system:parent"), ThreadPoolExecutor(max_workers=1) as pool:
-        pool.submit(propagate_scope(lambda: seen.append(current_scope().actor_key))).result()
+        pool.submit(propagate_scope(lambda: seen.append(current_scope().actor.key))).result()
 
     assert seen == ["system:parent"]
 
@@ -145,3 +145,85 @@ def test_an_actor_that_is_not_a_model_still_gets_an_identity(
         "importer-7",
         None,
     )
+
+
+def test_the_outermost_block_leaves_the_variable_unset() -> None:
+    """Reset by token, not by writing the previous value back. Restoring an
+    empty Scope leaves the variable *set*, which is a different state - and the
+    difference is what a copied context carries into a worker."""
+    from django_domain_events.attributed import _scope
+
+    assert _scope.get() is None
+    with attributed(actor_key="system:x"):
+        assert _scope.get() is not None
+    assert _scope.get() is None
+
+
+def test_an_actor_that_is_a_model_but_not_a_user_stays_out_of_the_foreign_key(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Any model has a pk, and the column is a foreign key to the user model.
+    Writing one there names whichever person happens to hold that id, or
+    violates the constraint from inside the caller's transaction."""
+    from django.contrib.contenttypes.models import ContentType
+
+    victim = User.objects.create(username="victim")
+    content_type = ContentType.objects.first()
+    content_type.pk = victim.pk
+
+    with attributed(actor=content_type), transaction.atomic():
+        fire(order)
+
+    row = EventRecord.objects.get()
+    assert row.actor_id is None
+    assert row.actor_key.startswith("contenttypes.ContentType:")
+
+
+def test_a_long_actor_string_does_not_break_the_write(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Both columns are varchar(255). Postgres raises inside the caller's
+    transaction and discards the business change; SQLite stores it happily, so
+    only truncating at capture makes the two backends agree."""
+    with attributed(actor_key="k" * 400, actor_label="l" * 400), transaction.atomic():
+        fire(order)
+    row = EventRecord.objects.get()
+    assert (len(row.actor_key), len(row.actor_label)) == (255, 255)
+
+
+def test_scope_data_is_copied_onto_the_row(order: OrderPlaced, record: list[str]) -> None:
+    """The stored dict reaches receivers as DeliveryContext.scope. Handing out
+    the scope's own dict lets one mutation reach every later event in the
+    process."""
+    with attributed(source="checkout"), transaction.atomic():
+        fire(order)
+
+    row = EventRecord.objects.get()
+    row.scope["mutated"] = True
+    with transaction.atomic():
+        fire(order)
+    assert EventRecord.objects.order_by("pk").last().scope == {}
+
+
+def test_non_serialisable_scope_data_is_refused_at_the_block() -> None:
+    """attributed() is middleware-shaped, so a value that cannot be written
+    would otherwise raise from inside fire() - far from its cause, and inside
+    the business transaction it takes down with it."""
+    from datetime import datetime
+
+    with pytest.raises(TypeError, match="JSON-serialisable"), attributed(when=datetime.now()):
+        pass
+
+
+def test_an_anonymous_user_is_not_an_actor(order: OrderPlaced, record: list[str]) -> None:
+    """The README says to pass ``request.user``, and on an unauthenticated
+    request that is an AnonymousUser - which would otherwise be recorded as
+    somebody of that name rather than as nobody."""
+    from django.contrib.auth.models import AnonymousUser
+
+    with attributed(actor=AnonymousUser(), source="web"), transaction.atomic():
+        fire(order)
+
+    row = EventRecord.objects.get()
+    assert (row.actor_key, row.actor_label, row.actor_id) == ("", "", None)
+    assert row.scope == {"source": "web"}
