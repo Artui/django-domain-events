@@ -145,8 +145,16 @@ make release-bump VERSION=X.Y.Z   # rewrites version.py, promotes the changelog
 # open a PR, get it reviewed, merge to main
 ```
 
-The release job on `main` short-circuits to a no-op unless the version in source
-has moved past the newest `vX.Y.Z` tag, so an ordinary merge costs nothing.
+The release job on `main` short-circuits to a no-op when a `vX.Y.Z` tag for the
+version in source already exists on origin, so an ordinary merge costs nothing.
+
+That guard is why the scaffold sits at `0.0.0` with a matching `v0.0.0` tag. A
+new repository has no tags at all, so without one the very first push to `main`
+reads the scaffold version as unreleased and runs a real release attempt - which
+gets as far as building distributions before failing on the missing changelog
+section. Nothing is published and no tag is created, but the repository starts
+life with a red release run. The first real release is
+`make release-bump VERSION=0.1.0`.
 
 One-time setup, none of which can be done from a checkout: a PyPI Trusted
 Publisher pointing at this repo with workflow `release.yml` and environment
