@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `attributed()` - attach an actor and arbitrary facts to every event fired
+  inside a block. Nested blocks layer rather than replace, so a request-level
+  actor survives an inner block that only adds a source. The actor's identity is
+  derived once, at capture, into the three columns the row already carried.
+- `suppressed()` - fire without delivering, and say why. The reason is required
+  and lands on the row, because a silently dropped event is unauditable, which
+  is the failure mode suppression is most likely to cause. `record=False`
+  discards instead, for the bulk import where a row per suppressed event is the
+  surprise.
+- Correlation and causation. The outermost `attributed()` block roots a chain;
+  an event fired from inside a receiver records its parent automatically, and
+  inherits the chain from the row it descended from - so a grandchild delivered
+  hours later in another process still belongs to the request that started it.
+- `propagate_scope()` - carry the scope into a thread you start yourself.
+  `threading.Thread` and `ThreadPoolExecutor.submit` begin with an empty context
+  rather than a copy, so a worker silently loses the attribution of whoever
+  spawned it. Nothing fails; events simply arrive with no actor.
+- `Scope` and `current_scope()` for reading what is in effect.
+
+### Notes
+- Scope is captured at fire time, in the firing process, and every downstream
+  reader takes attribution off the row. That is a rule rather than an
+  implementation detail: `on_commit` callbacks run at commit, which can be after
+  the `with attributed(...)` block has exited, and a durable delivery can run in
+  another process hours later. Three tests hold it, and reading the scope lazily
+  instead fails eight.
+
 ## [0.2.0] — 2026-08-31
 
 ### Added

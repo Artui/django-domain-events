@@ -6,8 +6,11 @@ from datetime import datetime, timedelta, timezone
 
 from django.db import transaction
 
+from django_domain_events.attributed import current_scope
+from django_domain_events.causation import causing_event_id, inherited_correlation_id
 from django_domain_events.registry import registry
 from django_domain_events.settings import get_codec, setting
+from django_domain_events.suppressed import suppression_for
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.write_alias import write_alias
@@ -15,8 +18,11 @@ from django_domain_events.write_alias import write_alias
 
 def fire(
     event: object, *, dedupe_key: str | None = None, occurred_at: datetime | None = None
-) -> int:
+) -> int | None:
     """Record an event and owe it to its durable receivers. Returns its id.
+
+    Returns the event id, or ``None`` when suppression discarded it without
+    recording.
 
     This does not call durable receivers; it records intent. The event row and
     one delivery row per durable receiver are written inside the caller's
@@ -48,13 +54,35 @@ def fire(
             stacklevel=2,
         )
 
+    # Captured here, at fire time, in the firing process. Everything downstream
+    # reads attribution off the row: a durable delivery can run in another
+    # process hours later, and on_commit callbacks run at commit, which can be
+    # after the `with attributed(...)` block has already exited. Reading a
+    # ContextVar there returns a stale answer or None, silently.
+    scope = current_scope()
+    suppression = suppression_for(type(event))
+    if suppression is not None and not suppression[1]:
+        return None
+
     record = EventRecord.objects.create(
         name=entry.name,
         version=entry.version,
         payload=get_codec().encode(event),
         dedupe_key=dedupe_key,
         occurred_at=occurred_at if occurred_at is not None else datetime.now(timezone.utc),
+        actor_id=scope.actor_pk,
+        actor_key=scope.actor_key,
+        actor_label=scope.actor_label,
+        scope=scope.data,
+        correlation_id=scope.correlation_id or inherited_correlation_id(),
+        causation_id=causing_event_id(),
+        suppressed_reason=suppression[0] if suppression is not None else "",
     )
+    if suppression is not None:
+        # Recorded, deliberately undelivered, and the reason is on the row. No
+        # delivery rows, and no inline or on-commit receivers either: suppression
+        # is about the event, not about one execution site.
+        return record.pk
     context = DeliveryContext(
         event_id=record.pk,
         event_name=record.name,

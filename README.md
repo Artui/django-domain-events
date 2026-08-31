@@ -92,6 +92,26 @@ the firing process, with the relay as the fallback.
 In tests, `drain_outbox()` runs the real delivery path to completion, and
 `assert_fired(OrderPlaced, times=1)` reads the log rather than a mock.
 
+## Attribution
+
+```python
+with attributed(actor=request.user, source="checkout"):
+    with transaction.atomic():
+        order = Order.objects.create(...)
+        fire(OrderPlaced(order_id=order.id, total_cents=order.total_cents))
+```
+
+Every event fired inside the block records who caused it, in what scope, and
+which chain it belongs to. The scope is captured at fire time and read back off
+the row, so a delivery running hours later in another process still knows.
+
+Suppress without losing the record:
+
+```python
+with suppressed(OrderPlaced, reason="historical import"):
+    importer.run()  # rows written and marked, no deliveries
+```
+
 ## Delivery modes
 
 Two independent knobs, not one enum. Timing is what a receiver promises about the
