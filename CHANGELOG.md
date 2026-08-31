@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-08-31
+
 ### Added
 - The contract, whole. `fire()` records an event row and one delivery row per
   durable receiver inside the caller's transaction, so the obligation exists if
@@ -25,7 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A payload codec seam over plain frozen dataclasses. `DataclassCodec` (the
   default, no dependency) handles flat payloads of documented scalars and
   refuses everything else by name; `DaciteCodec`, behind the `dacite` extra,
-  handles nested shapes.
+  handles nested shapes. Both parse datetimes the way `DjangoJSONEncoder` writes
+  them, which differs from what `datetime.fromisoformat` accepts before Python
+  3.11.
 - `deliver_events --once`, `drain_outbox()` and `assert_fired()`. The test
   helper runs the real delivery path rather than bypassing it, and
   `assert_fired()` returns the events decoded from the log, so a payload that
@@ -33,12 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - System checks for a receiver listening to an undeclared event, an unimportable
   codec, and delivery rows addressed to a receiver that no longer exists.
 
-### Fixed
-- Datetimes in a payload could not be decoded on Python 3.10 to 3.12.
-  `DjangoJSONEncoder` writes UTC with a trailing `Z`, which
-  `datetime.fromisoformat` only learned to read in 3.11, so every UTC datetime
-  failed to decode on the oldest supported interpreters. Both codecs now parse
-  what the encoder actually writes.
 
 ### Notes
 - A single delivery pass, with no leased claim and no `SELECT ... FOR UPDATE
@@ -47,4 +45,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.0.0...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Artui/django-domain-events/compare/v0.0.0...v0.1.0
