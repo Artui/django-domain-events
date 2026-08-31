@@ -1,0 +1,67 @@
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: "ruff check --fix"
+        entry: make lint-fix
+        pass_filenames: false
+        language: system
+        stages: [pre-commit]
+
+      - id: ruff-format
+        name: "ruff format"
+        entry: make format
+        pass_filenames: false
+        language: system
+        stages: [pre-commit]
+
+      - id: backend-type-check
+        name: "type check (ty)"
+        entry: make type-check
+        pass_filenames: false
+        language: system
+        stages: [pre-commit]
+
+      - id: forbid-local-paths
+        name: "forbid local filesystem paths / personal handles"
+        entry: "/Users/|arturveres"
+        language: pygrep
+        types: [text]
+        exclude: '^\.pre-commit-config\.yaml$'
+
+      - id: forbid-plan-labels
+        name: "forbid internal plan-step labels"
+        entry: '(?<![A-Za-z0-9])(SPEC|SURF|DISP|KEY|FILT|BULK|NEST|NAME|THINK|VOICE|THEME|WELL|PAGE|CARD|REST|I18N|CUST|TOOL|PAI|AUTHZ|CONF|AGH|OAS|WCH|HYG|ADOPT|ANNO|ASYNC|ERR|DUP|PROTO|SEC|VER|GATE|STATE|SESS|CTX|AUDIT|HITL|CODE|STEP|SHARE|SKILL|CAP|MOUNT|SAN|PF|PROV|SCH|LIFE|SUB|CI|DOC|EX|HOST|WIN|REL|CONV|COMM|LINT|PURGE|MCPX|A2A|ATT|ADMIN|MULTI|OFFK|QP|DEPS|CORE|NAV|TSET|MRTR|BOUND|CHAT|NICE|PRE|PIPE|EMIT|SEED|POOL)-\d|(?<![A-Za-z0-9])(Phase|Wave)\s\d'
+        language: pygrep
+        types: [text]
+        exclude: '^\.pre-commit-config\.yaml$'
+
+      # Scoped to the package, because that is exactly what ty checks. Under
+      # tests/ no checker reads either pragma, while an editor running mypy or
+      # pyright does honour the mypy one -- rewriting those would turn something
+      # that still works into a no-op everywhere. The lookbehind spares prose
+      # that names the mypy pragma inside backticks.
+      - id: forbid-mypy-type-ignore
+        name: "forbid mypy-style '# type: ignore' (the package type-checks with ty)"
+        entry: '(?<!`)# type:\s*ignore'
+        language: pygrep
+        files: '^django_domain_events/.*\.py$'
+
+      - id: forbid-marker-glyphs
+        name: "forbid emoji / marker glyphs in code, docs and changelogs"
+        entry: '⚠|⭐|⛔|✅|❌|❗|❓|⭕|⚡|☑|✔|✖|✨|❤|⏸|⏰|⌛|⁉|‼|️|\xf0\x9f[\x80-\xbf][\x80-\xbf]'
+        language: pygrep
+        types: [text]
+        exclude: '^\.pre-commit-config\.yaml$'

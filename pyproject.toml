@@ -1,0 +1,156 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "django-domain-events"
+dynamic = ["version"]
+description = "A Django domain-event log with in-process fan-out: typed events, a durable outbox, per-receiver retry and dead-letter."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Artur Veres", email = "artur8118@gmail.com" },
+]
+keywords = ["django", "events", "domain-events", "outbox", "transactional-outbox", "event-driven"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Framework :: Django",
+    "Framework :: Django :: 4.2",
+    "Framework :: Django :: 5.0",
+    "Framework :: Django :: 5.1",
+    "Framework :: Django :: 5.2",
+    "Framework :: Django :: 6.0",
+    "Framework :: Django :: 6.1",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    # 4.2 floor: ``transaction.on_commit(robust=True)``. Without it one
+    # best-effort receiver raising cancels every later callback registered in
+    # the same transaction, which silently deletes the other receivers' work.
+    "django>=4.2",
+]
+
+[project.optional-dependencies]
+# The decode half of the payload codec. Encoding is stdlib ``asdict`` plus
+# Django's own ``DjangoJSONEncoder``, so it needs nothing; decoding a nested or
+# non-scalar payload back into a frozen dataclass is the part worth a
+# dependency. The default codec handles flat payloads and refuses the rest by
+# name, so this extra is what a project with nested event payloads installs.
+dacite = [
+    "dacite>=1.9.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/Artui/django-domain-events"
+Repository = "https://github.com/Artui/django-domain-events"
+Issues = "https://github.com/Artui/django-domain-events/issues"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.0",
+    "ty>=0.0.1a10",
+    "pre-commit>=4.0.0",
+    "pytest>=8.0.0",
+    "pytest-django>=4.9.0",
+    "pytest-cov>=6.0.0",
+    "pytest-asyncio>=0.24.0",
+    # Backs the ``TID`` rule selection below; ruff reads its settings from the
+    # flake8-tidy-imports namespace and the plugin is what defines them.
+    "flake8-tidy-imports>=4.12.0",
+    "django-stubs>=5.1.0",
+    # The Postgres half of the suite talks to a real server; the SQLite half
+    # never imports this.
+    "psycopg[binary]>=3.2.0",
+]
+docs = [
+    "mkdocs>=1.6.0",
+    "mkdocs-material>=9.5.0",
+    "mkdocstrings[python]>=0.27.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["django_domain_events"]
+
+[tool.hatch.version]
+path = "django_domain_events/version.py"
+# Hatchling's default regex expects a bare ``__version__ = "..."``. This file
+# annotates the assignment, so the pattern has to allow the annotation or the
+# build cannot find the version at all.
+pattern = "^__version__(?:\\s*:\\s*[A-Za-z][A-Za-z0-9_]*)?\\s*=\\s*[\"'](?P<version>[^\"']+)[\"']"
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "tests.conftest_settings"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=django_domain_events --cov-report=term-missing --cov-fail-under=100"
+
+[tool.coverage.run]
+source = ["django_domain_events"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 100
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "UP", "B", "SIM", "I", "TID"]
+ignore = ["E203", "E501", "E231", "F811", "E722", "E741", "UP040", "UP046", "UP047"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["django_domain_events"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+[tool.ty.environment]
+root = ["./django_domain_events"]
+
+[tool.bumpversion]
+current_version = "0.1.0"
+allow_dirty = false
+commit = false
+tag = false
+
+[[tool.bumpversion.files]]
+filename = "django_domain_events/version.py"
+search = '__version__: str = "{current_version}"'
+replace = '__version__: str = "{new_version}"'
+
+[[tool.bumpversion.files]]
+filename = "CHANGELOG.md"
+search = "## [Unreleased]"
+replace = """## [Unreleased]
+
+## [{new_version}] — {now:%Y-%m-%d}"""
+
+[[tool.bumpversion.files]]
+filename = "CHANGELOG.md"
+search = "[Unreleased]: https://github.com/Artui/django-domain-events/compare/v{current_version}...HEAD"
+replace = """[Unreleased]: https://github.com/Artui/django-domain-events/compare/v{new_version}...HEAD
+[{new_version}]: https://github.com/Artui/django-domain-events/compare/v{current_version}...v{new_version}"""

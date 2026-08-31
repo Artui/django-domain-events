@@ -1,0 +1,393 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+# Actions are pinned to a commit SHA rather than a tag: a tag is mutable, and an
+# action owner (or anyone who takes over the account) can silently repoint one at
+# new code that then runs with this workflow's token. The trailing version comment
+# is not decoration -- Dependabot reads it to know which release the SHA is, and
+# rewrites both together when a newer one ships.
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --all-groups
+      - name: ruff check
+        run: uv run ruff check .
+      - name: ruff format check
+        run: uv run ruff format --check --diff .
+      - name: ty
+        run: uv run ty check django_domain_events
+
+  docs:
+    name: docs build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: true
+      - name: Install with docs group
+        run: uv sync --all-groups
+      - name: mkdocs build --strict
+        # mkdocstrings imports the package, which defines Django models. Those
+        # cannot be imported before ``django.setup()``, so we point at the test
+        # settings module to keep the build hermetic.
+        run: DJANGO_SETTINGS_MODULE=tests.conftest_settings uv run mkdocs build --strict
+
+  floor:
+    name: lowest declared versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: true
+      # A floor is a claim about the *oldest* version that works, and a lockfile
+      # can only ever check the newest. Development and CI both resolve the
+      # newest in-range dependency, so every gate passes while a consumer whose
+      # own constraints pull an older one gets a package that does not import.
+      #
+      # `lowest-direct` pins every *declared* dependency to the bottom of its
+      # window while letting transitives resolve normally, so this asserts the
+      # floors mean what they say. A per-PR gate rather than a scheduled job,
+      # because a floor stops being true the moment someone imports a newer
+      # upstream symbol -- a code change, not the passage of time.
+      #
+      # Pinned to the oldest supported Python rather than whatever interpreter
+      # the runner exposes. The floor claim is about the oldest configuration
+      # we support, so that is the one to install, and leaving the choice to
+      # the image makes the answer drift when the image does.
+      - name: Install Python 3.10
+        run: uv python install 3.10
+      # `--refresh` on both resolutions below. This job's whole claim is "what a
+      # consumer resolving from scratch would get", and the runner's uv cache is
+      # shared across runs: without it the answer comes from whatever package
+      # list that cache happens to hold, which can be hours behind the index.
+      - name: Resolve every declared dependency at its floor
+        run: uv lock --resolution lowest-direct --refresh
+      # `--frozen` here and `--no-sync` below, not a bare `uv sync` / `uv run`.
+      # uv records the resolution mode in the lockfile and silently discards one
+      # resolved in a different mode, so a plain `uv sync` re-resolves at
+      # `highest` and undoes the step above -- the job would then measure the
+      # newest versions twice while reporting that it tested the oldest.
+      - name: Install
+        run: uv sync --frozen --all-groups --all-extras --python 3.10
+      - name: Name the versions that produced
+        run: uv pip list
+      - name: Test
+        run: uv run --no-sync pytest
+
+      # The step above installs every extra, and an extra can hold a shared
+      # dependency *above* the floor being claimed -- masking the lie rather
+      # than exposing it. So the floor claim is also checked on the install
+      # shape with the fewest constraints: the package alone, no extras, no dev
+      # group. That shape is what a consumer who wants only the default codec
+      # actually gets.
+      - name: Import the package installed alone, at its floors
+        run: |
+          uv venv --python 3.10 .venv-floor
+          uv pip install --python .venv-floor/bin/python --resolution lowest-direct --refresh -e .
+          uv pip list --python .venv-floor/bin/python
+          .venv-floor/bin/python - <<'PY'
+          import django
+          from django.conf import settings
+
+          # This package defines models, so a bare import cannot run before
+          # django.setup() against configured settings.
+          settings.configure(
+              SECRET_KEY="x",
+              INSTALLED_APPS=[
+                  "django.contrib.contenttypes",
+                  "django.contrib.auth",
+                  "django_domain_events",
+              ],
+              DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
+          )
+          django.setup()
+
+          import django_domain_events
+
+          print("BASE IMPORT OK", django_domain_events.__version__, django.get_version())
+          PY
+
+  test:
+    name: ${{ matrix.python-version }} / Django ${{ matrix.django-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        django-version: ["4.2", "5.0", "5.1", "5.2", "6.0", "6.1"]
+        exclude:
+          # Django 4.2 supports Python 3.8–3.12
+          - python-version: "3.13"
+            django-version: "4.2"
+          - python-version: "3.14"
+            django-version: "4.2"
+          # Django 5.0 supports Python 3.10–3.12
+          - python-version: "3.13"
+            django-version: "5.0"
+          - python-version: "3.14"
+            django-version: "5.0"
+          # Django 5.1 supports Python 3.10–3.13
+          - python-version: "3.14"
+            django-version: "5.1"
+          # Django 6.0 supports Python 3.12+
+          - python-version: "3.10"
+            django-version: "6.0"
+          - python-version: "3.11"
+            django-version: "6.0"
+          # Django 6.1 requires Python 3.12+
+          - python-version: "3.10"
+            django-version: "6.1"
+          - python-version: "3.11"
+            django-version: "6.1"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: true
+      - name: Install Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+      - name: Sync dev deps
+        run: uv sync --all-groups --python ${{ matrix.python-version }}
+      - name: Pin Django ${{ matrix.django-version }}
+        run: uv pip install --reinstall-package django "django~=${{ matrix.django-version }}.0"
+      - name: pytest
+        run: |
+          uv run --no-sync pytest \
+            --cov-report=xml:coverage.xml \
+            --cov-report=html:htmlcov
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-py${{ matrix.python-version }}-django${{ matrix.django-version }}
+          path: |
+            coverage.xml
+            htmlcov/
+          if-no-files-found: ignore
+
+  test-postgres:
+    # The portable half of the suite runs on SQLite across the whole matrix
+    # above, because that is what most Django projects actually run their tests
+    # on. This job is the other half: the delivery machinery claims `SELECT ...
+    # FOR UPDATE SKIP LOCKED`, leased claims and concurrent relays, and none of
+    # those mean anything on a backend that has neither the statement nor the
+    # concurrency model. A green SQLite run is compatible with the claim being
+    # untested.
+    #
+    # One combination rather than a second matrix: the backend is what is under
+    # test here, not the Python or Django version, and the cross-product is
+    # already covered above.
+    #
+    # NOTE: at 0.1.0 there is no relay yet, so this runs the same suite against
+    # a real Postgres to prove the models and migrations work on both backends.
+    # When the relay lands, the coverage gate has to move here -- Postgres-only
+    # branches cannot be covered by a run that skips them.
+    name: postgres / 3.13 / Django 6.1
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: django_domain_events
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DDE_TEST_DATABASE: postgres
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: django_domain_events
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: true
+      - name: Install Python 3.13
+        run: uv python install 3.13
+      - name: Sync dev deps
+        run: uv sync --all-groups --all-extras --python 3.13
+      - name: Pin Django 6.1
+        run: uv pip install --reinstall-package django "django~=6.1.0"
+      - name: pytest against Postgres
+        run: uv run --no-sync pytest
+
+  coverage-badge:
+    # Publishes a shields.io-compatible coverage.json to gh-pages so the README
+    # badge reflects reality. Runs only on push to main, after the matrix has
+    # produced an artifact we can read from.
+    name: coverage badge
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Need the parent commit so the gate step below can diff
+          # version.py against ${{ github.event.before }}. The default
+          # shallow checkout (depth 1) would make `git show "$before:…"`
+          # fail with exit 128 and turn the whole job red.
+          fetch-depth: 2
+      # release.yml runs in parallel on the same push and owns gh-pages
+      # publishing on release commits (it bundles coverage.json into the
+      # mkdocs gh-deploy). If we also push here we get a second built-in
+      # "pages build and deployment" run that the first one cancels. The
+      # version-diff against ${{ github.event.before }} is the reliable
+      # signal — release.yml's tag isn't pushed until after PyPI publish,
+      # so a tag-existence check would race.
+      - name: Skip when release.yml owns this push
+        id: gate
+        run: |
+          set -euo pipefail
+          before="${{ github.event.before }}"
+          if [[ -z "$before" || "$before" =~ ^0+$ ]]; then
+              # First push to main on a brand-new repo — no prior state to diff.
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              exit 0
+          fi
+          # `before` may not be in the local object DB if the push
+          # contained more than one commit (fetch-depth: 2 only guarantees
+          # HEAD + 1 parent). Try to fetch just that commit; if it's not
+          # reachable, fall back to "don't skip" — better to double-push
+          # to gh-pages once than to turn the pipeline red.
+          if ! git cat-file -e "$before^{commit}" 2>/dev/null; then
+              git fetch --depth=1 origin "$before" 2>/dev/null || true
+          fi
+          old=""
+          if git cat-file -e "$before:django_domain_events/version.py" 2>/dev/null; then
+              old="$(git show "$before:django_domain_events/version.py" \
+                     | awk -F'"' '/^__version__/ { print $2; exit }')"
+          fi
+          new="$(awk -F'"' '/^__version__/ { print $2; exit }' \
+                 django_domain_events/version.py)"
+          if [[ -n "$old" && "$old" != "$new" ]]; then
+              echo "Version bumped $old → $new; release.yml will deploy gh-pages."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Download canonical coverage artifact
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          # Pin to one cell of the matrix — coverage is the same shape across
+          # all cells and we only need one number.
+          name: coverage-py3.13-django5.2
+          path: coverage-artifact/
+      - name: Render coverage.json
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          python - <<'PY'
+          import json
+          import xml.etree.ElementTree as ET
+
+          tree = ET.parse("coverage-artifact/coverage.xml")
+          pct = round(float(tree.getroot().attrib["line-rate"]) * 100, 1)
+          if pct >= 95:
+              color = "brightgreen"
+          elif pct >= 85:
+              color = "green"
+          elif pct >= 70:
+              color = "yellow"
+          else:
+              color = "red"
+          payload = {
+              "schemaVersion": 1,
+              "label": "coverage",
+              "message": f"{pct}%",
+              "color": color,
+          }
+          with open("coverage.json", "w") as fh:
+              json.dump(payload, fh)
+              fh.write("\n")
+          print(json.dumps(payload))
+          PY
+      - name: Publish coverage.json to gh-pages
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          tmp="$(mktemp -d)"
+          cp coverage.json "$tmp/coverage.json"
+
+          git fetch origin gh-pages --depth=1 2>/dev/null || true
+          if git rev-parse --verify origin/gh-pages >/dev/null 2>&1; then
+              git worktree add gh-pages origin/gh-pages
+              cp "$tmp/coverage.json" gh-pages/coverage.json
+              cd gh-pages
+              if [[ -n "$(git status --porcelain coverage.json)" ]]; then
+                  git add coverage.json
+                  git commit -m "coverage badge: update from ${GITHUB_SHA::7}"
+                  git push origin HEAD:gh-pages
+              else
+                  echo "coverage.json unchanged, skipping push"
+              fi
+          else
+              # First run before docs deploy. Lay down an orphan gh-pages with
+              # just the badge file; the docs deploy will overwrite the rest.
+              git worktree add --detach gh-pages
+              cd gh-pages
+              git checkout --orphan gh-pages
+              git rm -rf . >/dev/null 2>&1 || true
+              cp "$tmp/coverage.json" coverage.json
+              git add coverage.json
+              git commit -m "coverage badge: initial publish from ${GITHUB_SHA::7}"
+              git push origin gh-pages
+          fi
+
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | tar -xz gitleaks
+          sudo mv gitleaks /usr/local/bin/
+      - name: Scan repo + history
+        run: gitleaks git --redact --no-banner .
+
+  tests-passed:
+    name: tests
+    if: always()
+    needs: [lint, docs, floor, test, test-postgres]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs succeeded
+        run: |
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            echo "a required job failed"; exit 1
+          fi
