@@ -74,6 +74,11 @@ dev = [
     # The Postgres half of the suite talks to a real server; the SQLite half
     # never imports this.
     "psycopg[binary]>=3.2.0",
+    # The Tasks backport, so the task-backend adapter is exercised on every
+    # Django in the matrix. Core gained django.tasks in 6.0; below that the
+    # backport is the only way the adapter can run at all, and an adapter that
+    # only its newest supported version can test is an adapter nobody has tried.
+    "django-tasks>=0.12.0",
     # Also a runtime extra, and needed here for a different reason: CI's lint and
     # test jobs sync --all-groups without --all-extras, so without this ty cannot
     # resolve the import in dacite_codec and its tests cannot run at all. An
@@ -138,7 +143,7 @@ skip-magic-trailing-comma = false
 root = ["./django_domain_events"]
 
 [tool.bumpversion]
-current_version = "0.3.0"
+current_version = "0.4.0"
 allow_dirty = false
 commit = false
 tag = false

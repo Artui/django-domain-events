@@ -18,6 +18,7 @@ from django_domain_events.settings import get_codec, setting
 from django_domain_events.suppressed import suppression_for
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
+from django_domain_events.wake import notify_relay
 from django_domain_events.write_alias import write_alias
 
 
@@ -115,6 +116,9 @@ def fire(
         eager_ids = [row.pk for row, r in zip(rows, durable, strict=True) if r.eager]
         if eager_ids:
             transaction.on_commit(_deliver_eagerly(eager_ids), using=alias, robust=True)
+        # After commit, because a notification sent before it would wake a relay
+        # that cannot yet see the rows it was told about.
+        transaction.on_commit(notify_relay, using=alias, robust=True)
 
     for r in receivers:
         if r.mode is DeliveryMode.INLINE:
@@ -145,7 +149,7 @@ def _deliver_eagerly(delivery_ids: list[int]) -> Callable[[], None]:
 
     def run() -> None:
         from django_domain_events.claim_batch import claim_batch
-        from django_domain_events.deliver import deliver_one
+        from django_domain_events.deliver import dispatch_one
 
         now = datetime.now(timezone.utc)
         claimed = claim_batch(
@@ -156,7 +160,7 @@ def _deliver_eagerly(delivery_ids: list[int]) -> Callable[[], None]:
             only_ids=delivery_ids,
         )
         for delivery_id in claimed:
-            deliver_one(delivery_id)
+            dispatch_one(delivery_id)
 
     return run
 

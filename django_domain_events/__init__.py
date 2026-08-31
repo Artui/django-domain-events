@@ -11,15 +11,20 @@ from django_domain_events.drain_outbox import drain_outbox
 from django_domain_events.event import event
 from django_domain_events.fire import fire
 from django_domain_events.propagate_scope import propagate_scope
+from django_domain_events.prune_events import prune_events
 from django_domain_events.receiver import receiver
 from django_domain_events.registry import Registry, registry
+from django_domain_events.replay_events import replay_events
+from django_domain_events.requeue_dead import requeue_dead
 from django_domain_events.run_relay import run_relay
 from django_domain_events.suppressed import suppressed
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.scope import Scope
+from django_domain_events.types.task_backend import TaskBackend
 from django_domain_events.version import __version__
+from django_domain_events.wake import notify_relay
 
 DURABLE = DeliveryMode.DURABLE
 INLINE = DeliveryMode.INLINE
@@ -36,6 +41,7 @@ __all__ = [
     "PayloadCodec",
     "Registry",
     "Scope",
+    "TaskBackend",
     "UnsupportedPayloadType",
     "__version__",
     "assert_fired",
@@ -50,9 +56,13 @@ __all__ = [
     "drain_outbox",
     "event",
     "fire",
+    "notify_relay",
     "propagate_scope",
+    "prune_events",
     "receiver",
     "registry",
+    "replay_events",
+    "requeue_dead",
     "run_relay",
     "suppressed",
 ]

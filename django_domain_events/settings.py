@@ -17,12 +17,30 @@ DEFAULTS: dict[str, Any] = {
     "POLL_SECONDS": 1.0,
     "BACKOFF_BASE_SECONDS": 2.0,
     "BACKOFF_CAP_SECONDS": 3600.0,
+    "RETENTION_DAYS": 90,
+    "TASK_BACKEND": None,
 }
 
 
 def setting(key: str) -> Any:
     configured = getattr(settings, SETTINGS_NAME, {})
     return configured.get(key, DEFAULTS[key])
+
+
+def get_task_backend() -> Any | None:
+    """The configured task backend, or None when receivers run in the relay.
+
+    Accepts a dotted path, or a mapping with ``BACKEND`` and the rest passed to
+    the constructor - otherwise a backend with any options at all is
+    unreachable through the documented setting and only a subclass can use it.
+    """
+    configured = setting("TASK_BACKEND")
+    if configured is None:
+        return None
+    if isinstance(configured, str):
+        return import_string(configured)()
+    options = dict(configured)
+    return import_string(options.pop("BACKEND"))(**options)
 
 
 def get_codec() -> PayloadCodec:

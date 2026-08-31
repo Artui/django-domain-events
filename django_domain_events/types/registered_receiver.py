@@ -16,3 +16,4 @@ class RegisteredReceiver:
     takes_context: bool
     max_attempts: int
     eager: bool
+    site: str

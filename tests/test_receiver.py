@@ -62,3 +62,23 @@ def test_such_a_callable_is_fine_with_an_explicit_key() -> None:
     bound = partial(target, extra=1)
     assert receiver(OrderPlaced, key="testapp.partial")(bound) is bound
     registry._receivers.pop("testapp.partial", None)
+
+
+def test_an_unknown_execution_site_is_refused() -> None:
+    """Caught at declaration rather than when the relay reaches the row: a typo
+    would otherwise mean the receiver quietly runs in the relay forever."""
+    from django_domain_events.receiver import receiver
+
+    with pytest.raises(ValueError, match="site must be"):
+        receiver(OrderPlaced, site="celery")
+
+
+def test_a_task_site_needs_a_durable_mode() -> None:
+    """INLINE and ON_COMMIT have no delivery row, so there is nothing to hand a
+    backend. Accepting the combination runs the receiver in the firing process
+    while the declaration says otherwise."""
+    from django_domain_events.receiver import receiver
+    from django_domain_events.types.delivery_mode import DeliveryMode
+
+    with pytest.raises(ValueError, match="needs mode=DURABLE"):
+        receiver(OrderPlaced, mode=DeliveryMode.INLINE, site="task")

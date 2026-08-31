@@ -49,21 +49,22 @@ def test_it_claims_and_delivers(order: OrderPlaced, record: list[str]) -> None:
     assert not DeliveryRecord.objects.exclude(status=DeliveryStatus.SUCCEEDED).exists()
 
 
-def test_an_idle_pass_sleeps_rather_than_spinning() -> None:
-    """The sleep is an argument so the branch is reachable without elapsing real
-    seconds. Every branch in the loop turns on time; a suite that had to wait
-    for one would either be slow or never reach it."""
-    slept: list[float] = []
-    run_relay(worker_id="w1", passes=2, sleep=slept.append, **UNSAFE)
-    assert len(slept) == 2
+def test_an_idle_pass_waits_rather_than_spinning() -> None:
+    """The idle wait is an argument so the branch is reachable without elapsing
+    real seconds. ``wait`` rather than ``sleep``: on a backend that can notify,
+    the loop blocks on the notification instead of sleeping, so injecting the
+    sleep would control the loop on SQLite and not on Postgres."""
+    waited: list[float] = []
+    run_relay(worker_id="w1", passes=2, wait=lambda t: bool(waited.append(t)), **UNSAFE)
+    assert len(waited) == 2
 
 
-def test_a_pass_with_work_does_not_sleep(order: OrderPlaced, record: list[str]) -> None:
+def test_a_pass_with_work_does_not_wait(order: OrderPlaced, record: list[str]) -> None:
     with transaction.atomic():
         fire(order)
-    slept: list[float] = []
-    run_relay(worker_id="w1", passes=1, sleep=slept.append, **UNSAFE)
-    assert slept == []
+    waited: list[float] = []
+    run_relay(worker_id="w1", passes=1, wait=lambda t: bool(waited.append(t)), **UNSAFE)
+    assert waited == []
 
 
 def test_the_clock_is_an_argument(order: OrderPlaced, record: list[str]) -> None:
@@ -73,10 +74,10 @@ def test_the_clock_is_an_argument(order: OrderPlaced, record: list[str]) -> None
         fire(order)
     DeliveryRecord.objects.update(available_at=datetime.now(timezone.utc) + timedelta(hours=1))
 
-    assert run_relay(worker_id="w1", passes=1, sleep=lambda _: None, **UNSAFE) == {}
+    assert run_relay(worker_id="w1", passes=1, wait=lambda _: False, **UNSAFE) == {}
 
     later = lambda: datetime.now(timezone.utc) + timedelta(hours=2)  # noqa: E731
-    assert run_relay(worker_id="w1", passes=1, now=later, sleep=lambda _: None, **UNSAFE) == {
+    assert run_relay(worker_id="w1", passes=1, now=later, wait=lambda _: False, **UNSAFE) == {
         DeliveryStatus.SUCCEEDED: 2
     }
 
@@ -105,7 +106,7 @@ def test_a_lost_row_does_not_stop_the_pass(order: OrderPlaced, record: list[str]
         fire(order)
 
     with receiver_replaced("testapp.durable_receiver", steal_everything_else):
-        counts = run_relay(worker_id="w1", passes=1, sleep=lambda _: None, **UNSAFE)
+        counts = run_relay(worker_id="w1", passes=1, wait=lambda _: False, **UNSAFE)
 
     # Deterministic regardless of how many receivers are registered: the first
     # row delivered succeeds and takes every other row away from this worker, so
@@ -113,3 +114,20 @@ def test_a_lost_row_does_not_stop_the_pass(order: OrderPlaced, record: list[str]
     lost = DeliveryRecord.objects.filter(claimed_by="someone-else").count()
     assert lost >= 2, "nothing was lost mid-pass, so the loop was never resumed"
     assert counts == {DeliveryStatus.SUCCEEDED: 2}
+
+
+def test_a_failure_while_idling_does_not_kill_the_daemon() -> None:
+    """The relay spends nearly all its life waiting. The wait reaches past
+    Django's cursor to the driver, so a connection dropped there raises the
+    driver's own exception rather than a translated django.db.Error - which a
+    supervisor written to catch the latter would miss entirely."""
+    calls: list[float] = []
+
+    def explode(timeout: float) -> bool:
+        calls.append(timeout)
+        raise RuntimeError("the database went away mid-wait")
+
+    counts = run_relay(worker_id="w1", passes=2, wait=explode, **UNSAFE)
+
+    assert counts == {}
+    assert len(calls) == 2, "the relay stopped at the first failed wait"

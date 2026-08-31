@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-31
+
+### Added
+- `prune_events()` and `manage.py prune_events` - retention. An outbox without
+  a prune story becomes the largest table in the database, and it becomes it
+  quietly. Only settled events go: one with a delivery still pending, failed or
+  claimed is still owed, and deleting it would drop work nobody recorded as
+  lost. Deletes in batches, because a single statement over a year of rows holds
+  a lock for as long as it runs on the table the relay claims from.
+- `replay_events()` and `manage.py replay_events` - make events owed again. The
+  receiver set freezes at fire time so a deploy never hands a new receiver a
+  backlog; this is the other half of that, and it counts reopening a terminal
+  delivery separately from adding one for a receiver that did not exist.
+- `requeue_dead()` and `manage.py requeue_dead` - give dead-lettered deliveries
+  their attempt budget back, scoped to one receiver when the reason is that one
+  downstream was broken.
+- `LISTEN`/`NOTIFY` on Postgres. The relay waits on a notification instead of
+  sleeping, so an event fired a moment ago is delivered in milliseconds. The
+  poll stays as the floor: a notification sent while nobody is listening is
+  lost, so this removes latency and never carries the obligation.
+- The `task` execution site. `@receiver(..., site="task")` hands the delivery to
+  the configured `TASK_BACKEND` instead of running it in the relay; the task
+  acknowledges the row when it finishes. Django Tasks is the first adapter, and
+  it works through `django.tasks` on 6.0+ and the `django-tasks` backport below
+  that.
+- Settings: `RETENTION_DAYS` (90) and `TASK_BACKEND` (none).
+
+### Fixed
+- `replay_events()` and `requeue_dead()` could clear a live lease. Both read the
+  status in one statement and wrote in another with no predicate, so a delivery
+  claimed in between had its lease wiped while its worker was mid-receiver -
+  two workers on one delivery, which is the one thing the lease exists to
+  prevent. Both updates now carry a status predicate.
+- `prune_events()` could delete work a replay had just created, between its
+  select and its delete, cascading away rows the operator had been told were
+  reopened. Settledness is re-checked at the delete.
+- `requeue_dead(limit=0)` requeued everything. An operator asking for the
+  smallest possible blast radius got the largest one.
+- `requeue_dead()` built one statement over every dead row: past 32,766 it fails
+  on SQLite, and on Postgres it took every row lock at once. It chunks now, and
+  clears `last_error` so a requeued row that later succeeds does not still show
+  why it died.
+- The execution site was honoured only by the relay. `deliver_events --once`,
+  `drain_outbox()` and the eager path all ran a `site="task"` receiver in
+  process - `drain_outbox()` most sharply, since it promises to run the same
+  path as production.
+- `site="task"` with no `TASK_BACKEND` ran silently in the relay; it now refuses.
+  `site="task"` on an INLINE or ON_COMMIT receiver is refused at declaration,
+  because those have no delivery row to hand over.
+- The task backend is built only for a receiver that asked for one, so a
+  misconfigured `TASK_BACKEND` no longer breaks receivers that never wanted it.
+  It also accepts a mapping with `BACKEND` plus options, which a dotted path
+  alone made unreachable.
+- A database failure during the relay's idle wait no longer kills the daemon.
+  The wait reaches past Django's cursor to the driver, so the exception is not a
+  `django.db.Error` and a supervisor written to catch that would miss it.
+- `replay_events()` uses one transaction per event, so a unique-constraint
+  collision on one no longer discards the reopens for every other event in the
+  call, and tolerates a concurrent replay creating the same row.
+- `replay_events()` and `requeue_dead()` wake a waiting relay, as `fire()` does.
+
+### Notes
+- An enqueued delivery stays claimed under its lease and is counted as no
+  outcome, because nothing has happened to it yet. If the enqueue is lost the
+  lease lapses and the relay reclaims it - which is what makes handing work to a
+  lossy queue safe, and why the adapter protocol is a single method.
+
 ## [0.3.0] — 2026-08-31
 
 ### Added
@@ -165,7 +232,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Artui/django-domain-events/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Artui/django-domain-events/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Artui/django-domain-events/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Artui/django-domain-events/compare/v0.0.0...v0.1.0
