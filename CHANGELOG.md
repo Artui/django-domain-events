@@ -27,6 +27,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `deliver_events --once` and `drain_outbox()` now claim through the same leased
   path, so a one-shot pass and a running relay cannot hand the same row to two
   receivers.
+- Every acknowledgement is a compare-and-set against the claim the call started
+  with, and the lease is extended to cover the one delivery about to run. A
+  batch claim otherwise stamps a single expiry across every row it took while
+  the relay delivers them serially, so the lease ran out partway through the
+  batch and a second relay reclaimed rows the first was still inside.
+- `deliver_one()` takes a `worker_id` and returns `None` when the row is no
+  longer that worker's. Losing a claim is an ordinary outcome of a lease
+  expiring, not a fault.
+- `claim_batch()` locks as strongly as the backend allows: skipping where
+  supported, blocking `FOR UPDATE` where not, and unlocked only where there is
+  no row locking at all.
+- `run_relay()` survives an unexpected failure on one row rather than dying
+  mid-batch and stranding everything it had claimed.
 - The relay refuses to start where the backend cannot skip locks.
   `allow_unsafe_concurrency=True` lifts that for a deployment running exactly
   one relay.

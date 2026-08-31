@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import logging
 import time as time_module
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
@@ -11,6 +12,8 @@ from django_domain_events.claim_batch import claim_batch
 from django_domain_events.deliver import deliver_one
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_status import DeliveryStatus
+
+logger = logging.getLogger(__name__)
 
 
 def run_relay(
@@ -50,8 +53,24 @@ def run_relay(
     for _ in itertools.count() if passes is None else range(passes):
         ids = claim_batch(worker_id=worker_id, now=now(), lease=lease, limit=batch_size)
         for delivery_id in ids:
-            outcome = deliver_one(delivery_id)
-            counts[outcome] = counts.get(outcome, 0) + 1
+            outcome = _deliver_or_survive(delivery_id, worker_id)
+            if outcome is not None:
+                counts[outcome] = counts.get(outcome, 0) + 1
         if not ids:
             sleep(poll)
     return counts
+
+
+def _deliver_or_survive(delivery_id: int, worker_id: str) -> DeliveryStatus | None:
+    """Deliver one row, and keep the daemon alive if it fails unexpectedly.
+
+    ``deliver_one`` handles a receiver raising and a payload that will not
+    decode. Anything else - the event pruned out from under a claimed batch, the
+    database going away mid-pass - would otherwise kill the relay and strand
+    every row it had already claimed until their leases lapsed.
+    """
+    try:
+        return deliver_one(delivery_id, worker_id=worker_id)
+    except Exception:
+        logger.exception("relay %s could not deliver %s", worker_id, delivery_id)
+        return None

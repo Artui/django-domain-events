@@ -9,6 +9,7 @@ from django_domain_events.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.run_relay import run_relay
 from django_domain_events.types.delivery_status import DeliveryStatus
+from tests.conftest import receiver_replaced
 from tests.testapp.events import OrderPlaced
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -78,3 +79,37 @@ def test_the_clock_is_an_argument(order: OrderPlaced, record: list[str]) -> None
     assert run_relay(worker_id="w1", passes=1, now=later, sleep=lambda _: None, **UNSAFE) == {
         DeliveryStatus.SUCCEEDED: 2
     }
+
+
+def test_the_isolation_helper_swallows_what_deliver_one_does_not() -> None:
+    """deliver_one guards the receiver and the decode, not the row fetch. A row
+    that vanished between the claim and the delivery must not take the daemon
+    with it."""
+    from django_domain_events.run_relay import _deliver_or_survive
+
+    assert _deliver_or_survive(999_999, "w1") is None
+
+
+def test_a_lost_row_does_not_stop_the_pass(order: OrderPlaced, record: list[str]) -> None:
+    """The relay counts outcomes and skips rows it lost, which must not end the
+    batch: two events so a lost row lands mid-pass rather than at the end."""
+    from django_domain_events.models.delivery_record import DeliveryRecord
+
+    def steal_everything_else(evt: OrderPlaced) -> None:
+        DeliveryRecord.objects.exclude(receiver_key="testapp.durable_receiver").update(
+            claimed_by="someone-else", claimed_at=datetime.now(timezone.utc)
+        )
+
+    with transaction.atomic():
+        fire(order)
+        fire(order)
+
+    with receiver_replaced("testapp.durable_receiver", steal_everything_else):
+        counts = run_relay(worker_id="w1", passes=1, sleep=lambda _: None, **UNSAFE)
+
+    # Deterministic regardless of how many receivers are registered: the first
+    # row delivered succeeds and takes every other row away from this worker, so
+    # the rest are lost mid-pass rather than at its end.
+    lost = DeliveryRecord.objects.filter(claimed_by="someone-else").count()
+    assert lost >= 2, "nothing was lost mid-pass, so the loop was never resumed"
+    assert counts == {DeliveryStatus.SUCCEEDED: 2}

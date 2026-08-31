@@ -87,41 +87,41 @@ def test_only_ids_narrows_the_claim(order: OrderPlaced, record: list[str]) -> No
     assert claimed == everything[:1]
 
 
-def test_skip_locked_defaults_to_what_the_backend_supports(
+def test_it_locks_as_strongly_as_the_backend_allows() -> None:
+    """Skipping is preferred so workers do not queue behind each other, but a
+    blocking FOR UPDATE is still correct - it serialises the claim rather than
+    losing it. Only a backend with no row locking at all falls through, and that
+    is what the relay refuses to start on."""
+    from django_domain_events.claim_batch import _locked
+    from django_domain_events.models.delivery_record import DeliveryRecord
+
+    base = DeliveryRecord.objects.all()
+
+    # The decision the helper makes, not the SQL a particular backend compiles
+    # it to: SQLite drops the clause entirely, so reading the query string would
+    # make this assert the backend rather than the code.
+    def locking(**caps: bool) -> tuple[bool, bool]:
+        query = _locked(base, **caps).query
+        return query.select_for_update, query.select_for_update_skip_locked
+
+    assert locking(skip_locked=True, for_update=True) == (True, True)
+    assert locking(skip_locked=False, for_update=True) == (True, False)
+    assert locking(skip_locked=False, for_update=False) == (False, False)
+
+
+def test_a_scheduled_retry_can_be_claimed_when_backoff_is_ignored(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The clause is what makes two workers safe, so whether it is used has to
-    follow the backend rather than a hopeful default."""
-    from django.db import connection
-
+    """What the test helper needs: a failed delivery is scheduled a jittered
+    interval ahead, and a suite cannot wait it out."""
     with transaction.atomic():
         fire(order)
-    claimed = claim_batch(
-        worker_id="w1",
-        now=_now(),
-        lease=LEASE,
-        limit=10,
-        skip_locked=connection.features.has_select_for_update_skip_locked,
+    DeliveryRecord.objects.update(
+        status=DeliveryStatus.FAILED, available_at=_now() + timedelta(hours=1)
     )
-    assert len(claimed) == 2
 
-
-def test_forcing_it_where_it_is_unsupported_claims_anyway(
-    order: OrderPlaced, record: list[str]
-) -> None:
-    """SQLite reports has_select_for_update = False and Django drops the clause
-    rather than refusing, so forcing it claims rows while looking safe.
-
-    That is precisely why the relay guards on the feature flag instead of
-    trusting the query to complain. Pinned because it is the assumption the
-    guard rests on, and it is the kind that changes quietly in a release.
-    """
-    from django.db import connection
-
-    if connection.features.has_select_for_update_skip_locked:
-        pytest.skip("this backend supports skipped locks")
-    with transaction.atomic():
-        fire(order)
-
-    claimed = claim_batch(worker_id="w1", now=_now(), lease=LEASE, limit=10, skip_locked=True)
-    assert len(claimed) == 2
+    assert claim_batch(worker_id="w1", now=_now(), lease=LEASE, limit=10) == []
+    assert (
+        len(claim_batch(worker_id="w1", now=_now(), lease=LEASE, limit=10, ignore_backoff=True))
+        == 2
+    )

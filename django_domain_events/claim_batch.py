@@ -14,7 +14,7 @@ def claim_batch(
     lease: timedelta,
     limit: int,
     only_ids: list[int] | None = None,
-    skip_locked: bool | None = None,
+    ignore_backoff: bool = False,
 ) -> list[int]:
     """Take ownership of up to ``limit`` deliveries and return their ids.
 
@@ -27,25 +27,25 @@ def claim_batch(
     a row can become visible "in the past"; a high-water mark would skip it
     forever.
 
-    ``skip_locked`` defaults to whether the backend supports it. Forcing it on a
-    backend that does not raises ``NotSupportedError`` from Django rather than
-    silently claiming rows another worker holds.
+    ``ignore_backoff`` claims rows whose retry is still scheduled. It exists for
+    the test helper, which cannot wait out a jittered hour to observe a retry.
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
 
-    if skip_locked is None:
-        skip_locked = connection.features.has_select_for_update_skip_locked
-
-    owed = models.Q(
-        status__in=[DeliveryStatus.PENDING, DeliveryStatus.FAILED], available_at__lte=now
-    ) | models.Q(status=DeliveryStatus.CLAIMED, lease_expires_at__lt=now)
+    retryable = models.Q(status__in=[DeliveryStatus.PENDING, DeliveryStatus.FAILED])
+    if not ignore_backoff:
+        retryable &= models.Q(available_at__lte=now)
+    owed = retryable | models.Q(status=DeliveryStatus.CLAIMED, lease_expires_at__lt=now)
 
     with transaction.atomic():
         candidates = DeliveryRecord.objects.filter(owed).order_by("available_at", "pk")
         if only_ids is not None:
             candidates = candidates.filter(pk__in=only_ids)
-        if skip_locked:
-            candidates = candidates.select_for_update(skip_locked=True)
+        candidates = _locked(
+            candidates,
+            skip_locked=connection.features.has_select_for_update_skip_locked,
+            for_update=connection.features.has_select_for_update,
+        )
         ids = list(candidates.values_list("pk", flat=True)[:limit])
         if ids:
             DeliveryRecord.objects.filter(pk__in=ids).update(
@@ -55,3 +55,22 @@ def claim_batch(
                 lease_expires_at=now + lease,
             )
     return ids
+
+
+def _locked(queryset: models.QuerySet, *, skip_locked: bool, for_update: bool) -> models.QuerySet:
+    """Lock the candidate rows as strongly as the backend allows.
+
+    Skipping is preferred so workers do not queue behind each other, but a
+    blocking ``FOR UPDATE`` is still correct - it serialises the claim rather
+    than losing it. Only a backend with no row locking at all (SQLite) falls
+    through unprotected, and that is what ``run_relay`` refuses to start on.
+
+    The capabilities are arguments rather than reads of ``connection.features``
+    so every branch is reachable from any backend; otherwise each one could only
+    be covered by the database that has it.
+    """
+    if skip_locked:
+        return queryset.select_for_update(skip_locked=True)
+    if for_update:
+        return queryset.select_for_update()
+    return queryset

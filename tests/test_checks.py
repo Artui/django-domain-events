@@ -13,6 +13,7 @@ from django_domain_events.fire import fire
 from django_domain_events.registry import registry
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_receiver import RegisteredReceiver
+from tests.conftest import receiver_deleted
 from tests.testapp.events import OrderPlaced
 
 
@@ -74,11 +75,8 @@ def test_pending_rows_for_a_deleted_receiver_are_reported(
     with transaction.atomic():
         fire(order)
 
-    removed = registry._receivers.pop("testapp.durable_receiver")
-    try:
+    with receiver_deleted("testapp.durable_receiver"):
         problems = checks.check_no_orphaned_deliveries()
-    finally:
-        registry._receivers["testapp.durable_receiver"] = removed
 
     assert [p.id for p in problems] == ["django_domain_events.W001"]
     assert "testapp.durable_receiver" in problems[0].msg
