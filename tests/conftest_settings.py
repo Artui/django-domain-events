@@ -17,6 +17,7 @@ INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.auth",
     "django_domain_events",
+    "tests.testapp",
 ]
 
 USE_TZ = True
