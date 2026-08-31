@@ -10,6 +10,7 @@ from django_domain_events.registry import registry
 from django_domain_events.settings import get_codec, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
+from django_domain_events.write_alias import write_alias
 
 
 def fire(
@@ -35,7 +36,11 @@ def fire(
             f"and make sure the module declaring it is imported."
         )
 
-    if setting("WARN_OUTSIDE_ATOMIC") and not transaction.get_connection().in_atomic_block:
+    alias = write_alias()
+    if (
+        setting("WARN_OUTSIDE_ATOMIC")
+        and not transaction.get_connection(using=alias).in_atomic_block
+    ):
         warnings.warn(
             f"fire({entry.name}) ran outside a transaction. The event row is its "
             f"own transaction, so it can commit while the change that caused it "
@@ -74,7 +79,7 @@ def fire(
         )
         eager_ids = [row.pk for row, r in zip(rows, durable, strict=True) if r.eager]
         if eager_ids:
-            transaction.on_commit(_deliver_eagerly(eager_ids), robust=True)
+            transaction.on_commit(_deliver_eagerly(eager_ids), using=alias, robust=True)
 
     for r in receivers:
         if r.mode is DeliveryMode.INLINE:
@@ -83,7 +88,9 @@ def fire(
             # robust=True is not optional: without it an uncaught exception in one
             # on_commit callback cancels every later one in the same transaction,
             # silently deleting the other receivers' work.
-            transaction.on_commit(_bind(r.func, r.takes_context, event, context), robust=True)
+            transaction.on_commit(
+                _bind(r.func, r.takes_context, event, context), using=alias, robust=True
+            )
 
     return record.pk
 

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from django.db import connection, models, transaction
+from django.db import connections, models, transaction
 
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.write_alias import write_alias
 
 
 def claim_batch(
@@ -37,7 +38,9 @@ def claim_batch(
         retryable &= models.Q(available_at__lte=now)
     owed = retryable | models.Q(status=DeliveryStatus.CLAIMED, lease_expires_at__lt=now)
 
-    with transaction.atomic():
+    alias = write_alias()
+    connection = connections[alias]
+    with transaction.atomic(using=alias):
         candidates = DeliveryRecord.objects.filter(owed).order_by("available_at", "pk")
         if only_ids is not None:
             candidates = candidates.filter(pk__in=only_ids)

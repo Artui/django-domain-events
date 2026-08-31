@@ -142,6 +142,10 @@ configured and enforced. isort order is stdlib, third party, first party.
 | Django | 4.2 | 4.2, 5.0, 5.1, 5.2, 6.0, 6.1 |
 | Postgres | 12 | 17 (the relay half only) |
 
+`django.contrib.auth` must be installed: the event row's `actor` foreign key
+targets `AUTH_USER_MODEL` and the migration declares a swappable dependency on
+it, so a project without it cannot migrate at all.
+
 The Django floor is **4.2 for a reason**: `transaction.on_commit(robust=True)`.
 Without it, one best-effort receiver raising cancels every later callback
 registered in the same transaction, which silently deletes the other receivers'

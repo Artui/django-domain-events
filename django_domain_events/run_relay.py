@@ -6,12 +6,13 @@ import time as time_module
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
-from django.db import connection
+from django.db import connections
 
 from django_domain_events.claim_batch import claim_batch
 from django_domain_events.deliver import deliver_one
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.write_alias import write_alias
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ def run_relay(
     relay, which is a real shape in development; running two under it is the
     thing the guard exists to prevent.
     """
+    connection = connections[write_alias()]
     if not (allow_unsafe_concurrency or connection.features.has_select_for_update_skip_locked):
         raise RuntimeError(
             f"{connection.vendor} cannot do SELECT ... FOR UPDATE SKIP LOCKED, so "

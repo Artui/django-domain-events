@@ -42,11 +42,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no row locking at all.
 - `run_relay()` survives an unexpected failure on one row rather than dying
   mid-batch and stranding everything it had claimed.
+- `django.contrib.auth` is documented as required. The event row's `actor`
+  foreign key targets `AUTH_USER_MODEL` and the migration declares a swappable
+  dependency on it, so a project without it could not migrate - and nothing
+  said so.
+- `suppressed_reason` says it is reserved rather than describing behaviour that
+  does not exist yet.
 - The relay refuses to start where the backend cannot skip locks.
   `allow_unsafe_concurrency=True` lifts that for a deployment running exactly
   one relay.
 
 ### Fixed
+- **The claim query could never use its index**, so every relay pass scanned the
+  whole delivered history. The partial index was conditioned on
+  `status = pending` while the query reads `status IN (pending, failed)`, and a
+  predicate on one cannot serve the other. Measured on Postgres 16 with 500k
+  delivered rows and 1,000 owed: a parallel sequential scan discarding 166,667
+  rows per worker, now an index scan. There is a second partial index for the
+  lapsed-lease arm, and the redundant full index on `available_at` is gone.
+- **Stacking `@receiver` on one function silently discarded all but one
+  subscription.** The collision guard tolerated a repeat registration of the
+  same callable, to survive a double import - but that is exactly the shape of
+  a stacked decorator, so the second registration replaced the first and the
+  event fired to nothing. The guard now compares the whole registration, which
+  also catches a re-registration that changes `mode` or `max_attempts`.
+- **A plain `Enum` could not be encoded**, though the decoder advertised enums:
+  `DjangoJSONEncoder` has no `Enum` branch, so `fire()` raised a bare
+  `TypeError` from inside the caller's transaction. Only a `str`-mixin enum
+  survived, which is the kind the tests used.
+- **`datetime` and `time` were truncated to milliseconds**, so an event came
+  back from the log with different data and nothing failed - `assert_fired()`
+  least of all, which is the helper most likely to be pointed at exactly that.
+- **A value that cannot be written now names its field** and raises
+  `UnsupportedPayloadType` rather than a raw error from `json` naming only a
+  type.
+- **Every transaction and connection now follows the database router.**
+  `deliver_one()` opened `atomic()` on `default` and `fire()` asked `default`
+  whether a transaction was open, so an event log routed to its own database
+  lost the guarantee that a receiver's work and its acknowledgement commit
+  together, and `WARN_OUTSIDE_ATOMIC` warned the caller who had it right while
+  staying silent for the one who did not.
+- **`assert_fired()` no longer uses bare `assert`**, which `python -O` strips -
+  a published assertion helper that passes on any input under optimisation.
 - **0.1.0 could not be installed.** `manage.py migrate` failed on a fresh
   database with `no such table: django_domain_events_deliveryrecord`, creating
   no tables at all, on every supported Django version. The orphaned-delivery

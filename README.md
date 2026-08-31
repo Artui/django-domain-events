@@ -27,8 +27,11 @@ pip install django-domain-events
 Add it to `INSTALLED_APPS` and migrate:
 
 ```python
-INSTALLED_APPS = [..., "django_domain_events"]
+INSTALLED_APPS = [..., "django.contrib.auth", "django_domain_events"]
 ```
+
+`django.contrib.auth` is required: the event row carries a nullable foreign key
+to `AUTH_USER_MODEL` so attribution survives, and the migration depends on it.
 
 ```bash
 python manage.py migrate

@@ -13,6 +13,7 @@ from django_domain_events.registry import registry
 from django_domain_events.settings import get_codec, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.write_alias import write_alias
 
 
 def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryStatus | None:
@@ -84,7 +85,7 @@ def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliverySt
         scope=delivery.event.scope,
     )
     try:
-        with transaction.atomic():
+        with transaction.atomic(using=write_alias()):
             call_receiver(receiver.func, receiver.takes_context, event, context)
             outcome = fence.write(
                 status=DeliveryStatus.SUCCEEDED,
@@ -95,7 +96,7 @@ def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliverySt
                 # Lost the row mid-flight. Roll the receiver's work back with
                 # the acknowledgement it belongs to rather than leaving the two
                 # disagreeing, and let whoever holds the claim deliver it.
-                transaction.set_rollback(True)
+                transaction.set_rollback(True, using=write_alias())
             return outcome
     except Exception as exc:
         return _fail(fence, delivery, f"{type(exc).__name__}: {exc}", attempt=attempt)

@@ -33,8 +33,12 @@ class DeliveryRecord(models.Model):
     """Copied from the declaration at fire time, so lowering it later cannot
     retroactively dead-letter rows already in flight."""
 
-    available_at = models.DateTimeField(db_index=True)
+    available_at = models.DateTimeField()
     """The backoff schedule, and what the claim query orders by.
+
+    No plain index: the partial ones below serve the only query that reads this
+    column, and a second full index on it would be written on every insert and
+    read never.
 
     Never the primary key: a transaction holding a lower id can commit after one
     holding a higher id, so a row becomes visible "in the past" and a high-water
@@ -57,12 +61,22 @@ class DeliveryRecord(models.Model):
                 name="unique_delivery_per_event_and_receiver",
             )
         ]
+        # One index per arm of the claim query. The predicates have to match the
+        # arms exactly: an index conditioned on `status = pending` cannot serve a
+        # query on `status IN (pending, failed)`, so the planner falls back to a
+        # full scan of the whole delivered history - which grows without bound,
+        # because that is what an event log does.
         indexes = [
             models.Index(
                 fields=["available_at"],
-                condition=models.Q(status=DeliveryStatus.PENDING),
-                name="dde_pending_by_available_at",
-            )
+                condition=models.Q(status__in=[DeliveryStatus.PENDING, DeliveryStatus.FAILED]),
+                name="dde_owed_by_available_at",
+            ),
+            models.Index(
+                fields=["lease_expires_at"],
+                condition=models.Q(status=DeliveryStatus.CLAIMED),
+                name="dde_claimed_by_lease",
+            ),
         ]
         verbose_name = "delivery record"
         verbose_name_plural = "delivery records"

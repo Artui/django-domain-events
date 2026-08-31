@@ -10,15 +10,14 @@ from enum import Enum
 from typing import Any, TypeVar
 from uuid import UUID
 
-from django.core.serializers.json import DjangoJSONEncoder
-
+from django_domain_events.codecs.payload_encoder import PayloadEncoder
 from django_domain_events.codecs.unsupported_payload_type import UnsupportedPayloadType
 from django_domain_events.utils import parse_datetime
 
 E = TypeVar("E")
 
-# The set DjangoJSONEncoder already writes, so both halves of the round trip are
-# defined by the same table.
+# The set PayloadEncoder writes, so both halves of the round trip are defined by
+# the same table.
 _SCALARS: tuple[type, ...] = (str, int, float, bool, Decimal, UUID, datetime, date, time)
 
 # Scalars that arrive as strings. str/int/float/bool survive JSON as themselves.
@@ -35,9 +34,11 @@ class DataclassCodec:
     """Flat payloads of documented scalars. Everything else refuses by name."""
 
     def encode(self, event: object) -> dict[str, Any]:
-        return json.loads(
-            json.dumps(dataclasses.asdict(typing.cast(Any, event)), cls=DjangoJSONEncoder)
-        )
+        fields = dataclasses.asdict(typing.cast(Any, event))
+        try:
+            return json.loads(json.dumps(fields, cls=PayloadEncoder))
+        except (TypeError, ValueError) as exc:
+            raise _unencodable(event, fields, exc) from exc
 
     def decode(self, event_class: type[E], payload: dict[str, Any], version: int) -> E:
         try:
@@ -106,3 +107,21 @@ def _refuse(
         f"'dacite' extra and set CODEC to "
         f"'django_domain_events.codecs.dacite_codec.DaciteCodec'."
     )
+
+
+def _unencodable(event: object, fields: dict[str, Any], exc: Exception) -> UnsupportedPayloadType:
+    """Name the field that could not be written.
+
+    The raw error from ``json`` names a type and no field, and it surfaces
+    inside the caller's transaction - so it takes the business change down with
+    it and says only that some object was not serializable.
+    """
+    for name, value in fields.items():
+        try:
+            json.dumps({name: value}, cls=PayloadEncoder)
+        except (TypeError, ValueError):
+            return UnsupportedPayloadType(
+                f"{type(event).__name__}.{name} cannot be written to a payload: "
+                f"{type(exc).__name__}: {exc}"
+            )
+    return UnsupportedPayloadType(f"{type(event).__name__}: {type(exc).__name__}: {exc}")
