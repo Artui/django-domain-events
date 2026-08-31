@@ -44,11 +44,11 @@ class EventRecord(models.Model):
     causation_id = models.BigIntegerField(null=True, blank=True, db_index=True)
 
     suppressed_reason = models.CharField(max_length=255, blank=True)
-    """Reserved for the suppression scope, which does not exist yet.
+    """Set means recorded deliberately, and deliberately not delivered.
 
-    Nothing writes or reads it at this version. The column is here because the
-    schema lands whole rather than growing with the milestones, and saying so is
-    better than a docstring describing behaviour a reader cannot find.
+    Written by ``fire()`` when a ``suppressed()`` block covers the event. A
+    suppressed row has no delivery rows: recording it with its reason is the
+    point, because a silently dropped event is unauditable.
     """
 
     class Meta:

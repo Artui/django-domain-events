@@ -7,6 +7,7 @@ from typing import Any
 from django.db import transaction
 
 from django_domain_events.backoff import backoff
+from django_domain_events.causation import caused_by
 from django_domain_events.claim_batch import claim_batch
 from django_domain_events.fire import call_receiver
 from django_domain_events.registry import registry
@@ -85,7 +86,10 @@ def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliverySt
         scope=delivery.event.scope,
     )
     try:
-        with transaction.atomic(using=write_alias()):
+        with (
+            transaction.atomic(using=write_alias()),
+            caused_by(delivery.event.pk, delivery.event.correlation_id),
+        ):
             call_receiver(receiver.func, receiver.takes_context, event, context)
             outcome = fence.write(
                 status=DeliveryStatus.SUCCEEDED,

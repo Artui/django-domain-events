@@ -13,5 +13,18 @@ who caused what, and an event log you can query.
 Requires `django.contrib.auth` in `INSTALLED_APPS`: the event row carries a
 nullable foreign key to `AUTH_USER_MODEL`.
 
+## Attribution
+
+```python
+with attributed(actor=request.user, source="checkout"):
+    with transaction.atomic():
+        fire(OrderPlaced(...))
+```
+
+Every event fired inside the block records who caused it, in what scope, and
+which chain it belongs to. `suppressed(EventClass, reason=...)` records without
+delivering. `propagate_scope(fn)` carries the scope into a thread you start
+yourself, which otherwise begins with an empty context.
+
 See the [README](https://github.com/Artui/django-domain-events#readme) for the
 quickstart and the delivery modes. The API is not yet stable.
