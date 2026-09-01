@@ -187,3 +187,31 @@ def test_literal_annotations_survive_the_registry_round_trip() -> None:
 
     with event_registered(Choice, "tests.choice"):
         assert _by_name("tests.choice").fields[0].type == "typing.Literal['a', 'b']"
+
+
+def test_a_declared_lease_reaches_the_catalogue() -> None:
+    """The catalogue's whole claim is that it is generated from the
+    declarations and cannot drift from them. A knob it does not publish is a
+    knob it has drifted on."""
+    receivers = {r.key: r for r in _by_name("testapp.SlowWork").receivers}
+    assert receivers["testapp.slow_receiver"].lease_seconds == 1800
+    assert _by_name("testapp.OrderPlaced").receivers[0].lease_seconds is None, (
+        "no override means the setting"
+    )
+
+
+def test_an_upgrade_hook_is_published() -> None:
+    """It is the difference between an event whose old rows still decode and
+    one whose old rows dead-letter after the next breaking change."""
+    assert _by_name("testapp.OrderPlaced").migrates_older_rows is False
+
+    @dataclass(frozen=True)
+    class Migrating:
+        value: int
+
+        @staticmethod
+        def upgrade(payload, from_version):
+            return payload
+
+    with event_registered(Migrating, "tests.migrating"):
+        assert _by_name("tests.migrating").migrates_older_rows is True

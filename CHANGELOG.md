@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `lease_seconds=` on a receiver, overriding `LEASE_SECONDS` for one that runs
+  long. A receiver cannot extend its own lease and no API offers to: it runs
+  inside the transaction carrying its acknowledgement, so a lease extension it
+  writes is invisible to every other worker until it has already finished.
+  Measured on Postgres - while the receiver had pushed its lease an hour out,
+  another connection still read the original expiry.
+- `upgrade(payload, from_version)` on an event class, the escape from the two
+  payload changes the schema rule calls breaking. It must be a `staticmethod` or
+  `classmethod`, checked at the decorator, because an ordinary method reached
+  through the class is unbound and the payload would silently arrive as `self`.
+  It runs only when the row is older than the declaration, and on every decode
+  path, so `assert_fired` cannot read a payload the relay would reject.
+- `PayloadUpgradeFailed`, so a failing hook is named in `last_error` rather than
+  something unspecified going wrong between the row and the receiver.
+- `outbox_health()` and `manage.py events_status`. `quiet_receivers()` answers
+  whether a receiver is running; nothing answered whether the queue is draining,
+  and those fail differently. The age of `oldest_owed_at` is the single number
+  worth alerting on: it rises when the relay is down, when a receiver is
+  failing, and when the queue is longer than the workers can drain. Dead letters
+  are counted but deliberately not owed, or a backlog alert fires forever after
+  one bad deploy.
+- The relay logs at `WARNING` when a worker loses a delivery, naming the
+  receiver whose `lease_seconds=` to raise.
+- `examples/shop`, a runnable project using every part of the package for
+  something an application would actually want, with a `demo` command that
+  prints what the log recorded at each step. A CI job runs it, because an
+  example nothing executes drifts from the API it teaches and the drift is
+  silent.
+
+### Changed
+- The catalogue publishes `lease_seconds` and whether an event declares
+  `upgrade()`. Found by generating it for a real app: it had drifted from the
+  declarations, which is the one thing it claims cannot happen.
+- The Markdown catalogue blanks `site`, `max_attempts`, `eager` and the lease
+  for non-`DURABLE` receivers. They are defaults nobody chose, and `5` beside an
+  `INLINE` receiver reads as a retry budget it will never have.
+- `max_attempts=`, `eager=` and `lease_seconds=` are refused on a non-`DURABLE`
+  receiver, the way `site="task"` already was. They describe a delivery row that
+  mode never creates, so the declaration stated something nothing would honour.
+
 ## [0.5.1] — 2026-09-01
 
 ### Fixed

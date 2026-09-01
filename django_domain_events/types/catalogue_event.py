@@ -14,5 +14,10 @@ class CatalogueEvent:
     version: int
     class_path: str
     doc: str
+    migrates_older_rows: bool
+    """Whether the class declares ``upgrade``. Worth publishing: it is the
+    difference between an event whose old rows still decode and one whose old
+    rows dead-letter after the next breaking change."""
+
     fields: tuple[CatalogueField, ...]
     receivers: tuple[CatalogueReceiver, ...]

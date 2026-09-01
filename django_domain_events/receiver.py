@@ -91,6 +91,23 @@ def receiver(
             f"site='task' needs mode=DURABLE; {mode.name} receivers run in the "
             f"firing process and have no delivery row to hand over."
         )
+    if mode is not DeliveryMode.DURABLE:
+        # Same reasoning as site=, applied to the rest of the row-shaped knobs.
+        # Accepting them would let a declaration state a retry budget, an eager
+        # attempt or a lease for a receiver that has no row to carry any of
+        # them, and nothing downstream would ever say so - the catalogue would
+        # publish the numbers and the relay would ignore them.
+        for name, value, default in (
+            ("max_attempts", max_attempts, 5),
+            ("eager", eager, False),
+            ("lease_seconds", lease_seconds, None),
+        ):
+            if value != default:
+                raise ValueError(
+                    f"{name}={value!r} needs mode=DURABLE; a {mode.name} receiver "
+                    f"has no delivery row, so it is never retried, never attempted "
+                    f"a second time and never leased."
+                )
 
     def decorate(func: Callable[..., None]) -> Callable[..., None]:
         registry.register_receiver(

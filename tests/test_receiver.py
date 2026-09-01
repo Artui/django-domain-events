@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from django_domain_events.receiver import receiver
 from django_domain_events.registry import registry
 from django_domain_events.types.delivery_mode import DeliveryMode
 from tests.testapp.events import OrderPlaced
@@ -82,3 +83,22 @@ def test_a_task_site_needs_a_durable_mode() -> None:
 
     with pytest.raises(ValueError, match="needs mode=DURABLE"):
         receiver(OrderPlaced, mode=DeliveryMode.INLINE, site="task")
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "needle"),
+    [
+        ({"max_attempts": 8}, "max_attempts=8 needs mode=DURABLE"),
+        ({"eager": True}, "eager=True needs mode=DURABLE"),
+        ({"lease_seconds": 60}, "lease_seconds=60 needs mode=DURABLE"),
+    ],
+)
+def test_row_shaped_knobs_are_refused_without_a_row(kwargs, needle) -> None:
+    """Same reasoning as site=. Accepting them would let a declaration state a
+    retry budget for a receiver that has no row to carry it, and nothing
+    downstream would say so: the catalogue would publish the number and the
+    relay would ignore it."""
+    with pytest.raises(ValueError, match=needle):
+
+        @receiver(OrderPlaced, mode=DeliveryMode.INLINE, key="tests.bad_knob", **kwargs)
+        def handler(evt: OrderPlaced) -> None: ...

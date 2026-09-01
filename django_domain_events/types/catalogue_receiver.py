@@ -14,3 +14,4 @@ class CatalogueReceiver:
     max_attempts: int
     eager: bool
     takes_context: bool
+    lease_seconds: int | None

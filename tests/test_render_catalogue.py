@@ -97,3 +97,42 @@ def test_every_table_row_has_the_width_of_its_header() -> None:
         if width is None:
             width = len(_cells(line))
         assert len(_cells(line)) == width, line
+
+
+def test_the_declared_lease_is_rendered() -> None:
+    document = render_catalogue(catalogue())
+    row = next(line for line in document.splitlines() if "testapp.slow_receiver" in line)
+    assert _cells(row)[-1] == "1800s"
+
+
+def test_knobs_that_do_not_apply_to_the_mode_are_blanked() -> None:
+    """The declaration carries defaults nobody chose, and `5` beside an INLINE
+    receiver reads as a retry budget it will never have."""
+    document = render_catalogue(catalogue())
+    row = next(line for line in document.splitlines() if "`testapp.inline_receiver`" in line)
+    assert _cells(row) == ["`testapp.inline_receiver`", "inline", "-", "-", "-", "-"]
+
+
+def test_a_durable_receiver_still_shows_its_knobs() -> None:
+    document = render_catalogue(catalogue())
+    row = next(line for line in document.splitlines() if "`testapp.durable_receiver`" in line)
+    assert _cells(row) == ["`testapp.durable_receiver`", "durable", "relay", "5", "no", "default"]
+
+
+def test_the_upgrade_hook_is_called_out_in_prose() -> None:
+    from dataclasses import dataclass
+
+    from tests.conftest import event_registered
+
+    @dataclass(frozen=True)
+    class Noted:
+        value: int
+
+        @staticmethod
+        def upgrade(payload, from_version):
+            return payload
+
+    with event_registered(Noted, "tests.noted"):
+        document = render_catalogue(catalogue())
+    section = document.split("## `tests.noted`")[1].split("## ")[0]
+    assert "Declares `upgrade()`" in section
