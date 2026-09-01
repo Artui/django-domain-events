@@ -392,6 +392,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Payload evolution">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#upgrade-the-escape-from-the-two-breaking-cases" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        upgrade() - the escape from the two breaking cases
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -643,6 +660,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Payload evolution">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#upgrade-the-escape-from-the-two-breaking-cases" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        upgrade() - the escape from the two breaking cases
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -746,6 +780,11 @@ orphaned.</p>
 <td>Where the code runs. <code>"task"</code> hands it to a task backend.</td>
 </tr>
 <tr>
+<td><code>lease_seconds</code></td>
+<td><code>None</code></td>
+<td>Override <code>LEASE_SECONDS</code> for a receiver that runs long.</td>
+</tr>
+<tr>
 <td><code>takes_context</code></td>
 <td><code>False</code></td>
 <td>Receive a second <code>DeliveryContext</code> argument.</td>
@@ -759,6 +798,15 @@ writing the other fails at the decorator rather than in the relay hours later.</
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">audit</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DeliveryContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="n">log</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"attempt </span><span class="si">%s</span><span class="s2"> of </span><span class="si">%s</span><span class="s2">"</span><span class="p">,</span> <span class="n">ctx</span><span class="o">.</span><span class="n">attempt</span><span class="p">,</span> <span class="n">ctx</span><span class="o">.</span><span class="n">event_name</span><span class="p">)</span>
 </span></code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">A long receiver needs <code>lease_seconds</code>, not a heartbeat</p>
+<p>A receiver still working when its lease lapses has its row taken by another
+worker and its own work rolled back - correct, and entirely wasted. It
+cannot extend the lease itself: it runs inside the transaction carrying its
+acknowledgement, so nothing it writes is visible until it has finished.
+Declare the lease it needs and the relay publishes it before the receiver
+starts.</p>
+</div>
 <div class="admonition note">
 <p class="admonition-title"><code>max_attempts</code> is frozen at fire time</p>
 <p>It is copied onto the delivery row when the event is fired, so lowering it
@@ -811,6 +859,32 @@ sentence good enough to be the dead-letter reason. That message lands in
 <code>last_error</code> verbatim, so an operator reading it knows which migration did it.</p>
 <p>A decode failure is a <strong>terminal state for that delivery</strong>, never a crashed relay
 loop: one undecodable row must not stop the other four thousand.</p>
+<h3 id="upgrade-the-escape-from-the-two-breaking-cases"><code>upgrade()</code> - the escape from the two breaking cases<a class="headerlink" href="#upgrade-the-escape-from-the-two-breaking-cases" title="Permanent link">&para;</a></h3>
+<p>Declare it on the event class and an older row is migrated before it is decoded:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nd">@event</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">"orders.OrderPlaced"</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">slots</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">OrderPlaced</span><span class="p">:</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    <span class="n">order_id</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    <span class="n">currency</span><span class="p">:</span> <span class="nb">str</span>  <span class="c1"># added in v2, with no default</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>    <span class="nd">@staticmethod</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">upgrade</span><span class="p">(</span><span class="n">payload</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">from_version</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>        <span class="k">return</span> <span class="p">{</span><span class="o">**</span><span class="n">payload</span><span class="p">,</span> <span class="s2">"currency"</span><span class="p">:</span> <span class="s2">"EUR"</span><span class="p">}</span>
+</span></code></pre></div>
+<ul>
+<li>It must be a <strong><code>staticmethod</code> or <code>classmethod</code></strong>, checked at the decorator. An
+  ordinary method reached through the class is unbound, so the payload would
+  arrive as <code>self</code> - and it would arrive there in the relay, hours later.</li>
+<li>It runs <strong>only when the row is older</strong> than the declaration. A row from the
+  future is a rollback, and no forward migration helps: the code that would know
+  how to read it is the code that was just removed.</li>
+<li>It is handed <code>from_version</code>, so one hook can cover several hops.</li>
+<li>It runs on <strong>every</strong> decode path - the relay and <code>assert_fired</code> share one - so
+  a test cannot read a payload the relay would reject.</li>
+<li>If it raises, the delivery dead-letters with <code>PayloadUpgradeFailed</code> naming the
+  class in <code>last_error</code>, rather than something unspecified going wrong between
+  the row and the receiver.</li>
+</ul>
 <h2 id="codecs">Codecs<a class="headerlink" href="#codecs" title="Permanent link">&para;</a></h2>
 <p>The codec is a seam, named in settings rather than sniffed from what is
 installed - a codec that picks itself decodes on one machine and raises on
@@ -821,9 +895,9 @@ another.</p>
 <li><code>django_domain_events.codecs.dacite_codec.DaciteCodec</code> - adds <strong>nested</strong>
   dataclasses on the decode side. Needs the <code>dacite</code> extra.</li>
 </ul>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="s2">"CODEC"</span><span class="p">:</span> <span class="s2">"django_domain_events.codecs.dacite_codec.DaciteCodec"</span><span class="p">,</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="p">}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="s2">"CODEC"</span><span class="p">:</span> <span class="s2">"django_domain_events.codecs.dacite_codec.DaciteCodec"</span><span class="p">,</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>A <a href="../introspection/#system-checks">system check</a> verifies the configured codec
 imports at startup, rather than letting a missing extra first surface as a failed

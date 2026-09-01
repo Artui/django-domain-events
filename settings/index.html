@@ -796,7 +796,19 @@ long and a crashed worker's rows sit undelivered until the lease lapses.</p>
 <code>(claimed_by, claimed_at)</code>, so a worker whose lease lapsed and was stolen cannot
 overwrite the new owner's result. A short lease costs duplicate work, never a
 lost or double-recorded acknowledgement.</p>
-<p><code>extend_lease()</code> covers the receiver that genuinely runs long.</p>
+<div class="admonition warning">
+<p class="admonition-title">A receiver cannot extend its own lease, and no API offers to</p>
+<p>It runs <em>inside</em> the transaction that carries its acknowledgement, so
+anything it writes - a lease extension included - is invisible to every
+other worker until it has already finished. Measured on Postgres: while the
+receiver had pushed its lease an hour out, another connection still read
+the original expiry.</p>
+<p>The answer is to declare the lease where it can still be published:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">RebuildIndex</span><span class="p">,</span> <span class="n">lease_seconds</span><span class="o">=</span><span class="mi">1800</span><span class="p">)</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">rebuild</span><span class="p">(</span><span class="n">evt</span><span class="p">):</span> <span class="o">...</span>
+</span></code></pre></div>
+<p><code>outbox_health().lapsed_leases</code> tells you when you have got it wrong.</p>
+</div>
 <h3 id="batch_size"><code>BATCH_SIZE</code><a class="headerlink" href="#batch_size" title="Permanent link">&para;</a></h3>
 <p>Three jobs, deliberately one number: it is "how many rows this package touches in
 one statement", and the reasons to raise or lower it point the same way for all
@@ -808,20 +820,20 @@ bad deploy.</p>
 <p>A mapping rather than only a dotted path, because a backend with any constructor
 options at all would otherwise be unreachable through the documented setting and
 only a subclass could use it.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="p">{</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="s2">"BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.django_tasks_backend.DjangoTasksBackend"</span><span class="p">,</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="s2">"queue_name"</span><span class="p">:</span> <span class="s2">"events"</span><span class="p">,</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="p">}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="p">{</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="s2">"BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.django_tasks_backend.DjangoTasksBackend"</span><span class="p">,</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="s2">"queue_name"</span><span class="p">:</span> <span class="s2">"events"</span><span class="p">,</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="p">}</span>
 </span></code></pre></div>
 <h2 id="routing-to-another-database">Routing to another database<a class="headerlink" href="#routing-to-another-database" title="Permanent link">&para;</a></h2>
 <p>Everything that opens a transaction asks the router for the alias, rather than
 hardcoding <code>default</code>. Give the event log its own database and the guarantee still
 holds:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">EventRouter</span><span class="p">:</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">db_for_write</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="o">**</span><span class="n">hints</span><span class="p">):</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>        <span class="k">if</span> <span class="n">model</span><span class="o">.</span><span class="n">_meta</span><span class="o">.</span><span class="n">app_label</span> <span class="o">==</span> <span class="s2">"django_domain_events"</span><span class="p">:</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>            <span class="k">return</span> <span class="s2">"events"</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>        <span class="k">return</span> <span class="kc">None</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">EventRouter</span><span class="p">:</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">db_for_write</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="o">**</span><span class="n">hints</span><span class="p">):</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>        <span class="k">if</span> <span class="n">model</span><span class="o">.</span><span class="n">_meta</span><span class="o">.</span><span class="n">app_label</span> <span class="o">==</span> <span class="s2">"django_domain_events"</span><span class="p">:</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>            <span class="k">return</span> <span class="s2">"events"</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>        <span class="k">return</span> <span class="kc">None</span>
 </span></code></pre></div>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>

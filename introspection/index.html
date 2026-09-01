@@ -492,6 +492,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#is-the-outbox-keeping-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Is the outbox keeping up?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#system-checks" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -635,6 +646,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#is-the-outbox-keeping-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Is the outbox keeping up?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#system-checks" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -754,6 +776,75 @@ never cleared - unlike <code>completed_at</code>, which replay and requeue clear
 reopened row has not settled again. Reading the cleared column would tell an
 operator who had just replayed yesterday's events that the receiver they were
 re-running had never run at all.</p>
+<h2 id="is-the-outbox-keeping-up">Is the outbox keeping up?<a class="headerlink" href="#is-the-outbox-keeping-up" title="Permanent link">&para;</a></h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>events_status
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>events_status<span class="w"> </span>--format<span class="w"> </span>json
+</span></code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">outbox_health</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">health</span> <span class="o">=</span> <span class="n">outbox_health</span><span class="p">()</span>
+</span></code></pre></div>
+<p><code>quiet_receivers()</code> answers whether a <em>receiver</em> is running; this answers
+whether the <em>queue</em> is draining. They fail differently, and both failures are
+real: a relay that has been down an hour has every receiver quiet and a backlog
+climbing, while one wedged receiver has a backlog and everything else fine.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>owed</code></td>
+<td>Deliveries not yet settled - pending, failed or claimed</td>
+</tr>
+<tr>
+<td><code>claimed</code></td>
+<td>Currently leased by a worker</td>
+</tr>
+<tr>
+<td><code>dead</code></td>
+<td>Dead-lettered. <strong>Not</strong> counted as owed</td>
+</tr>
+<tr>
+<td><code>oldest_owed_at</code></td>
+<td>When the oldest still-owed delivery's event was <strong>recorded</strong>; <code>None</code> when nothing is owed</td>
+</tr>
+<tr>
+<td><code>lapsed_leases</code></td>
+<td>Claimed rows whose lease has expired</td>
+</tr>
+<tr>
+<td><code>receivers</code></td>
+<td>Per-receiver backlog, worst first, omitting the ones with nothing owed or dead. Each carries its own <code>oldest_owed_at</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>The age of <code>oldest_owed_at</code> is the number to alert on</strong>, and it is measured
+from when the work <em>arrived</em>, not from when it next becomes due. That
+distinction is the whole point: the backoff pushes a failed delivery's
+<code>available_at</code> into the future on every attempt, so an alert written against
+that column reads a <strong>negative</strong> age exactly while a receiver is failing.</p>
+<p>It rises monotonically for as long as work sits undone - a relay that is down,
+a receiver that is failing its way through its retries, or a queue simply longer
+than the workers can drain.</p>
+<div class="admonition warning">
+<p class="admonition-title">It does not cover a receiver failing all the way to dead</p>
+<p>A dead-lettered row leaves the owed set, so the backlog age drops back to
+<code>None</code> while nothing at all is being delivered. A dead letter is
+deliberately not owed - the relay will never pick it up again on its own,
+and counting it would leave a backlog alert firing forever after one bad
+deploy. <strong>Alert on <code>dead</code> as well.</strong> One number does not cover both.</p>
+</div>
+<p>Steady non-zero <code>lapsed_leases</code> means workers are dying mid-delivery, or a
+receiver outruns its lease and has its work thrown away every time - see
+<a href="../declaring/#receivers"><code>lease_seconds</code></a>.</p>
+<p><code>owed</code> means "not terminal", which is what the prune settles by and a superset
+of what the relay can claim at any given moment: a row inside its backoff window
+is owed and not yet claimable. The superset is the useful side - this cannot
+report an empty queue while work is still outstanding.</p>
 <h2 id="system-checks">System checks<a class="headerlink" href="#system-checks" title="Permanent link">&para;</a></h2>
 <p>Run with <code>python manage.py check</code>.</p>
 <table>

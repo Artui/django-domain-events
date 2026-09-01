@@ -504,6 +504,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#knowing-it-is-working" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Knowing it is working
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#a-cron-that-works" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -702,6 +713,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#knowing-it-is-working" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Knowing it is working
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#a-cron-that-works" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -830,9 +852,17 @@ anywhere. A missing <code>TASK_BACKEND</code> is refused <strong>at delivery</st
 the receivers that asked for one, so configuring no backend cannot break
 receivers that never wanted it. Neither case silently runs in the relay.</p>
 </div>
+<h2 id="knowing-it-is-working">Knowing it is working<a class="headerlink" href="#knowing-it-is-working" title="Permanent link">&para;</a></h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>events_status
+</span></code></pre></div>
+<p>See <a href="../introspection/#is-the-outbox-keeping-up">introspection</a>. The age of
+<code>oldest_owed_at</code> is the number to alert on.</p>
+<p>The relay logs at <code>WARNING</code> when a worker loses a delivery - either before
+running it, or after finishing work whose lease had already lapsed. The second
+names the receiver and suggests <code>lease_seconds=</code>, because that is the fix.</p>
 <h2 id="a-cron-that-works">A cron that works<a class="headerlink" href="#a-cron-that-works" title="Permanent link">&para;</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>*/5 * * * *  manage.py deliver_events --once
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>0    4 * * *  manage.py prune_events
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>*/5 * * * *  manage.py deliver_events --once
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>0    4 * * *  manage.py prune_events
 </span></code></pre></div>
 <p>With a long-running relay instead, only the prune needs a schedule.</p>
 
