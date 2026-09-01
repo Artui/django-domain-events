@@ -13,9 +13,10 @@ from django_domain_events.drain_outbox import drain_outbox
 from django_domain_events.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.settings import setting
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.conftest import receiver_deleted, receiver_replaced
-from tests.testapp.events import OrderPlaced
+from tests.testapp.events import OrderPlaced, SlowWork
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -444,3 +445,66 @@ def test_a_worker_whose_lease_already_lapsed_delivers_nothing(
 
     assert deliver_one(delivery_id, worker_id="A") is None
     assert record == []
+
+
+@pytest.mark.django_db
+def test_a_receiver_can_declare_a_longer_lease(order: OrderPlaced, record: list[str]) -> None:
+    """The answer for a receiver that legitimately runs long, and the only one
+    available: it cannot extend its own lease, because it runs inside the
+    transaction that carries its acknowledgement and nothing it writes is
+    visible to another worker until it has already finished."""
+    with transaction.atomic():
+        fire(SlowWork(value=1))
+    row = DeliveryRecord.objects.filter(receiver_key="testapp.slow_receiver").get()
+    now = datetime.now(timezone.utc)
+    claim_batch(worker_id="w1", now=now, lease=timedelta(seconds=1), limit=10)
+
+    deliver_one(row.pk, worker_id="w1")
+
+    ran = DeliveryRecord.objects.get(pk=row.pk)
+    assert ran.status == DeliveryStatus.SUCCEEDED
+    assert ran.lease_expires_at is not None
+    # Well past the setting, not merely past it: deliver_one reads its own
+    # clock a moment after this one, so `> now + LEASE_SECONDS` is true by
+    # microseconds even when the override is ignored entirely.
+    assert ran.lease_expires_at > now + timedelta(seconds=setting("LEASE_SECONDS") * 3)
+
+
+@pytest.mark.django_db
+def test_a_receiver_without_one_gets_the_setting(order: OrderPlaced, record: list[str]) -> None:
+    with transaction.atomic():
+        fire(order)
+    row = DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").get()
+    now = datetime.now(timezone.utc)
+    claim_batch(worker_id="w1", now=now, lease=timedelta(seconds=1), limit=10)
+
+    captured = []
+    original = DeliveryRecord.objects.get(pk=row.pk)
+
+    def watch(evt):
+        captured.append(DeliveryRecord.objects.get(pk=row.pk).lease_expires_at)
+
+    with receiver_replaced("testapp.durable_receiver", watch):
+        deliver_one(row.pk, worker_id="w1")
+
+    assert original.lease_expires_at is not None
+    assert captured[0] is not None
+    assert captured[0] <= now + timedelta(seconds=setting("LEASE_SECONDS") + 5)
+
+
+@pytest.mark.django_db
+def test_an_orphaned_row_still_extends_before_it_is_written(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The receiver is resolved before the lease so it can size it, and a
+    missing receiver must not skip re-establishing ownership: the ORPHANED
+    write is still a write."""
+    with transaction.atomic():
+        fire(order)
+    row = DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").get()
+    claim_batch(
+        worker_id="w1", now=datetime.now(timezone.utc), lease=timedelta(seconds=60), limit=10
+    )
+
+    with receiver_deleted("testapp.durable_receiver"):
+        assert deliver_one(row.pk, worker_id="w1") == DeliveryStatus.ORPHANED

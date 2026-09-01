@@ -5,7 +5,11 @@ from typing import TypeVar, overload
 
 from django_domain_events.registry import registry
 from django_domain_events.types.registered_event import RegisteredEvent
-from django_domain_events.utils import label_for, require_frozen_dataclass
+from django_domain_events.utils import (
+    label_for,
+    require_frozen_dataclass,
+    require_valid_upgrade,
+)
 
 E = TypeVar("E", bound=type)
 
@@ -25,6 +29,7 @@ def event(
 
     def decorate(target: type) -> type:
         require_frozen_dataclass(target)
+        require_valid_upgrade(target)
         resolved = name if name is not None else label_for(target.__module__, target.__name__)
         registry.register_event(RegisteredEvent(event_class=target, name=resolved, version=version))
         return target

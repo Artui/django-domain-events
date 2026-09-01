@@ -47,7 +47,21 @@ The lease is a **fence**, not a hope: the acknowledgement is a compare-and-set o
 overwrite the new owner's result. A short lease costs duplicate work, never a
 lost or double-recorded acknowledgement.
 
-`extend_lease()` covers the receiver that genuinely runs long.
+!!! warning "A receiver cannot extend its own lease, and no API offers to"
+    It runs *inside* the transaction that carries its acknowledgement, so
+    anything it writes - a lease extension included - is invisible to every
+    other worker until it has already finished. Measured on Postgres: while the
+    receiver had pushed its lease an hour out, another connection still read
+    the original expiry.
+
+    The answer is to declare the lease where it can still be published:
+
+    ```python
+    @receiver(RebuildIndex, lease_seconds=1800)
+    def rebuild(evt): ...
+    ```
+
+    `outbox_health().lapsed_leases` tells you when you have got it wrong.
 
 ### `BATCH_SIZE`
 

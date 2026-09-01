@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TypeVar
 
 from django_domain_events.registry import registry
-from django_domain_events.settings import get_codec
+from django_domain_events.utils import decode_payload
 
 E = TypeVar("E")
 
@@ -35,5 +35,4 @@ def assert_fired(event_class: type[E], *, times: int | None = None) -> list[E]:
             f"Expected {entry.name} to have been fired {times} time(s), found {len(rows)}."
         )
 
-    codec = get_codec()
-    return [codec.decode(event_class, row.payload, row.version) for row in rows]
+    return [decode_payload(event_class, row.payload, row.version) for row in rows]

@@ -12,6 +12,8 @@ from django_domain_events.drain_outbox import drain_outbox
 from django_domain_events.event import event
 from django_domain_events.fire import fire
 from django_domain_events.listens_for import listens_for
+from django_domain_events.outbox_health import outbox_health
+from django_domain_events.payload_upgrade_failed import PayloadUpgradeFailed
 from django_domain_events.propagate_scope import propagate_scope
 from django_domain_events.prune_events import prune_events
 from django_domain_events.quiet_receivers import quiet_receivers
@@ -29,7 +31,9 @@ from django_domain_events.types.catalogue_receiver import CatalogueReceiver
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.types.outbox_health import OutboxHealth
 from django_domain_events.types.quiet_receiver import QuietReceiver
+from django_domain_events.types.receiver_backlog import ReceiverBacklog
 from django_domain_events.types.registered_event import RegisteredEvent
 from django_domain_events.types.registered_receiver import RegisteredReceiver
 from django_domain_events.types.scope import Scope
@@ -54,8 +58,11 @@ __all__ = [
     "DeliveryStatus",
     "INLINE",
     "ON_COMMIT",
+    "OutboxHealth",
     "PayloadCodec",
+    "PayloadUpgradeFailed",
     "QuietReceiver",
+    "ReceiverBacklog",
     "RegisteredEvent",
     "RegisteredReceiver",
     "Registry",
@@ -78,6 +85,7 @@ __all__ = [
     "fire",
     "listens_for",
     "notify_relay",
+    "outbox_health",
     "propagate_scope",
     "prune_events",
     "quiet_receivers",

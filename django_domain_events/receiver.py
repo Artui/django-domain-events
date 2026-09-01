@@ -25,6 +25,7 @@ def receiver(
     max_attempts: int = 5,
     eager: bool = False,
     site: str = "relay",
+    lease_seconds: int | None = None,
 ) -> Callable[[Plain[E]], Plain[E]]: ...
 @overload
 def receiver(
@@ -36,6 +37,7 @@ def receiver(
     max_attempts: int = 5,
     eager: bool = False,
     site: str = "relay",
+    lease_seconds: int | None = None,
 ) -> Callable[[WithContext[E]], WithContext[E]]: ...
 def receiver(
     event_class: type[E],
@@ -46,6 +48,7 @@ def receiver(
     max_attempts: int = 5,
     eager: bool = False,
     site: str = "relay",
+    lease_seconds: int | None = None,
 ) -> Callable[[Callable[..., None]], Callable[..., None]]:
     """Register a callable to receive one event type.
 
@@ -67,6 +70,15 @@ def receiver(
     loses. It is what stops ``DURABLE`` feeling slow: outbox durability at
     on-commit latency, at the cost of a duplicate when the process dies
     mid-receiver - which at-least-once already required everyone to tolerate.
+
+    ``lease_seconds`` overrides ``LEASE_SECONDS`` for this receiver alone, and
+    is the answer for one that legitimately runs long. A receiver still working
+    when its lease lapses has its row taken by another worker and its own work
+    rolled back - correct, and entirely wasted. Declaring it here rather than
+    offering the receiver a way to extend its lease from the inside, because
+    that cannot work: the receiver runs inside the transaction that carries its
+    acknowledgement, so anything it writes is invisible to every other worker
+    until it has already finished.
     """
 
     if site not in ("relay", "task"):
@@ -91,6 +103,7 @@ def receiver(
                 max_attempts=max_attempts,
                 eager=eager,
                 site=site,
+                lease_seconds=lease_seconds,
             )
         )
         return func

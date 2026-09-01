@@ -97,6 +97,50 @@ reopened row has not settled again. Reading the cleared column would tell an
 operator who had just replayed yesterday's events that the receiver they were
 re-running had never run at all.
 
+## Is the outbox keeping up?
+
+```bash
+python manage.py events_status
+python manage.py events_status --format json
+```
+
+```python
+from django_domain_events import outbox_health
+
+health = outbox_health()
+```
+
+`quiet_receivers()` answers whether a *receiver* is running; this answers
+whether the *queue* is draining. They fail differently, and both failures are
+real: a relay that has been down an hour has every receiver quiet and a backlog
+climbing, while one wedged receiver has a backlog and everything else fine.
+
+| Field | Means |
+| --- | --- |
+| `owed` | Deliveries not yet settled - pending, failed or claimed |
+| `claimed` | Currently leased by a worker |
+| `dead` | Dead-lettered. **Not** counted as owed |
+| `oldest_owed_at` | When the oldest owed delivery became due; `None` when nothing is owed |
+| `lapsed_leases` | Claimed rows whose lease has expired |
+| `receivers` | Per-receiver backlog, worst first, omitting the ones with nothing owed or dead |
+
+**The age of `oldest_owed_at` is the one number worth alerting on.** It rises
+when the relay is down, when a receiver is failing, and when the queue is simply
+longer than the workers can drain - which are the three things an operator needs
+to hear about, and it catches all three without three alerts.
+
+A dead letter is deliberately **not** owed: the relay will never pick it up
+again on its own, and counting it would leave a backlog alert firing forever
+after one bad deploy. Watch `dead` separately.
+
+Steady non-zero `lapsed_leases` means workers are dying mid-delivery, or a
+receiver outruns its lease and has its work thrown away every time - see
+[`lease_seconds`](declaring.md#receivers).
+
+`owed` means "not terminal", the same definition the relay claims by and the
+prune settles by, so this cannot report an empty queue while the relay still has
+work.
+
 ## System checks
 
 Run with `python manage.py check`.
