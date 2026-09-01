@@ -5,6 +5,19 @@ from datetime import datetime
 from typing import Any, cast
 
 from django.apps import apps
+from django.db import connections
+
+from django_domain_events.types.delivery_status import DeliveryStatus
+
+TERMINAL = (DeliveryStatus.SUCCEEDED, DeliveryStatus.DEAD, DeliveryStatus.ORPHANED)
+"""Statuses a delivery does not come back from.
+
+Everything else is still owed. Named once because three callers ask the
+question and an explicit list of the owed statuses is what let two of them
+disagree: one omitted CLAIMED, so a row whose worker died between the claim
+and the deploy that deleted its receiver read as settled until a relay
+happened to reclaim it.
+"""
 
 
 def label_for(module: str, fallback_name: str) -> str:
@@ -46,3 +59,15 @@ def parse_datetime(value: str) -> datetime:
     learned to read in Python 3.11. Bare parsing fails on the 3.10 floor.
     """
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def has_table(alias: str, table: str) -> bool:
+    """Whether a table exists on one connection.
+
+    Both database checks need it. Without it they run under ``migrate`` - which
+    passes a database - and query a table ``migrate`` has not created yet, so
+    the first command a new project runs dies and no tables are created at all.
+    """
+    connection = connections[alias]
+    with connection.cursor() as cursor:
+        return table in connection.introspection.table_names(cursor)

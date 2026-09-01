@@ -92,10 +92,12 @@ def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliverySt
             caused_by(delivery.event.pk, delivery.event.correlation_id),
         ):
             call_receiver(receiver.func, receiver.takes_context, event, context)
+            acknowledged = datetime.now(timezone.utc)
             outcome = fence.write(
                 status=DeliveryStatus.SUCCEEDED,
                 attempts=attempt,
-                completed_at=datetime.now(timezone.utc),
+                completed_at=acknowledged,
+                succeeded_at=acknowledged,
             )
             if outcome is None:
                 # Lost the row mid-flight. Roll the receiver's work back with

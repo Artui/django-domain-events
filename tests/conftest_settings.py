@@ -16,9 +16,38 @@ SECRET_KEY = "not-a-secret-this-is-the-test-suite"
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.auth",
+    "django.contrib.messages",
+    "django.contrib.sessions",
+    # Installed rather than stubbed: the admin integration is a package named
+    # `admin`, and whether Django's autodiscovery imports it is exactly the
+    # thing worth testing. A hand-built ModelAdmin in a test would pass with
+    # the package never loaded.
+    "django.contrib.admin",
     "django_domain_events",
     "tests.testapp",
 ]
+
+MIDDLEWARE = [
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+]
+
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+            ]
+        },
+    }
+]
+
+ROOT_URLCONF = "tests.urls"
 
 USE_TZ = True
 

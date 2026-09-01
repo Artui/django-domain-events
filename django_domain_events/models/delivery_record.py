@@ -53,6 +53,18 @@ class DeliveryRecord(models.Model):
     """Written for an operator. Never rendered to an end user."""
 
     completed_at = models.DateTimeField(null=True, blank=True)
+    """When the current cycle settled. Cleared by replay and requeue, because
+    a reopened row has not settled again yet."""
+
+    succeeded_at = models.DateTimeField(null=True, blank=True)
+    """When this delivery last succeeded, and never cleared.
+
+    Separate from ``completed_at`` because the two answer different questions
+    and only one of them survives a replay. "Has this receiver done any work
+    lately" is the question the quiet-receiver query asks, and reading it off a
+    column that replay nulls means an operator who replays yesterday's events to
+    re-run a receiver they just fixed is then told that receiver has never run.
+    """
 
     class Meta:
         constraints = [

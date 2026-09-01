@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-31
+
+### Added
+- `catalogue()` and `render_catalogue()` - every declared event, its payload
+  schema and its receivers, generated from the declarations so it cannot drift
+  from them. Markdown for a person onboarding, JSON for a pipeline that fails a
+  pull request when a field other teams consume disappears. Sorted throughout,
+  ending in exactly one newline, and escaping pipes inside table cells, so a
+  checked-in catalogue diffs cleanly and `str | None` does not silently shift
+  every later column of its row.
+- `manage.py export_catalogue [--format markdown|json] [--output PATH]`.
+- `what_listens_to(EventClass)` - every receiver, across all modes, sorted by
+  key. A Django signal's receivers are weak references behind an opaque dispatch
+  uid, so "who reacts to this" is otherwise answerable only by grepping.
+- `listens_for(receiver_key)` - the inverse, and the direction an operator needs:
+  a dead-letter row names a key, and the next question is what it was owed.
+- `quiet_receivers()` and `manage.py quiet_receivers [--days N]` - durable
+  receivers that have succeeded at nothing inside the window. Driven by the
+  registry rather than the table, so a receiver that has **never** received
+  anything appears; a query over delivery rows alone cannot produce that answer,
+  because there is no row to find. The window defaults to `RETENTION_DAYS`,
+  which is the longest honest answer: past it the prune deleted the evidence.
+- `W002`, a system check for **deliveries owed under an event name the registry
+  no longer has**. This is the renamed event, and `W001` structurally cannot see
+  it: the receivers keep their keys, so nothing looks orphaned, while every row
+  written under the old name decodes to nothing and spends one attempt budget at
+  a time finding out. Limited to work still owed, because warning about settled
+  history on every `check` run teaches the reader to skip the output.
+- A read-only admin for both models, registered by Django's own autodiscovery,
+  with **Replay selected events** and **Requeue selected dead deliveries**.
+  Read-only on purpose: the one guarantee this package sells is that a row exists
+  if and only if the change committed, and a form that can write one is a way to
+  break it. Deleting is refused too - it would cascade owed deliveries away with
+  no record that anything was lost, which is what `prune_events` re-checks for.
+  Its filters come from the registry rather than `SELECT DISTINCT` over the
+  log, so opening the changelist scans nothing and a declared-but-never-fired
+  event is still listed.
+- `requeue_dead(delivery_ids=...)` - scope a requeue to named rows, for an
+  operator reading a dead-letter list and picking the ones they understand. An
+  empty list requeues nothing, and the id list narrows the selection rather than
+  widening it past `DEAD`. The selection is chunked like the update it feeds,
+  so an admin select-all over a dead-letter queue past SQLite's
+  32,766-parameter ceiling does not turn a routine requeue into an error.
+- A documentation site with pages for declaring, delivery, scope, operations,
+  introspection, settings and the API reference.
+- `DeliveryRecord.succeeded_at` - when a delivery last succeeded, never cleared.
+  Separate from `completed_at`, which replay and requeue clear because a
+  reopened row has not settled again yet. Reading the quiet-receiver query off
+  the cleared column meant an operator who replayed yesterday's events to re-run
+  a receiver they had just fixed was then told it had never run at all.
+
+### Changed
+- `check_no_orphaned_deliveries` (`W001`) now treats **any non-terminal**
+  delivery as owed, where it listed `pending` and `failed` and so missed
+  `claimed`. A worker that dies between claiming a row and the deploy that
+  deletes its receiver leaves the row claimed under a lapsed lease; that read as
+  settled until a relay happened to reclaim it. Both checks and the prune now
+  share one definition of owed, which is also the one the relay claims by.
+
+### Security
+- Both admin actions now require the model's **change** permission. Django
+  offers an action with no declared permission to anyone who can reach the
+  changelist, and `has_change_permission` gates the change *form* alone - so
+  view-only staff could replay the entire log, re-running every durable
+  receiver, and empty the dead-letter queue. The edit form stays refused either
+  way.
+
 ## [0.4.0] — 2026-08-31
 
 ### Added
@@ -232,7 +299,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Artui/django-domain-events/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Artui/django-domain-events/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Artui/django-domain-events/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Artui/django-domain-events/compare/v0.1.0...v0.2.0
