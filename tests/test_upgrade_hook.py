@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from unittest import mock
 
 import pytest
 from django.db import transaction
@@ -225,3 +226,50 @@ def test_assert_fired_reads_the_same_row_the_relay_would(record: list[str]) -> N
     EventRecord.objects.update(version=1, payload={"order_id": 7})
 
     assert assert_fired(Evolved, times=1) == [Evolved(order_id=7, currency="EUR")]
+
+
+def test_a_hook_that_forgets_to_return_says_so() -> None:
+    """The commonest way to write it wrong is to mutate in place. Without a
+    check the delivery dead-letters with "argument of type 'NoneType' is not
+    iterable", which is the unspecified failure the exception exists to
+    prevent."""
+
+    @dataclass(frozen=True)
+    class Mutating:
+        value: int
+
+        @staticmethod
+        def upgrade(payload: dict[str, Any], from_version: int) -> Any:
+            payload["value"] = 2
+
+    with (
+        event_registered(Mutating, "tests.mutating", version=2),
+        pytest.raises(PayloadUpgradeFailed, match="returned NoneType, not a mapping"),
+    ):
+        decode_payload(Mutating, {"value": 1}, 1)
+
+
+def test_the_codec_is_told_the_version_the_payload_now_is() -> None:
+    """A codec is handed the version so it can branch on it. Telling it the
+    row's old version after the hook has migrated the payload asks for the old
+    treatment of new-shaped data."""
+    seen: list[int] = []
+
+    class RecordingCodec:
+        def encode(self, event: object) -> dict[str, Any]:
+            return {}
+
+        def decode(self, event_class: type, payload: dict[str, Any], version: int) -> Any:
+            seen.append(version)
+            return event_class(**payload)
+
+    # Patched at its source: decode_payload imports it inside the function to
+    # break a cycle, so it is not an attribute of utils to patch.
+    import django_domain_events.settings as settings_module
+
+    with (
+        event_registered(Migrated, "tests.codec_version", version=2),
+        mock.patch.object(settings_module, "get_codec", lambda: RecordingCodec()),
+    ):
+        decode_payload(Migrated, {"order_id": 1}, 1)
+    assert seen == [2]

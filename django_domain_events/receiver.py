@@ -91,6 +91,11 @@ def receiver(
             f"site='task' needs mode=DURABLE; {mode.name} receivers run in the "
             f"firing process and have no delivery row to hand over."
         )
+    if lease_seconds is not None and lease_seconds <= 0:
+        # A zero lease expires the instant before the receiver starts, so a
+        # second relay reclaims the row immediately and both run it - the exact
+        # double delivery the lease exists to prevent.
+        raise ValueError(f"lease_seconds must be positive, got {lease_seconds}")
     if mode is not DeliveryMode.DURABLE:
         # Same reasoning as site=, applied to the rest of the row-shaped knobs.
         # Accepting them would let a declaration state a retry budget, an eager

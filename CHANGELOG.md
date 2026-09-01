@@ -24,11 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   something unspecified going wrong between the row and the receiver.
 - `outbox_health()` and `manage.py events_status`. `quiet_receivers()` answers
   whether a receiver is running; nothing answered whether the queue is draining,
-  and those fail differently. The age of `oldest_owed_at` is the single number
-  worth alerting on: it rises when the relay is down, when a receiver is
-  failing, and when the queue is longer than the workers can drain. Dead letters
-  are counted but deliberately not owed, or a backlog alert fires forever after
-  one bad deploy.
+  and those fail differently. `oldest_owed_at` is measured from when the work
+  arrived rather than when it next becomes due, because the backoff pushes a
+  failed delivery's `available_at` into the future and an age read off that
+  column goes negative exactly while a receiver is failing. Dead letters are
+  counted but deliberately not owed, or a backlog alert fires forever after one
+  bad deploy - so alert on `dead` as well.
 - The relay logs at `WARNING` when a worker loses a delivery, naming the
   receiver whose `lease_seconds=` to raise.
 - `examples/shop`, a runnable project using every part of the package for
@@ -38,6 +39,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silent.
 
 ### Changed
+- `dispatch_one` extends the lease before handing a row to a task backend. It
+  did not, so `lease_seconds=` was silently ignored on the one path where the
+  wait is the point: a queue backlog longer than `LEASE_SECONDS` had the relay
+  reclaim the row while the task worker still held it.
+- The `upgrade` hook's result is decoded under the **declared** version, not the
+  row's. A codec is handed the version so it can branch on it, and telling it
+  the old one asks for the old treatment of newly-shaped data.
+- A hook that returns something other than a mapping raises
+  `PayloadUpgradeFailed` naming it. Mutating the payload in place and forgetting
+  to return is the commonest way to write it wrong, and it dead-lettered with
+  "argument of type 'NoneType' is not iterable".
+- `lease_seconds` must be positive. Zero expires the instant before the receiver
+  starts, so a second relay reclaims the row immediately and both run it.
+- `events_status` reports each receiver's own oldest-owed age, in both formats.
+  It was documented as the number an alert is written against and reachable in
+  neither.
 - The catalogue publishes `lease_seconds` and whether an event declares
   `upgrade()`. Found by generating it for a real app: it had drifted from the
   declarations, which is the one thing it claims cannot happen.

@@ -1,7 +1,7 @@
 # The example shop
 
-A small Django project that uses every part of `django-domain-events` for
-something a real application would actually want. It is here to be read as much
+A small Django project that uses the declaration and delivery surface of
+`django-domain-events` for something a real application would actually want. It is here to be read as much
 as run: each receiver in [`shop/events.py`](shop/events.py) exists to show one
 knob doing one job, with the reason in its docstring.
 
@@ -14,7 +14,9 @@ python manage.py demo
 ```
 
 SQLite by default, so there is nothing to set up. The demo prints what the log
-actually recorded at each step.
+actually recorded at each step - and **checks** each of those claims, so it
+exits non-zero if any of them stops being true. That is what makes it safe to
+run in CI as documentation that cannot drift.
 
 For the half SQLite cannot show - more than one relay over one queue, which
 needs `SELECT ... FOR UPDATE SKIP LOCKED`:
@@ -69,6 +71,17 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
 python manage.py export_catalogue          # every event, its payload, its receivers
 python manage.py events_status             # how far behind the outbox is
 python manage.py quiet_receivers --days 1  # what has not run
-python manage.py deliver_events            # the long-running relay
 python manage.py createsuperuser           # then browse /admin/ for the log
 ```
+
+The long-running relay needs Postgres, because claiming rows without handing
+the same one to two workers needs `SELECT ... FOR UPDATE SKIP LOCKED`. On
+SQLite it refuses to start rather than pretend:
+
+```bash
+DDE_EXAMPLE_DATABASE=postgres python manage.py deliver_events
+```
+
+Not shown here, and worth reading about instead: `replay_events`,
+`prune_events`, `propagate_scope`, `drain_outbox`, the `task` execution site
+and the `dacite` codec.

@@ -12,5 +12,5 @@ class ReceiverBacklog:
     owed: int
     dead: int
     oldest_owed_at: datetime | None
-    """When the oldest owed delivery became due. The age of this is the number
-    an alert threshold is actually written against."""
+    """When the oldest still-owed delivery's event was recorded. See
+    ``OutboxHealth.oldest_owed_at`` for why this is not when it becomes due."""

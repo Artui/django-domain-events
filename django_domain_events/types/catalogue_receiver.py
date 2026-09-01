@@ -14,4 +14,5 @@ class CatalogueReceiver:
     max_attempts: int
     eager: bool
     takes_context: bool
-    lease_seconds: int | None
+    lease_seconds: int | None = None
+    """Defaulted so adding it does not break a consumer constructing one."""

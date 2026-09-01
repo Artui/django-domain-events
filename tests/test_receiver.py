@@ -102,3 +102,14 @@ def test_row_shaped_knobs_are_refused_without_a_row(kwargs, needle) -> None:
 
         @receiver(OrderPlaced, mode=DeliveryMode.INLINE, key="tests.bad_knob", **kwargs)
         def handler(evt: OrderPlaced) -> None: ...
+
+
+@pytest.mark.parametrize("value", [0, -5])
+def test_a_non_positive_lease_is_refused(value: int) -> None:
+    """Zero expires the instant before the receiver starts, so a second relay
+    reclaims the row immediately and both run it - the exact double delivery
+    the lease exists to prevent."""
+    with pytest.raises(ValueError, match="lease_seconds must be positive"):
+
+        @receiver(OrderPlaced, key="tests.zero_lease", lease_seconds=value)
+        def handler(evt: OrderPlaced) -> None: ...

@@ -11,6 +11,7 @@ from django.db import transaction
 from django_domain_events.drain_outbox import drain_outbox
 from django_domain_events.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
+from django_domain_events.models.event_record import EventRecord
 from django_domain_events.outbox_health import outbox_health
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.testapp.events import OrderPlaced
@@ -44,14 +45,34 @@ def test_a_claimed_row_is_still_owed(order: OrderPlaced, record: list[str]) -> N
     assert (health.owed, health.claimed) == (2, 2)
 
 
-def test_the_oldest_owed_timestamp_is_the_number_to_alert_on(
+def test_the_oldest_owed_timestamp_is_when_the_work_arrived(
     order: OrderPlaced, record: list[str]
 ) -> None:
     with transaction.atomic():
         fire(order)
     stuck = datetime.now(timezone.utc) - timedelta(hours=3)
-    DeliveryRecord.objects.update(available_at=stuck)
+    EventRecord.objects.update(recorded_at=stuck)
     assert outbox_health().oldest_owed_at == stuck
+
+
+def test_a_failing_receiver_does_not_produce_a_negative_age(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The backoff pushes available_at into the future on every failed
+    attempt, so an age read off that column goes negative exactly while a
+    receiver is failing - which is when the alert has to fire."""
+    with transaction.atomic():
+        fire(order)
+    recorded = EventRecord.objects.get().recorded_at
+    DeliveryRecord.objects.update(
+        status=DeliveryStatus.FAILED,
+        attempts=2,
+        available_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+    )
+
+    oldest = outbox_health().oldest_owed_at
+    assert oldest == recorded
+    assert oldest <= datetime.now(timezone.utc), "the age must never be negative"
 
 
 def test_a_settled_row_does_not_hold_the_oldest_timestamp_open(
@@ -60,7 +81,7 @@ def test_a_settled_row_does_not_hold_the_oldest_timestamp_open(
     """Draining the queue must clear it, or the alert never resets."""
     with transaction.atomic():
         fire(order)
-    DeliveryRecord.objects.update(available_at=datetime.now(timezone.utc) - timedelta(days=2))
+    EventRecord.objects.update(recorded_at=datetime.now(timezone.utc) - timedelta(days=2))
     drain_outbox()
     assert outbox_health().oldest_owed_at is None
 
@@ -144,9 +165,13 @@ def test_the_worst_backlog_comes_first(order: OrderPlaced, record: list[str]) ->
 def test_a_receiver_backlog_carries_its_own_oldest(order: OrderPlaced, record: list[str]) -> None:
     with transaction.atomic():
         fire(order)
+        fire(replace(order, order_id=9))
     stuck = datetime.now(timezone.utc) - timedelta(hours=5)
-    DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").update(
-        available_at=stuck
+    oldest_event = EventRecord.objects.order_by("pk").first()
+    EventRecord.objects.filter(pk=oldest_event.pk).update(recorded_at=stuck)
+    # The other receiver is settled, so only one backlog is left to carry it.
+    DeliveryRecord.objects.filter(receiver_key="testapp.with_context").update(
+        status=DeliveryStatus.SUCCEEDED
     )
     by_key = {r.key: r for r in outbox_health().receivers}
     assert by_key["testapp.durable_receiver"].oldest_owed_at == stuck

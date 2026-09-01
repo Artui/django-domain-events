@@ -184,6 +184,11 @@ def dispatch_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryS
     outcome: nothing has happened to it yet. If the enqueue is lost the lease
     lapses and the relay reclaims it, which is what makes handing work to a
     lossy queue safe.
+
+    The lease is extended here for the same reason ``deliver_one`` extends it,
+    and it matters more: the row now has to survive the queue's backlog as well
+    as the receiver's own runtime, and this is the last moment before the relay
+    stops looking at it.
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
 
@@ -202,6 +207,13 @@ def dispatch_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryS
             f"Receiver {receiver.key!r} declares site='task' but no TASK_BACKEND "
             f"is configured, so there is nothing to hand it to."
         )
+    delivery = DeliveryRecord.objects.get(pk=delivery_id)
+    if delivery.status == DeliveryStatus.CLAIMED and not _Fence(delivery, worker_id).extend_lease(
+        datetime.now(timezone.utc), receiver.lease_seconds
+    ):
+        logger.warning("worker %s lost delivery %s before enqueueing it", worker_id, delivery_id)
+        return None
+
     backend.enqueue(delivery_id)
     return None
 

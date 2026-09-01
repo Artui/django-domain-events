@@ -16,6 +16,7 @@ INSTALLED_APPS = [
     "django.contrib.auth",
     "django.contrib.messages",
     "django.contrib.sessions",
+    "django.contrib.staticfiles",
     "django.contrib.admin",
     "django_domain_events",
     "shop",
@@ -42,6 +43,7 @@ TEMPLATES = [
 ]
 
 ROOT_URLCONF = "urls"
+STATIC_URL = "static/"
 USE_TZ = True
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

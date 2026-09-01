@@ -21,10 +21,17 @@ class OutboxHealth:
     claimed: int
     dead: int
     oldest_owed_at: datetime | None
-    """None when nothing is owed. Its age is the one number worth alerting on:
-    it goes up when the relay is down, when a receiver is failing, and when the
-    queue is simply longer than the workers can drain, and those are the three
-    things an operator needs to hear about."""
+    """When the oldest still-owed delivery's event was **recorded**, or None
+    when nothing is owed.
+
+    Not when it next becomes due: a failed delivery has its ``available_at``
+    pushed into the future by the backoff, so an alert written against that
+    reads a *negative* age exactly while a receiver is failing. This rises
+    monotonically for as long as work sits undone, which is what a threshold
+    needs.
+
+    A receiver that fails all the way to dead leaves the owed set entirely, so
+    watch ``dead`` alongside it. One number does not cover both."""
 
     lapsed_leases: int
     """Claimed rows whose lease has expired. Steady non-zero means workers are
