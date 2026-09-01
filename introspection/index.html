@@ -749,6 +749,11 @@ exactly the case this must catch.</p>
 <p>The window defaults to <code>RETENTION_DAYS</code>, which is not a coincidence of numbers:
 past that point the prune has deleted the evidence, so "quiet for longer than
 retention" is the longest answer this can honestly give.</p>
+<p>The success time is read off <code>succeeded_at</code>, which is written on success and
+never cleared - unlike <code>completed_at</code>, which replay and requeue clear because a
+reopened row has not settled again. Reading the cleared column would tell an
+operator who had just replayed yesterday's events that the receiver they were
+re-running had never run at all.</p>
 <h2 id="system-checks">System checks<a class="headerlink" href="#system-checks" title="Permanent link">&para;</a></h2>
 <p>Run with <code>python manage.py check</code>.</p>
 <table>
