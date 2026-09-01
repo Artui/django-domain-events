@@ -130,6 +130,19 @@ anything satisfying it works, including Celery.
     the receivers that asked for one, so configuring no backend cannot break
     receivers that never wanted it. Neither case silently runs in the relay.
 
+## Knowing it is working
+
+```bash
+python manage.py events_status
+```
+
+See [introspection](introspection.md#is-the-outbox-keeping-up). The age of
+`oldest_owed_at` is the number to alert on.
+
+The relay logs at `WARNING` when a worker loses a delivery - either before
+running it, or after finishing work whose lease had already lapsed. The second
+names the receiver and suggests `lease_seconds=`, because that is the fix.
+
 ## A cron that works
 
 ```cron

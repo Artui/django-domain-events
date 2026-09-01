@@ -17,3 +17,7 @@ class RegisteredReceiver:
     max_attempts: int
     eager: bool
     site: str
+    lease_seconds: int | None = None
+    """None means the LEASE_SECONDS setting. Defaulted because it is the one
+    field of a declaration that is genuinely optional: every other value here
+    is something the decorator always resolves."""

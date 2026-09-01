@@ -38,6 +38,7 @@ Everything below is exported from `django_domain_events` directly.
 ::: django_domain_events.what_listens_to.what_listens_to
 ::: django_domain_events.listens_for.listens_for
 ::: django_domain_events.quiet_receivers.quiet_receivers
+::: django_domain_events.outbox_health.outbox_health
 
 ## Testing
 
@@ -54,8 +55,11 @@ Everything below is exported from `django_domain_events` directly.
 ::: django_domain_events.types.catalogue_event.CatalogueEvent
 ::: django_domain_events.types.catalogue_field.CatalogueField
 ::: django_domain_events.types.catalogue_receiver.CatalogueReceiver
+::: django_domain_events.types.outbox_health.OutboxHealth
 ::: django_domain_events.types.quiet_receiver.QuietReceiver
+::: django_domain_events.types.receiver_backlog.ReceiverBacklog
 ::: django_domain_events.types.registered_event.RegisteredEvent
 ::: django_domain_events.types.registered_receiver.RegisteredReceiver
 ::: django_domain_events.types.task_backend.TaskBackend
 ::: django_domain_events.codecs.payload_codec.PayloadCodec
+::: django_domain_events.payload_upgrade_failed.PayloadUpgradeFailed

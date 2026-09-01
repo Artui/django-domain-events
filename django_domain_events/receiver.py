@@ -25,6 +25,7 @@ def receiver(
     max_attempts: int = 5,
     eager: bool = False,
     site: str = "relay",
+    lease_seconds: int | None = None,
 ) -> Callable[[Plain[E]], Plain[E]]: ...
 @overload
 def receiver(
@@ -36,6 +37,7 @@ def receiver(
     max_attempts: int = 5,
     eager: bool = False,
     site: str = "relay",
+    lease_seconds: int | None = None,
 ) -> Callable[[WithContext[E]], WithContext[E]]: ...
 def receiver(
     event_class: type[E],
@@ -46,6 +48,7 @@ def receiver(
     max_attempts: int = 5,
     eager: bool = False,
     site: str = "relay",
+    lease_seconds: int | None = None,
 ) -> Callable[[Callable[..., None]], Callable[..., None]]:
     """Register a callable to receive one event type.
 
@@ -67,6 +70,15 @@ def receiver(
     loses. It is what stops ``DURABLE`` feeling slow: outbox durability at
     on-commit latency, at the cost of a duplicate when the process dies
     mid-receiver - which at-least-once already required everyone to tolerate.
+
+    ``lease_seconds`` overrides ``LEASE_SECONDS`` for this receiver alone, and
+    is the answer for one that legitimately runs long. A receiver still working
+    when its lease lapses has its row taken by another worker and its own work
+    rolled back - correct, and entirely wasted. Declaring it here rather than
+    offering the receiver a way to extend its lease from the inside, because
+    that cannot work: the receiver runs inside the transaction that carries its
+    acknowledgement, so anything it writes is invisible to every other worker
+    until it has already finished.
     """
 
     if site not in ("relay", "task"):
@@ -79,6 +91,28 @@ def receiver(
             f"site='task' needs mode=DURABLE; {mode.name} receivers run in the "
             f"firing process and have no delivery row to hand over."
         )
+    if lease_seconds is not None and lease_seconds <= 0:
+        # A zero lease expires the instant before the receiver starts, so a
+        # second relay reclaims the row immediately and both run it - the exact
+        # double delivery the lease exists to prevent.
+        raise ValueError(f"lease_seconds must be positive, got {lease_seconds}")
+    if mode is not DeliveryMode.DURABLE:
+        # Same reasoning as site=, applied to the rest of the row-shaped knobs.
+        # Accepting them would let a declaration state a retry budget, an eager
+        # attempt or a lease for a receiver that has no row to carry any of
+        # them, and nothing downstream would ever say so - the catalogue would
+        # publish the numbers and the relay would ignore them.
+        for name, value, default in (
+            ("max_attempts", max_attempts, 5),
+            ("eager", eager, False),
+            ("lease_seconds", lease_seconds, None),
+        ):
+            if value != default:
+                raise ValueError(
+                    f"{name}={value!r} needs mode=DURABLE; a {mode.name} receiver "
+                    f"has no delivery row, so it is never retried, never attempted "
+                    f"a second time and never leased."
+                )
 
     def decorate(func: Callable[..., None]) -> Callable[..., None]:
         registry.register_receiver(
@@ -91,6 +125,7 @@ def receiver(
                 max_attempts=max_attempts,
                 eager=eager,
                 site=site,
+                lease_seconds=lease_seconds,
             )
         )
         return func

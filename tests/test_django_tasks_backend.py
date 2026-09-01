@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest import mock
+
 import pytest
 from django.db import transaction
 
@@ -8,6 +10,7 @@ from django_domain_events.django_tasks_backend import DjangoTasksBackend, delive
 from django_domain_events.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.types.delivery_status import DeliveryStatus
+from tests.conftest import receiver_deleted
 from tests.testapp.events import OrderPlaced
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -225,3 +228,99 @@ def test_a_backend_can_be_configured_with_options(settings) -> None:
         }
     }
     assert get_task_backend().queue_name == "events"
+
+
+@pytest.mark.django_db
+def test_the_task_site_extends_the_lease_before_enqueueing(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The path where the wait is the point: the row now has to survive the
+    queue's backlog as well as the receiver's runtime, and this is the last
+    moment before the relay stops looking at it."""
+    from datetime import datetime, timedelta, timezone
+
+    from django_domain_events.claim_batch import claim_batch
+    from django_domain_events.deliver import dispatch_one
+    from django_domain_events.models.delivery_record import DeliveryRecord
+    from django_domain_events.types.delivery_mode import DeliveryMode
+    from django_domain_events.types.registered_receiver import RegisteredReceiver
+    from tests.conftest import receiver_registered
+
+    enqueued: list[int] = []
+
+    class Recording:
+        def enqueue(self, delivery_id: int) -> None:
+            enqueued.append(delivery_id)
+
+    entry = RegisteredReceiver(
+        key="testapp.durable_receiver",
+        event_class=OrderPlaced,
+        func=lambda evt: None,
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=5,
+        eager=False,
+        site="task",
+        lease_seconds=2400,
+    )
+    with transaction.atomic():
+        fire(order)
+    row = DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").get()
+    started = datetime.now(timezone.utc)
+    claim_batch(worker_id="w1", now=started, lease=timedelta(seconds=5), limit=10)
+
+    with (
+        receiver_deleted("testapp.durable_receiver"),
+        receiver_registered(entry),
+        mock.patch("django_domain_events.deliver.get_task_backend", lambda: Recording()),
+    ):
+        assert dispatch_one(row.pk, worker_id="w1") is None
+
+    assert enqueued == [row.pk]
+    assert DeliveryRecord.objects.get(pk=row.pk).lease_expires_at > started + timedelta(
+        seconds=1200
+    )
+
+
+@pytest.mark.django_db
+def test_a_lost_row_is_not_enqueued(order: OrderPlaced, record: list[str]) -> None:
+    """Enqueueing a row another worker holds hands the same work to two
+    places, which is what the lease exists to prevent."""
+    from django_domain_events.deliver import dispatch_one
+    from django_domain_events.models.delivery_record import DeliveryRecord
+    from django_domain_events.types.delivery_mode import DeliveryMode
+    from django_domain_events.types.delivery_status import DeliveryStatus
+    from django_domain_events.types.registered_receiver import RegisteredReceiver
+    from tests.conftest import receiver_registered
+
+    enqueued: list[int] = []
+
+    class Recording:
+        def enqueue(self, delivery_id: int) -> None:
+            enqueued.append(delivery_id)
+
+    entry = RegisteredReceiver(
+        key="testapp.durable_receiver",
+        event_class=OrderPlaced,
+        func=lambda evt: None,
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=5,
+        eager=False,
+        site="task",
+    )
+    with transaction.atomic():
+        fire(order)
+    row = DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").get()
+    DeliveryRecord.objects.filter(pk=row.pk).update(
+        status=DeliveryStatus.CLAIMED, claimed_by="someone-else"
+    )
+
+    with (
+        receiver_deleted("testapp.durable_receiver"),
+        receiver_registered(entry),
+        mock.patch("django_domain_events.deliver.get_task_backend", lambda: Recording()),
+    ):
+        assert dispatch_one(row.pk, worker_id="w1") is None
+
+    assert enqueued == []

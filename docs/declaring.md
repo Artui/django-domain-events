@@ -46,6 +46,7 @@ def reserve_stock(evt: OrderPlaced) -> None: ...
 | `max_attempts` | `5` | Copied onto each row **at fire time**. |
 | `eager` | `False` | Also attempt immediately after commit, relay as fallback. |
 | `site` | `"relay"` | Where the code runs. `"task"` hands it to a task backend. |
+| `lease_seconds` | `None` | Override `LEASE_SECONDS` for a receiver that runs long. |
 | `takes_context` | `False` | Receive a second `DeliveryContext` argument. |
 
 `takes_context` is the spelling `django.tasks.task` uses for the same idea. The
@@ -57,6 +58,14 @@ writing the other fails at the decorator rather than in the relay hours later.
 def audit(evt: OrderPlaced, ctx: DeliveryContext) -> None:
     log.info("attempt %s of %s", ctx.attempt, ctx.event_name)
 ```
+
+!!! note "A long receiver needs `lease_seconds`, not a heartbeat"
+    A receiver still working when its lease lapses has its row taken by another
+    worker and its own work rolled back - correct, and entirely wasted. It
+    cannot extend the lease itself: it runs inside the transaction carrying its
+    acknowledgement, so nothing it writes is visible until it has finished.
+    Declare the lease it needs and the relay publishes it before the receiver
+    starts.
 
 !!! note "`max_attempts` is frozen at fire time"
     It is copied onto the delivery row when the event is fired, so lowering it
@@ -91,6 +100,35 @@ sentence good enough to be the dead-letter reason. That message lands in
 
 A decode failure is a **terminal state for that delivery**, never a crashed relay
 loop: one undecodable row must not stop the other four thousand.
+
+### `upgrade()` - the escape from the two breaking cases
+
+Declare it on the event class and an older row is migrated before it is decoded:
+
+```python
+@event(name="orders.OrderPlaced", version=2)
+@dataclass(frozen=True, slots=True)
+class OrderPlaced:
+    order_id: int
+    currency: str  # added in v2, with no default
+
+    @staticmethod
+    def upgrade(payload: dict, from_version: int) -> dict:
+        return {**payload, "currency": "EUR"}
+```
+
+- It must be a **`staticmethod` or `classmethod`**, checked at the decorator. An
+  ordinary method reached through the class is unbound, so the payload would
+  arrive as `self` - and it would arrive there in the relay, hours later.
+- It runs **only when the row is older** than the declaration. A row from the
+  future is a rollback, and no forward migration helps: the code that would know
+  how to read it is the code that was just removed.
+- It is handed `from_version`, so one hook can cover several hops.
+- It runs on **every** decode path - the relay and `assert_fired` share one - so
+  a test cannot read a payload the relay would reject.
+- If it raises, the delivery dead-letters with `PayloadUpgradeFailed` naming the
+  class in `last_error`, rather than something unspecified going wrong between
+  the row and the receiver.
 
 ## Codecs
 

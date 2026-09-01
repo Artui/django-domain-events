@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import random
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -12,10 +13,13 @@ from django_domain_events.causation import caused_by
 from django_domain_events.claim_batch import claim_batch
 from django_domain_events.fire import call_receiver
 from django_domain_events.registry import registry
-from django_domain_events.settings import get_codec, get_task_backend, setting
+from django_domain_events.settings import get_task_backend, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.utils import decode_payload
 from django_domain_events.write_alias import write_alias
+
+logger = logging.getLogger(__name__)
 
 
 def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryStatus | None:
@@ -39,10 +43,21 @@ def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliverySt
     fence = _Fence(delivery, worker_id)
     now = datetime.now(timezone.utc)
 
-    if delivery.status == DeliveryStatus.CLAIMED and not fence.extend_lease(now):
+    # The receiver is resolved before the lease is extended, because it is what
+    # says how long the lease should be. A registry lookup touches no rows, so
+    # nothing is written before ownership has been re-established.
+    receiver = registry.receiver_for_key(delivery.receiver_key)
+    seconds = setting("LEASE_SECONDS") if receiver is None else receiver.lease_seconds
+
+    if delivery.status == DeliveryStatus.CLAIMED and not fence.extend_lease(now, seconds):
+        logger.warning(
+            "worker %s lost delivery %s before running it; its lease had lapsed "
+            "and another worker holds the row",
+            worker_id,
+            delivery_id,
+        )
         return None
 
-    receiver = registry.receiver_for_key(delivery.receiver_key)
     if receiver is None:
         # Terminal: no amount of waiting brings back a deleted receiver, and a
         # row retrying forever is indistinguishable from a broken one.
@@ -65,7 +80,7 @@ def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliverySt
         )
 
     try:
-        event = get_codec().decode(
+        event = decode_payload(
             event_entry.event_class, delivery.event.payload, delivery.event.version
         )
     except Exception as exc:
@@ -103,6 +118,14 @@ def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliverySt
                 # Lost the row mid-flight. Roll the receiver's work back with
                 # the acknowledgement it belongs to rather than leaving the two
                 # disagreeing, and let whoever holds the claim deliver it.
+                logger.warning(
+                    "worker %s finished %s after its lease lapsed; the work was "
+                    "rolled back and the row belongs to another worker. Raise "
+                    "lease_seconds= on receiver %s if it runs this long",
+                    worker_id,
+                    delivery_id,
+                    receiver.key,
+                )
                 transaction.set_rollback(True, using=write_alias())
             return outcome
     except Exception as exc:
@@ -133,14 +156,18 @@ class _Fence:
             pk=self.pk, claimed_by=self.claimed_by, claimed_at=self.claimed_at
         )
 
-    def extend_lease(self, now: datetime) -> bool:
+    def extend_lease(self, now: datetime, seconds: int | None = None) -> bool:
         """Push the lease out to cover this delivery alone.
 
         A batch claim stamps one expiry across every row it took, and the relay
         then delivers them one at a time; without this the lease is a budget for
         the whole batch and runs out partway through it.
+
+        ``seconds`` is the receiver's own override when it declared one. This is
+        the only moment a lease can be sized to the work, because it is the last
+        one before the receiver's transaction opens and stops publishing.
         """
-        lease = timedelta(seconds=setting("LEASE_SECONDS"))
+        lease = timedelta(seconds=seconds if seconds is not None else setting("LEASE_SECONDS"))
         return bool(self._owned().update(lease_expires_at=now + lease))
 
     def write(self, **fields: Any) -> DeliveryStatus | None:
@@ -157,6 +184,11 @@ def dispatch_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryS
     outcome: nothing has happened to it yet. If the enqueue is lost the lease
     lapses and the relay reclaims it, which is what makes handing work to a
     lossy queue safe.
+
+    The lease is extended here for the same reason ``deliver_one`` extends it,
+    and it matters more: the row now has to survive the queue's backlog as well
+    as the receiver's own runtime, and this is the last moment before the relay
+    stops looking at it.
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
 
@@ -175,6 +207,13 @@ def dispatch_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryS
             f"Receiver {receiver.key!r} declares site='task' but no TASK_BACKEND "
             f"is configured, so there is nothing to hand it to."
         )
+    delivery = DeliveryRecord.objects.get(pk=delivery_id)
+    if delivery.status == DeliveryStatus.CLAIMED and not _Fence(delivery, worker_id).extend_lease(
+        datetime.now(timezone.utc), receiver.lease_seconds
+    ):
+        logger.warning("worker %s lost delivery %s before enqueueing it", worker_id, delivery_id)
+        return None
+
     backend.enqueue(delivery_id)
     return None
 

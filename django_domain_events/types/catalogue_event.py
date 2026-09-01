@@ -16,3 +16,11 @@ class CatalogueEvent:
     doc: str
     fields: tuple[CatalogueField, ...]
     receivers: tuple[CatalogueReceiver, ...]
+
+    migrates_older_rows: bool = False
+    """Whether the class declares ``upgrade``. Worth publishing: it is the
+    difference between an event whose old rows still decode and one whose old
+    rows dead-letter after the next breaking change.
+
+    Last, and defaulted, so adding it does not break a consumer constructing
+    one - these are exported types."""

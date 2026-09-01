@@ -10,7 +10,7 @@ from django.db import transaction
 
 from django_domain_events.drain_outbox import drain_outbox
 from django_domain_events.fire import fire
-from tests.testapp.events import Eagerly, OrderPlaced
+from tests.testapp.events import Eagerly, OrderPlaced, SlowWork
 
 pytestmark = pytest.mark.django_db
 
@@ -30,6 +30,7 @@ def test_a_receiver_that_has_run_drops_out(order: OrderPlaced, record: list[str]
     with transaction.atomic():
         fire(order)
         fire(Eagerly(value=1))
+        fire(SlowWork(value=1))
     drain_outbox()
     assert "Every durable receiver has run inside the window." in _run()
 

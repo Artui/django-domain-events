@@ -100,3 +100,17 @@ def eager_receiver(evt: Eagerly) -> None:
 @receiver(Eagerly, mode=DURABLE, key="testapp.not_eager")
 def not_eager_receiver(evt: Eagerly) -> None:
     calls.append(f"not_eager:{evt.value}")
+
+
+@event
+@dataclass(frozen=True, slots=True)
+class SlowWork:
+    """Its own event, so a third receiver does not perturb OrderPlaced's fan-out."""
+
+    value: int
+
+
+@receiver(SlowWork, mode=DURABLE, key="testapp.slow_receiver", lease_seconds=1800)
+def slow_receiver(evt: SlowWork) -> None:
+    """Declares a lease long enough for work the default would not cover."""
+    calls.append(f"slow:{evt.value}")

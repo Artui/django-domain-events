@@ -97,6 +97,59 @@ reopened row has not settled again. Reading the cleared column would tell an
 operator who had just replayed yesterday's events that the receiver they were
 re-running had never run at all.
 
+## Is the outbox keeping up?
+
+```bash
+python manage.py events_status
+python manage.py events_status --format json
+```
+
+```python
+from django_domain_events import outbox_health
+
+health = outbox_health()
+```
+
+`quiet_receivers()` answers whether a *receiver* is running; this answers
+whether the *queue* is draining. They fail differently, and both failures are
+real: a relay that has been down an hour has every receiver quiet and a backlog
+climbing, while one wedged receiver has a backlog and everything else fine.
+
+| Field | Means |
+| --- | --- |
+| `owed` | Deliveries not yet settled - pending, failed or claimed |
+| `claimed` | Currently leased by a worker |
+| `dead` | Dead-lettered. **Not** counted as owed |
+| `oldest_owed_at` | When the oldest still-owed delivery's event was **recorded**; `None` when nothing is owed |
+| `lapsed_leases` | Claimed rows whose lease has expired |
+| `receivers` | Per-receiver backlog, worst first, omitting the ones with nothing owed or dead. Each carries its own `oldest_owed_at` |
+
+**The age of `oldest_owed_at` is the number to alert on**, and it is measured
+from when the work *arrived*, not from when it next becomes due. That
+distinction is the whole point: the backoff pushes a failed delivery's
+`available_at` into the future on every attempt, so an alert written against
+that column reads a **negative** age exactly while a receiver is failing.
+
+It rises monotonically for as long as work sits undone - a relay that is down,
+a receiver that is failing its way through its retries, or a queue simply longer
+than the workers can drain.
+
+!!! warning "It does not cover a receiver failing all the way to dead"
+    A dead-lettered row leaves the owed set, so the backlog age drops back to
+    `None` while nothing at all is being delivered. A dead letter is
+    deliberately not owed - the relay will never pick it up again on its own,
+    and counting it would leave a backlog alert firing forever after one bad
+    deploy. **Alert on `dead` as well.** One number does not cover both.
+
+Steady non-zero `lapsed_leases` means workers are dying mid-delivery, or a
+receiver outruns its lease and has its work thrown away every time - see
+[`lease_seconds`](declaring.md#receivers).
+
+`owed` means "not terminal", which is what the prune settles by and a superset
+of what the relay can claim at any given moment: a row inside its backoff window
+is owed and not yet claimable. The superset is the useful side - this cannot
+report an empty queue while work is still outstanding.
+
 ## System checks
 
 Run with `python manage.py check`.

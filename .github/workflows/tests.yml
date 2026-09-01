@@ -48,6 +48,37 @@ jobs:
         # settings module to keep the build hermetic.
         run: DJANGO_SETTINGS_MODULE=tests.conftest_settings uv run mkdocs build --strict
 
+  example:
+    # The example project is documentation that runs. One that nothing executes
+    # drifts from the API it is meant to teach, and the drift is silent: a
+    # reader copies a call that has not worked for two releases.
+    name: example project
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --all-groups
+      - name: System checks
+        working-directory: examples/shop
+        run: DJANGO_SETTINGS_MODULE=settings PYTHONPATH=. uv run --project ../.. python manage.py check
+      - name: No missing migrations
+        working-directory: examples/shop
+        run: DJANGO_SETTINGS_MODULE=settings PYTHONPATH=. uv run --project ../.. python manage.py makemigrations --check --dry-run
+      - name: Migrate and run the scenario
+        working-directory: examples/shop
+        run: |
+          DJANGO_SETTINGS_MODULE=settings PYTHONPATH=. uv run --project ../.. python manage.py migrate
+          DJANGO_SETTINGS_MODULE=settings PYTHONPATH=. uv run --project ../.. python manage.py demo
+      - name: The operator commands run too
+        working-directory: examples/shop
+        run: |
+          DJANGO_SETTINGS_MODULE=settings PYTHONPATH=. uv run --project ../.. python manage.py export_catalogue
+          DJANGO_SETTINGS_MODULE=settings PYTHONPATH=. uv run --project ../.. python manage.py events_status --format json
+          DJANGO_SETTINGS_MODULE=settings PYTHONPATH=. uv run --project ../.. python manage.py quiet_receivers --days 1
+
   floor:
     name: lowest declared versions
     runs-on: ubuntu-latest
@@ -389,7 +420,7 @@ jobs:
   tests-passed:
     name: tests
     if: always()
-    needs: [lint, docs, floor, test, test-postgres]
+    needs: [lint, docs, example, floor, test, test-postgres]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded

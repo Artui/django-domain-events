@@ -634,3 +634,6 @@ cython_debug/
 
 # AI-specific items
 .ai/
+
+# The example project's local database
+examples/shop/*.sqlite3

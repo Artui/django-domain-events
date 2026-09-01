@@ -35,6 +35,7 @@ def catalogue() -> Catalogue:
                 max_attempts=r.max_attempts,
                 eager=r.eager,
                 takes_context=r.takes_context,
+                lease_seconds=r.lease_seconds,
             )
             for r in sorted(registry.receivers_for(cls), key=lambda r: r.key)
         )
@@ -44,6 +45,7 @@ def catalogue() -> Catalogue:
                 version=entry.version,
                 class_path=f"{cls.__module__}.{cls.__qualname__}",
                 doc=_doc(cls),
+                migrates_older_rows=hasattr(cls, "upgrade"),
                 fields=_fields(cls),
                 receivers=receivers,
             )

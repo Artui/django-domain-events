@@ -32,6 +32,12 @@ def _markdown(catalogue: Catalogue) -> str:
         lines += [f"## `{event.name}` (v{event.version})", "", f"`{event.class_path}`", ""]
         if event.doc:
             lines += [event.doc, ""]
+        if event.migrates_older_rows:
+            lines += [
+                "Declares `upgrade()`, so rows written under an older version "
+                "are migrated before they are decoded.",
+                "",
+            ]
         lines += ["| Field | Type | Required | Default |", "| --- | --- | --- | --- |"]
         for field in event.fields:
             required = "yes" if field.required else "no"
@@ -47,14 +53,21 @@ def _markdown(catalogue: Catalogue) -> str:
             lines += ["Nothing listens to this event.", ""]
             continue
         lines += [
-            "| Receiver | Mode | Site | Max attempts | Eager |",
-            "| --- | --- | --- | --- | --- |",
+            "| Receiver | Mode | Site | Max attempts | Eager | Lease |",
+            "| --- | --- | --- | --- | --- | --- |",
         ]
         for receiver in event.receivers:
+            # Blanked rather than printed for a mode they do not apply to. The
+            # declaration carries defaults nobody chose, and "5" beside an
+            # INLINE receiver reads as a retry budget it will never have.
+            durable = receiver.mode == "durable"
+            site = _cell(receiver.site) if durable else "-"
+            attempts = str(receiver.max_attempts) if durable else "-"
+            eager = ("yes" if receiver.eager else "no") if durable else "-"
+            lease = "default" if receiver.lease_seconds is None else f"{receiver.lease_seconds}s"
             lines.append(
-                f"| `{_cell(receiver.key)}` | {_cell(receiver.mode)} | "
-                f"{_cell(receiver.site)} | {receiver.max_attempts} | "
-                f"{'yes' if receiver.eager else 'no'} |"
+                f"| `{_cell(receiver.key)}` | {_cell(receiver.mode)} | {site} | "
+                f"{attempts} | {eager} | {lease if durable else '-'} |"
             )
         lines.append("")
     return _joined(lines)
