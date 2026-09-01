@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The `succeeded_at` column added in 0.5.0 arrived empty, so on upgrading every
+  receiver read as having never succeeded - which is the one question
+  `quiet_receivers()` exists to answer, wrong on day one for anyone with
+  history. A data migration backfills it from `completed_at` for deliveries
+  still `succeeded`, where that column is the moment the delivery was
+  acknowledged. A dead letter settled too and is not backfilled; a replayed row
+  had `completed_at` cleared by the replay, so nothing survives to recover and
+  inventing a timestamp would be worse than the null.
+
 ## [0.5.0] — 2026-08-31
 
 ### Added
