@@ -10,29 +10,31 @@
       
       
       
-        <link rel="canonical" href="https://artui.github.io/django-domain-events/">
+        <link rel="canonical" href="https://artui.github.io/django-domain-events/declaring/">
       
       
+        <link rel="prev" href="..">
       
-        <link rel="next" href="declaring/">
+      
+        <link rel="next" href="../delivery/">
       
       
         
       
       
-      <link rel="icon" href="assets/images/favicon.png">
+      <link rel="icon" href="../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
-        <title>django-domain-events</title>
+        <title>Declaring - django-domain-events</title>
       
     
     
-      <link rel="stylesheet" href="assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
-        <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -51,9 +53,9 @@
       
     
     
-      <link rel="stylesheet" href="assets/_mkdocstrings.css">
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
     
-    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -78,7 +80,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#django-domain-events" class="md-skip">
+        <a href="#declaring-events-and-receivers" class="md-skip">
           Skip to content
         </a>
       
@@ -94,7 +96,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="." title="django-domain-events" class="md-header__button md-logo" aria-label="django-domain-events" data-md-component="logo">
+    <a href=".." title="django-domain-events" class="md-header__button md-logo" aria-label="django-domain-events" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -114,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Home
+              Declaring
             
           </span>
         </div>
@@ -232,7 +234,7 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="." title="django-domain-events" class="md-nav__button md-logo" aria-label="django-domain-events" data-md-component="logo">
+    <a href=".." title="django-domain-events" class="md-nav__button md-logo" aria-label="django-domain-events" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -259,6 +261,33 @@
       
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
     
   
   
@@ -278,7 +307,7 @@
   <span class="md-ellipsis">
     
   
-    Home
+    Declaring
   
 
     
@@ -289,14 +318,14 @@
           <span class="md-nav__icon md-icon"></span>
         </label>
       
-      <a href="." class="md-nav__link md-nav__link--active">
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
   <span class="md-ellipsis">
     
   
-    Home
+    Declaring
   
 
     
@@ -322,10 +351,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#what-it-is-not" class="md-nav__link">
+  <a href="#events" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What it is not
+        Events
       
     </span>
   </a>
@@ -333,10 +362,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#install" class="md-nav__link">
+  <a href="#receivers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Install
+        Receivers
       
     </span>
   </a>
@@ -344,10 +373,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#quickstart" class="md-nav__link">
+  <a href="#where-declarations-live" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Quickstart
+        Where declarations live
       
     </span>
   </a>
@@ -355,10 +384,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#where-to-go-next" class="md-nav__link">
+  <a href="#payload-evolution" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Where to go next
+        Payload evolution
       
     </span>
   </a>
@@ -366,10 +395,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#status" class="md-nav__link">
+  <a href="#codecs" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Status
+        Codecs
       
     </span>
   </a>
@@ -391,34 +420,7 @@
   
   
     <li class="md-nav__item">
-      <a href="declaring/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Declaring
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="delivery/" class="md-nav__link">
+      <a href="../delivery/" class="md-nav__link">
         
   
   
@@ -445,7 +447,7 @@
   
   
     <li class="md-nav__item">
-      <a href="scope/" class="md-nav__link">
+      <a href="../scope/" class="md-nav__link">
         
   
   
@@ -472,7 +474,7 @@
   
   
     <li class="md-nav__item">
-      <a href="operations/" class="md-nav__link">
+      <a href="../operations/" class="md-nav__link">
         
   
   
@@ -499,7 +501,7 @@
   
   
     <li class="md-nav__item">
-      <a href="introspection/" class="md-nav__link">
+      <a href="../introspection/" class="md-nav__link">
         
   
   
@@ -526,7 +528,7 @@
   
   
     <li class="md-nav__item">
-      <a href="settings/" class="md-nav__link">
+      <a href="../settings/" class="md-nav__link">
         
   
   
@@ -553,7 +555,7 @@
   
   
     <li class="md-nav__item">
-      <a href="reference/" class="md-nav__link">
+      <a href="../reference/" class="md-nav__link">
         
   
   
@@ -600,10 +602,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#what-it-is-not" class="md-nav__link">
+  <a href="#events" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What it is not
+        Events
       
     </span>
   </a>
@@ -611,10 +613,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#install" class="md-nav__link">
+  <a href="#receivers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Install
+        Receivers
       
     </span>
   </a>
@@ -622,10 +624,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#quickstart" class="md-nav__link">
+  <a href="#where-declarations-live" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Quickstart
+        Where declarations live
       
     </span>
   </a>
@@ -633,10 +635,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#where-to-go-next" class="md-nav__link">
+  <a href="#payload-evolution" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Where to go next
+        Payload evolution
       
     </span>
   </a>
@@ -644,10 +646,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#status" class="md-nav__link">
+  <a href="#codecs" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Status
+        Codecs
       
     </span>
   </a>
@@ -671,7 +673,7 @@
 
 
   
-    <a href="https://github.com/Artui/django-domain-events/edit/main/docs/index.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/Artui/django-domain-events/edit/main/docs/declaring.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -679,87 +681,153 @@
   
 
 
-<h1 id="django-domain-events">django-domain-events<a class="headerlink" href="#django-domain-events" title="Permanent link">&para;</a></h1>
-<p>A Django domain-event log with in-process fan-out.</p>
-<p><code>fire()</code> records a typed event to a database table <strong>inside the caller's
-transaction</strong>; a relay delivers it to registered receivers afterwards,
-at-least-once, with per-receiver retry and dead-lettering.</p>
-<p>The one sentence everything else follows from:</p>
-<blockquote>
-<p><strong>The event exists if and only if the change committed.</strong></p>
-</blockquote>
-<p>That is what closes the dual-write gap, and it is why <code>fire()</code> means "record
-intent" rather than "call receivers".</p>
-<h2 id="what-it-is-not">What it is not<a class="headerlink" href="#what-it-is-not" title="Permanent link">&para;</a></h2>
-<p>This is <strong>not a signals replacement</strong>, and it should not be adopted as one. A
-database write per event rules out chatty notification use. What it buys instead
-is three things signals structurally cannot have:</p>
+<h1 id="declaring-events-and-receivers">Declaring events and receivers<a class="headerlink" href="#declaring-events-and-receivers" title="Permanent link">&para;</a></h1>
+<h2 id="events">Events<a class="headerlink" href="#events" title="Permanent link">&para;</a></h2>
+<p>An event is a <strong>frozen dataclass</strong> decorated with <code>@event</code>.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nd">@event</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">slots</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">OrderPlaced</span><span class="p">:</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">order_id</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">total_cents</span><span class="p">:</span> <span class="nb">int</span>
+</span></code></pre></div>
+<p>Frozen is enforced, not suggested: at-least-once delivery hands a <em>different</em>
+instance to every attempt, so a receiver mutating one writes to a copy and the
+mutation quietly disappears. The decorator raises rather than let that happen.</p>
+<p>The default name is <code>&lt;app_label&gt;.&lt;ClassName&gt;</code>. Pin it when renaming the class
+would strand rows written under the old name:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nd">@event</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">"orders.OrderPlaced"</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">slots</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">OrderSubmitted</span><span class="p">:</span> <span class="o">...</span>
+</span></code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">The name is what rows are written under</p>
+<p>Renaming the class without pinning the name leaves every unfinished row
+naming something the registry no longer has. The
+<a href="../introspection/#system-checks"><code>W002</code> check</a> exists to catch exactly that,
+because nothing else would: the receivers keep their keys, so nothing looks
+orphaned.</p>
+</div>
+<h2 id="receivers">Receivers<a class="headerlink" href="#receivers" title="Permanent link">&para;</a></h2>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="n">DURABLE</span><span class="p">,</span> <span class="n">max_attempts</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">reserve_stock</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Default</th>
+<th>Means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mode</code></td>
+<td><code>DURABLE</code></td>
+<td>Timing and guarantee. See <a href="../delivery/">delivery</a>.</td>
+</tr>
+<tr>
+<td><code>key</code></td>
+<td><code>&lt;app_label&gt;.&lt;func_name&gt;</code></td>
+<td>The identity delivery rows address.</td>
+</tr>
+<tr>
+<td><code>max_attempts</code></td>
+<td><code>5</code></td>
+<td>Copied onto each row <strong>at fire time</strong>.</td>
+</tr>
+<tr>
+<td><code>eager</code></td>
+<td><code>False</code></td>
+<td>Also attempt immediately after commit, relay as fallback.</td>
+</tr>
+<tr>
+<td><code>site</code></td>
+<td><code>"relay"</code></td>
+<td>Where the code runs. <code>"task"</code> hands it to a task backend.</td>
+</tr>
+<tr>
+<td><code>takes_context</code></td>
+<td><code>False</code></td>
+<td>Receive a second <code>DeliveryContext</code> argument.</td>
+</tr>
+</tbody>
+</table>
+<p><code>takes_context</code> is the spelling <code>django.tasks.task</code> uses for the same idea. The
+overloads make a type checker enforce the arity it implies, so declaring one and
+writing the other fails at the decorator rather than in the relay hours later.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">takes_context</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">audit</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DeliveryContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="n">log</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"attempt </span><span class="si">%s</span><span class="s2"> of </span><span class="si">%s</span><span class="s2">"</span><span class="p">,</span> <span class="n">ctx</span><span class="o">.</span><span class="n">attempt</span><span class="p">,</span> <span class="n">ctx</span><span class="o">.</span><span class="n">event_name</span><span class="p">)</span>
+</span></code></pre></div>
+<div class="admonition note">
+<p class="admonition-title"><code>max_attempts</code> is frozen at fire time</p>
+<p>It is copied onto the delivery row when the event is fired, so lowering it
+later cannot retroactively dead-letter rows already in flight.</p>
+</div>
+<h2 id="where-declarations-live">Where declarations live<a class="headerlink" href="#where-declarations-live" title="Permanent link">&para;</a></h2>
+<p>Put them in an <code>events.py</code> module inside an installed app. The app config
+autodiscovers that module name at startup, which is also how the default names
+resolve - <code>get_containing_app_config</code> only answers once the app registry is
+populated.</p>
+<p>Importing the module some other way works, but a declaration that is never
+imported is a receiver that never runs, with no error to read.</p>
+<h2 id="payload-evolution">Payload evolution<a class="headerlink" href="#payload-evolution" title="Permanent link">&para;</a></h2>
+<p>A row written last week is delivered or replayed today, after the event class
+gained a field. The codec decides whether that explodes, and the default rule is
+<strong>additive-only, with defaults</strong>.</p>
+<table>
+<thead>
+<tr>
+<th>Change to the event class</th>
+<th>Old row decodes</th>
+<th>Because</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Field <strong>added</strong> with a default</td>
+<td>yes, default filled</td>
+<td>a missing key is not an error when the field has one</td>
+</tr>
+<tr>
+<td>Field <strong>removed</strong> from the class</td>
+<td>yes, extra key ignored</td>
+<td>decoding is non-strict on purpose</td>
+</tr>
+<tr>
+<td>Field <strong>added without</strong> a default</td>
+<td>no</td>
+<td>the change <em>was</em> breaking, and the error names the field</td>
+</tr>
+<tr>
+<td>Type changed incompatibly</td>
+<td>no</td>
+<td>the error names the field, the expected type and the offending value</td>
+</tr>
+</tbody>
+</table>
+<p>The two tolerant cases are tolerated silently; the two breaking cases fail with a
+sentence good enough to be the dead-letter reason. That message lands in
+<code>last_error</code> verbatim, so an operator reading it knows which migration did it.</p>
+<p>A decode failure is a <strong>terminal state for that delivery</strong>, never a crashed relay
+loop: one undecodable row must not stop the other four thousand.</p>
+<h2 id="codecs">Codecs<a class="headerlink" href="#codecs" title="Permanent link">&para;</a></h2>
+<p>The codec is a seam, named in settings rather than sniffed from what is
+installed - a codec that picks itself decodes on one machine and raises on
+another.</p>
 <ul>
-<li><strong>A crash story.</strong> A process that dies mid-fan-out owes the same work when it
-  comes back, because the debt is a row.</li>
-<li><strong>Durable attribution.</strong> Who caused what, recorded on the row, still readable
-  hours later in another process.</li>
-<li><strong>Queryable introspection.</strong> "Which receiver has not run since June" is a
-  query here, not a guess.</li>
+<li><code>DataclassCodec</code> (default) - flat dataclasses, every scalar Django's JSON
+  encoder handles, plus <code>Decimal</code>, <code>datetime</code>, <code>UUID</code>, <code>Enum</code> and <code>Literal</code>.</li>
+<li><code>django_domain_events.codecs.dacite_codec.DaciteCodec</code> - adds <strong>nested</strong>
+  dataclasses on the decode side. Needs the <code>dacite</code> extra.</li>
 </ul>
-<h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span>django-domain-events
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="s2">"CODEC"</span><span class="p">:</span> <span class="s2">"django_domain_events.codecs.dacite_codec.DaciteCodec"</span><span class="p">,</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="p">}</span>
 </span></code></pre></div>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">INSTALLED_APPS</span> <span class="o">=</span> <span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="s2">"django.contrib.auth"</span><span class="p">,</span> <span class="s2">"django_domain_events"</span><span class="p">]</span>
-</span></code></pre></div>
-<p><code>django.contrib.auth</code> is required: the event row carries a nullable foreign key
-to <code>AUTH_USER_MODEL</code>, and the migration depends on it.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>migrate
-</span></code></pre></div>
-<p>Nested dataclass payloads need the decode half of the codec:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"django-domain-events[dacite]"</span>
-</span></code></pre></div>
-<h2 id="quickstart">Quickstart<a class="headerlink" href="#quickstart" title="Permanent link">&para;</a></h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># orders/events.py</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">DURABLE</span><span class="p">,</span> <span class="n">event</span><span class="p">,</span> <span class="n">receiver</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="nd">@event</span>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">slots</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="k">class</span><span class="w"> </span><span class="nc">OrderPlaced</span><span class="p">:</span>
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>    <span class="n">order_id</span><span class="p">:</span> <span class="nb">int</span>
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>    <span class="n">total_cents</span><span class="p">:</span> <span class="nb">int</span>
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>
-</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>
-</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="n">DURABLE</span><span class="p">)</span>
-</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="k">def</span><span class="w"> </span><span class="nf">reserve_stock</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
-</span></code></pre></div>
-<p>Declarations live in an <code>events.py</code> inside an installed app; they are
-autodiscovered at startup.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">with</span> <span class="n">transaction</span><span class="o">.</span><span class="n">atomic</span><span class="p">():</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="n">order</span> <span class="o">=</span> <span class="n">Order</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="n">fire</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">(</span><span class="n">order_id</span><span class="o">=</span><span class="n">order</span><span class="o">.</span><span class="n">id</span><span class="p">,</span> <span class="n">total_cents</span><span class="o">=</span><span class="n">order</span><span class="o">.</span><span class="n">total_cents</span><span class="p">))</span>
-</span></code></pre></div>
-<p>The event row and one delivery row per durable receiver are written in that same
-transaction. Then run the relay:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>deliver_events
-</span></code></pre></div>
-<h2 id="where-to-go-next">Where to go next<a class="headerlink" href="#where-to-go-next" title="Permanent link">&para;</a></h2>
-<ul>
-<li><a href="declaring/">Declaring events and receivers</a> - the two decorators, payload
-  rules, and what happens when a payload changes shape.</li>
-<li><a href="delivery/">Delivery</a> - the two knobs, the relay, and what failure means in
-  each mode.</li>
-<li><a href="scope/">Scope and attribution</a> - <code>attributed()</code>, <code>suppressed()</code>, causation
-  chains, and the one rule that matters for threads.</li>
-<li><a href="operations/">Operations</a> - prune, replay, requeue, and running the relay
-  for a year without a DBA.</li>
-<li><a href="introspection/">Introspection</a> - the catalogue, the queries, the system
-  checks and the admin.</li>
-<li><a href="settings/">Settings</a> - every key, its default and what it costs.</li>
-<li><a href="reference/">API reference</a>.</li>
-</ul>
-<h2 id="status">Status<a class="headerlink" href="#status" title="Permanent link">&para;</a></h2>
-<p>Early development. The API is not stable; see the
-<a href="https://github.com/Artui/django-domain-events/blob/main/CHANGELOG.md">changelog</a>
-for what has landed in each release.</p>
+<p>A <a href="../introspection/#system-checks">system check</a> verifies the configured codec
+imports at startup, rather than letting a missing extra first surface as a failed
+delivery in a worker.</p>
 
 
 
@@ -815,10 +883,10 @@ for what has landed in each release.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "search.highlight", "search.suggest", "content.code.copy", "content.code.annotate", "content.action.edit", "toc.follow"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "search.highlight", "search.suggest", "content.code.copy", "content.code.annotate", "content.action.edit", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

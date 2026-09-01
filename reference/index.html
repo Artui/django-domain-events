@@ -1,0 +1,3509 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A Django domain-event log with in-process fan-out: typed events, a durable outbox, per-receiver retry and dead-letter.">
+      
+      
+      
+        <link rel="canonical" href="https://artui.github.io/django-domain-events/reference/">
+      
+      
+        <link rel="prev" href="../settings/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>API reference - django-domain-events</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#api-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="django-domain-events" class="md-header__button md-logo" aria-label="django-domain-events" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            django-domain-events
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              API reference
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/Artui/django-domain-events" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    Artui/django-domain-events
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="django-domain-events" class="md-nav__button md-logo" aria-label="django-domain-events" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    django-domain-events
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/Artui/django-domain-events" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    Artui/django-domain-events
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../declaring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Declaring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../delivery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Delivery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scope/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scope and attribution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../operations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../introspection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Introspection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#declaring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Declaring
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.event.event" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        event
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.receiver.receiver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        receiver
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#firing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Firing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.fire.fire" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        fire
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.attributed.attributed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        attributed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.attributed.current_scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        current_scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.suppressed.suppressed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        suppressed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.causation.caused_by" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        caused_by
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.propagate_scope.propagate_scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        propagate_scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delivery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delivery
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.run_relay.run_relay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_relay
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.deliver.deliver_one" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        deliver_one
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.deliver.deliver_pending" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        deliver_pending
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.claim_batch.claim_batch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        claim_batch
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.backoff.backoff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        backoff
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.wake.notify_relay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        notify_relay
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.prune_events.prune_events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        prune_events
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.replay_events.replay_events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        replay_events
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.requeue_dead.requeue_dead" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        requeue_dead
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#introspection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Introspection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.catalogue.catalogue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        catalogue
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.render_catalogue.render_catalogue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        render_catalogue
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.what_listens_to.what_listens_to" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        what_listens_to
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.listens_for.listens_for" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        listens_for
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.quiet_receivers.quiet_receivers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        quiet_receivers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.drain_outbox.drain_outbox" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        drain_outbox
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.assert_fired.assert_fired" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        assert_fired
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_mode.DeliveryMode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DeliveryMode
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="DeliveryMode">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_mode.DeliveryMode.INLINE" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        INLINE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_mode.DeliveryMode.ON_COMMIT" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ON_COMMIT
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_mode.DeliveryMode.DURABLE" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DURABLE
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_status.DeliveryStatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DeliveryStatus
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="DeliveryStatus">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_status.DeliveryStatus.FAILED" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FAILED
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_status.DeliveryStatus.ORPHANED" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ORPHANED
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_context.DeliveryContext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DeliveryContext
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.scope.Scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scope">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.scope.Scope.merged" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        merged
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.catalogue.Catalogue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Catalogue
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.catalogue_event.CatalogueEvent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CatalogueEvent
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.catalogue_field.CatalogueField" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CatalogueField
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CatalogueField">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.catalogue_field.CatalogueField.required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        required
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.catalogue_receiver.CatalogueReceiver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CatalogueReceiver
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.quiet_receiver.QuietReceiver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        QuietReceiver
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="QuietReceiver">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.quiet_receiver.QuietReceiver.last_succeeded_at" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        last_succeeded_at
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.registered_event.RegisteredEvent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RegisteredEvent
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.registered_receiver.RegisteredReceiver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RegisteredReceiver
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.task_backend.TaskBackend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TaskBackend
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TaskBackend">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.task_backend.TaskBackend.enqueue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        enqueue
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.codecs.payload_codec.PayloadCodec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PayloadCodec
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#declaring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Declaring
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.event.event" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        event
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.receiver.receiver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        receiver
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#firing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Firing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.fire.fire" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        fire
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.attributed.attributed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        attributed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.attributed.current_scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        current_scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.suppressed.suppressed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        suppressed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.causation.caused_by" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        caused_by
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.propagate_scope.propagate_scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        propagate_scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delivery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delivery
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.run_relay.run_relay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_relay
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.deliver.deliver_one" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        deliver_one
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.deliver.deliver_pending" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        deliver_pending
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.claim_batch.claim_batch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        claim_batch
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.backoff.backoff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        backoff
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.wake.notify_relay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        notify_relay
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.prune_events.prune_events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        prune_events
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.replay_events.replay_events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        replay_events
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.requeue_dead.requeue_dead" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        requeue_dead
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#introspection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Introspection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.catalogue.catalogue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        catalogue
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.render_catalogue.render_catalogue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        render_catalogue
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.what_listens_to.what_listens_to" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        what_listens_to
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.listens_for.listens_for" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        listens_for
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.quiet_receivers.quiet_receivers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        quiet_receivers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.drain_outbox.drain_outbox" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        drain_outbox
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.assert_fired.assert_fired" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        assert_fired
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_mode.DeliveryMode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DeliveryMode
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="DeliveryMode">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_mode.DeliveryMode.INLINE" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        INLINE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_mode.DeliveryMode.ON_COMMIT" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ON_COMMIT
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_mode.DeliveryMode.DURABLE" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DURABLE
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_status.DeliveryStatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DeliveryStatus
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="DeliveryStatus">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_status.DeliveryStatus.FAILED" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FAILED
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_status.DeliveryStatus.ORPHANED" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ORPHANED
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_context.DeliveryContext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DeliveryContext
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.scope.Scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scope">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.scope.Scope.merged" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        merged
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.catalogue.Catalogue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Catalogue
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.catalogue_event.CatalogueEvent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CatalogueEvent
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.catalogue_field.CatalogueField" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CatalogueField
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CatalogueField">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.catalogue_field.CatalogueField.required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        required
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.catalogue_receiver.CatalogueReceiver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CatalogueReceiver
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.quiet_receiver.QuietReceiver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        QuietReceiver
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="QuietReceiver">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.quiet_receiver.QuietReceiver.last_succeeded_at" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        last_succeeded_at
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.registered_event.RegisteredEvent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RegisteredEvent
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.registered_receiver.RegisteredReceiver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RegisteredReceiver
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.task_backend.TaskBackend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TaskBackend
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TaskBackend">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.task_backend.TaskBackend.enqueue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        enqueue
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.codecs.payload_codec.PayloadCodec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PayloadCodec
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/Artui/django-domain-events/edit/main/docs/reference.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="api-reference">API reference<a class="headerlink" href="#api-reference" title="Permanent link">&para;</a></h1>
+<p>Everything below is exported from <code>django_domain_events</code> directly.</p>
+<h2 id="declaring">Declaring<a class="headerlink" href="#declaring" title="Permanent link">&para;</a></h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.event.event" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">event</span>
+
+
+<a href="#django_domain_events.event.event" class="headerlink" title="Permanent link">&para;</a></h2>
+          <div class="doc-overloads">
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">event</span><span class="p">(</span><span class="bp">cls</span><span class="p">:</span> <span class="n">E</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">E</span>
+</span></code></pre></div><div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">event</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">version</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">E</span><span class="p">],</span> <span class="n">E</span><span class="p">]</span>
+</span></code></pre></div>          </div>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">event</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="bp">cls</span><span class="p">:</span> <span class="nb">type</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">version</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">type</span> <span class="o">|</span> <span class="n">Callable</span><span class="p">[[</span><span class="nb">type</span><span class="p">],</span> <span class="nb">type</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Register a frozen dataclass as an event, bare or called.</p>
+<p>The default name is <code>&lt;app_label&gt;.&lt;ClassName&gt;</code>. Pin it with <code>name=</code> when
+renaming the class would otherwise strand rows written under the old one.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.receiver.receiver" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">receiver</span>
+
+
+<a href="#django_domain_events.receiver.receiver" class="headerlink" title="Permanent link">&para;</a></h2>
+          <div class="doc-overloads">
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">receiver</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">event_class</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">E</span><span class="p">],</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">mode</span><span class="p">:</span> <span class="n">DeliveryMode</span> <span class="o">=</span> <span class="n">DeliveryMode</span><span class="o">.</span><span class="n">DURABLE</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">takes_context</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="kc">False</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">max_attempts</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">eager</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">site</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"relay"</span><span class="p">,</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">Plain</span><span class="p">[</span><span class="n">E</span><span class="p">]],</span> <span class="n">Plain</span><span class="p">[</span><span class="n">E</span><span class="p">]]</span>
+</span></code></pre></div><div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">receiver</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">event_class</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">E</span><span class="p">],</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">mode</span><span class="p">:</span> <span class="n">DeliveryMode</span> <span class="o">=</span> <span class="n">DeliveryMode</span><span class="o">.</span><span class="n">DURABLE</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">takes_context</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="kc">True</span><span class="p">],</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">max_attempts</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">eager</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">site</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"relay"</span><span class="p">,</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">WithContext</span><span class="p">[</span><span class="n">E</span><span class="p">]],</span> <span class="n">WithContext</span><span class="p">[</span><span class="n">E</span><span class="p">]]</span>
+</span></code></pre></div>          </div>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">receiver</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">event_class</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">E</span><span class="p">],</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">mode</span><span class="p">:</span> <span class="n">DeliveryMode</span> <span class="o">=</span> <span class="n">DeliveryMode</span><span class="o">.</span><span class="n">DURABLE</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">takes_context</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">max_attempts</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">eager</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">site</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"relay"</span><span class="p">,</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">]],</span> <span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">]]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Register a callable to receive one event type.</p>
+<p><code>takes_context</code> is the spelling <code>django.tasks.task</code> uses for the same
+idea. The overloads make a checker enforce the arity it implies, so
+declaring one and writing the other fails at the decorator rather than in
+the relay hours later.</p>
+<p><code>max_attempts</code> is copied onto each delivery row at fire time.</p>
+<p><code>site</code> is the execution knob, separate from <code>mode</code> on purpose: timing is
+what a receiver promises about the transaction, and where its code runs is a
+different question that only a queue answers. <code>"relay"</code> runs it in the
+relay worker; <code>"task"</code> hands it to the configured task backend, which then
+acknowledges the row when it finishes.</p>
+<p><code>eager</code> additionally attempts delivery immediately after commit, in the
+firing process, with the relay as the fallback for whatever process death
+loses. It is what stops <code>DURABLE</code> feeling slow: outbox durability at
+on-commit latency, at the cost of a duplicate when the process dies
+mid-receiver - which at-least-once already required everyone to tolerate.</p>
+
+
+    </div>
+
+</div><h2 id="firing">Firing<a class="headerlink" href="#firing" title="Permanent link">&para;</a></h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.fire.fire" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">fire</span>
+
+
+<a href="#django_domain_events.fire.fire" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">fire</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">event</span><span class="p">:</span> <span class="nb">object</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">dedupe_key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">occurred_at</span><span class="p">:</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Record an event and owe it to its durable receivers. Returns its id.</p>
+<p>Returns the event id, or <code>None</code> when suppression discarded it without
+recording.</p>
+<p>This does not call durable receivers; it records intent. The event row and
+one delivery row per durable receiver are written inside the caller's
+transaction, so the obligation exists if and only if the business change
+committed. A durable receiver therefore cannot signal failure back here -
+only <code>INLINE</code> receivers can, by raising.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.attributed.attributed" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">attributed</span>
+
+
+<a href="#django_domain_events.attributed.attributed" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">attributed</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">actor</span><span class="p">:</span> <span class="n">Any</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">actor_key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">""</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">actor_label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">""</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">correlation_id</span><span class="p">:</span> <span class="n">UUID</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="o">**</span><span class="n">data</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Scope</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Attach ambient facts to every event fired inside this block.</p>
+<p>Nested blocks layer: an inner one overrides what it sets and inherits the
+rest, so a request-level actor survives a block that only adds a source. The
+actor is one such thing - naming any part of it replaces all of it, because
+a key from one block beside a user id from another describes two actors.</p>
+<p><code>actor</code> is any object; its identity is derived once, here. Only an instance
+of the user model reaches the <code>actor</code> column, which is a foreign key to it;
+everything else is identified by <code>actor_key</code> alone.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.attributed.current_scope" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">current_scope</span>
+
+
+<a href="#django_domain_events.attributed.current_scope" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">current_scope</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Scope</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>The scope in effect right now. Read at fire time, never later.</p>
+<p>A fresh empty Scope when none is set, not a shared one: a singleton's dict
+would be handed to callers and to receivers, and one mutation would reach
+every later event in the process.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.suppressed.suppressed" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">suppressed</span>
+
+
+<a href="#django_domain_events.suppressed.suppressed" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">suppressed</span><span class="p">(</span><span class="o">*</span><span class="n">event_classes</span><span class="p">:</span> <span class="nb">type</span><span class="p">,</span> <span class="n">reason</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">record</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Fire these events without delivering them, and say why.</p>
+<p>The reason is required and lands on the row. A silently dropped event is
+unauditable, which is the failure mode suppression is most likely to cause,
+so the default writes the event and marks it rather than discarding it.</p>
+<p><code>record=False</code> discards instead. It exists because a hundred-thousand-row
+import writing a hundred thousand suppressed rows is a surprise, and it
+trades the audit trail for the write - which is the whole point of the
+default, so it is named rather than defaulted.</p>
+<p>Nested blocks accumulate rather than replace. A library that suppresses its
+own event type inside your block must not re-enable yours: the innermost
+matching reason is the one recorded, and any matching block asking not to
+record wins, because that is the safer half of the disagreement.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.causation.caused_by" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">caused_by</span>
+
+
+<a href="#django_domain_events.causation.caused_by" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">caused_by</span><span class="p">(</span><span class="n">event_id</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">correlation_id</span><span class="p">:</span> <span class="n">UUID</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Mark events fired inside this block as descended from <code>event_id</code>.</p>
+<p>Set around every receiver, at every execution site, so an event a receiver
+fires records its parent with no ceremony at the call site - a parameter
+threaded through every receiver is a parameter someone forgets.</p>
+<p>Both values come off the parent's row, never from a <code>ContextVar</code>: by the
+time a durable delivery runs, the block that attributed the parent has long
+exited, possibly in another process. Causation is one hop; the correlation
+id is the whole tree, and carrying it here is what keeps a grandchild fired
+hours later in the same chain as the request that started it.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.propagate_scope.propagate_scope" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">propagate_scope</span>
+
+
+<a href="#django_domain_events.propagate_scope.propagate_scope" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">propagate_scope</span><span class="p">(</span><span class="n">func</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">R</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">R</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Carry the current scope into a thread you start yourself.</p>
+<p><code>threading.Thread</code> and <code>ThreadPoolExecutor.submit</code> start with an <em>empty</em>
+context, not a copy of yours - so a worker thread silently loses the
+attribution of whoever spawned it. This is the gotcha that actually bites,
+because nothing fails: events simply arrive with no actor.</p>
+<div class="language-text highlight"><pre><span></span><code>executor.submit(propagate_scope(fn), *args)
+</code></pre></div>
+<p>Call it at submit time, not as a <code>@propagate_scope</code> decorator. It
+captures the scope when it is called, and at decoration time - import time -
+there is none, so the decorator form silently carries nothing, which is the
+exact failure it exists to prevent.</p>
+<p>It captures the scope's <em>values</em> rather than a <code>contextvars.Context</code>, so
+the wrapper is reusable: one Context cannot be entered twice, and a fan-out
+that submits the same wrapped callable per item would raise on the second.</p>
+<p>Not needed across <code>sync_to_async</code> / <code>async_to_sync</code>, which carry context
+both ways, nor for <code>asyncio</code> tasks, which inherit a copy at creation. And
+it cannot help across a process boundary, where the answer is the event row.</p>
+
+
+    </div>
+
+</div><h2 id="delivery">Delivery<a class="headerlink" href="#delivery" title="Permanent link">&para;</a></h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.run_relay.run_relay" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">run_relay</span>
+
+
+<a href="#django_domain_events.run_relay.run_relay" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">run_relay</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">worker_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">passes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">now</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[],</span> <span class="n">datetime</span><span class="p">]</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">),</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">sleep</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="nb">float</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="n">time_module</span><span class="o">.</span><span class="n">sleep</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">wait</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="nb">float</span><span class="p">],</span> <span class="nb">bool</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">allow_unsafe_concurrency</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="n">DeliveryStatus</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Claim and deliver until <code>passes</code> is spent, or forever if it is None.</p>
+<p>The clock and the sleep are arguments rather than module calls so the loop
+is testable without waiting: every branch here turns on time, and a suite
+that had to elapse real seconds to reach one would either be slow or never
+reach it.</p>
+<p>Refuses to start where the database cannot express a skipped lock. Two
+workers there would hand the same row to two receivers on every pass, which
+at-least-once tolerates but nobody wants as a steady state.
+<code>allow_unsafe_concurrency</code> lifts that for a deployment running exactly one
+relay, which is a real shape in development; running two under it is the
+thing the guard exists to prevent.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.deliver.deliver_one" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">deliver_one</span>
+
+
+<a href="#django_domain_events.deliver.deliver_one" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">deliver_one</span><span class="p">(</span><span class="n">delivery_id</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">worker_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DeliveryStatus</span> <span class="o">|</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Run one delivery and record its outcome. <code>None</code> means it was lost.</p>
+<p>The receiver's work and the acknowledgement commit together, so a receiver
+touching only this database is effectively once: the duplicate at-least-once
+owes you cannot be observed. Side effects outside the database are
+at-least-once, as promised.</p>
+<p>Every write here is a compare-and-set against the claim this call read, and
+the lease is extended to cover this one delivery before the receiver runs.
+Both exist for the same reason: a claim can lapse while its worker is still
+alive, and a worker that has lost its row must not go on to write a verdict
+over whoever legitimately took it. Losing the row returns <code>None</code> rather
+than raising - it is an ordinary outcome of a lease expiring, not a fault.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.deliver.deliver_pending" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">deliver_pending</span>
+
+
+<a href="#django_domain_events.deliver.deliver_pending" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">deliver_pending</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">limit</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">worker_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"deliver_pending"</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">ignore_backoff</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="n">DeliveryStatus</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Claim and deliver what is owed, and report the outcome.</p>
+<p><code>limit=None</code> means everything owed, claimed in batches until none is left;
+a number caps it at that many. Claims go through the same leased path the
+relay uses, so a pass here and a running relay do not hand the same row to
+two receivers - on a backend with row locking. SQLite has none, so two
+concurrent passes there can both take the same row.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.claim_batch.claim_batch" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">claim_batch</span>
+
+
+<a href="#django_domain_events.claim_batch.claim_batch" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">claim_batch</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">worker_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">now</span><span class="p">:</span> <span class="n">datetime</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">lease</span><span class="p">:</span> <span class="n">timedelta</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">limit</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">only_ids</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">ignore_backoff</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Take ownership of up to <code>limit</code> deliveries and return their ids.</p>
+<p>Claims are leased, not marked: a worker that dies without acknowledging
+becomes re-claimable when its lease lapses, which is the same path as an
+ordinary retry rather than a special case.</p>
+<p>Rows are selected by <code>available_at</code> and never by primary key. A
+transaction holding a lower id can commit after one holding a higher id, so
+a row can become visible "in the past"; a high-water mark would skip it
+forever.</p>
+<p><code>ignore_backoff</code> claims rows whose retry is still scheduled. It exists for
+the test helper, which cannot wait out a jittered hour to observe a retry.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.backoff.backoff" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">backoff</span>
+
+
+<a href="#django_domain_events.backoff.backoff" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">backoff</span><span class="p">(</span><span class="n">attempt</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">base</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">cap</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">jitter</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">timedelta</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>How long to wait before attempt number <code>attempt</code> may be retried.</p>
+<p><code>jitter</code> is supplied by the caller as a value in [0, 1) rather than drawn
+here, so the schedule is a pure function of its arguments and a test can
+assert the curve instead of sampling it.</p>
+<p>Full jitter: the delay is drawn from the whole window up to the exponential
+ceiling, not added on top of it. Retrying a shared downstream at
+ceiling-plus-a-bit keeps every failed delivery in the same cohort, which is
+the thundering herd the backoff was meant to break up.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.wake.notify_relay" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">notify_relay</span>
+
+
+<a href="#django_domain_events.wake.notify_relay" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">notify_relay</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">supported</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">connection</span><span class="p">:</span> <span class="n">Any</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Tell a listening relay that something is owed.</p>
+<p>Fire-and-forget: a notification sent while nobody is listening is simply
+lost, which is why the relay's poll stays as the floor rather than being
+replaced by this. It removes latency and never carries the obligation - the
+delivery row does.</p>
+
+
+    </div>
+
+</div><h2 id="operations">Operations<a class="headerlink" href="#operations" title="Permanent link">&para;</a></h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.prune_events.prune_events" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">prune_events</span>
+
+
+<a href="#django_domain_events.prune_events.prune_events" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">prune_events</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">older_than</span><span class="p">:</span> <span class="n">timedelta</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">now</span><span class="p">:</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">batch_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">limit</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Delete settled events older than the window, and return how many went.</p>
+<p>An outbox without a prune story becomes the largest table in the database,
+and it becomes it quietly - which is why this ships rather than waiting for
+someone to notice.</p>
+<p>Only <em>settled</em> events: one with a delivery still pending, failed or claimed
+is still owed, and deleting it would drop work nobody recorded as lost. An
+event with no delivery rows at all - suppressed, or fired with no durable
+receivers - is settled by definition.</p>
+<p>Deletes in batches. A single statement over a year of rows takes a lock for
+as long as it runs, on the table the relay is trying to claim from.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.replay_events.replay_events" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">replay_events</span>
+
+
+<a href="#django_domain_events.replay_events.replay_events" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">replay_events</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">event_ids</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span> <span class="o">*</span><span class="p">,</span> <span class="n">receiver_keys</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Make these events owed again, and report what changed.</p>
+<p>The receiver set freezes at fire time, so deploying a new receiver does not
+hand it a backlog of week-old events. That is deliberate - and this is the
+other half of it: replay is an operation somebody invokes, with a name, and
+not an accident of a deploy.</p>
+<p>Two things happen, and they are counted separately because they are
+different decisions. A terminal delivery is <em>reopened</em>: it ran, and you want
+it to run again. A receiver with no row for the event is <em>added</em>: it did not
+exist when the event fired, and you are choosing to give it the backlog.</p>
+<p>A delivery still in flight is left alone. Reopening a claimed row would hand
+the same work to two receivers, which is the one thing the lease exists to
+prevent.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.requeue_dead.requeue_dead" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">requeue_dead</span>
+
+
+<a href="#django_domain_events.requeue_dead.requeue_dead" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">requeue_dead</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">receiver_key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">delivery_ids</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">limit</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Give dead-lettered deliveries their attempt budget back.</p>
+<p>Dead is where a delivery stops on its own; it is not where it stops for
+good. Attempts reset to zero rather than staying spent, because a row
+requeued at its limit dead-letters again on the first failure and the
+operator learns nothing they did not already know.</p>
+<p>Scoped by receiver, because the usual reason to requeue is that one
+downstream was broken and now is not. Scoped by row as well, because the
+other reason is an operator reading a dead-letter list and picking the four
+they understand.</p>
+
+
+    </div>
+
+</div><h2 id="introspection">Introspection<a class="headerlink" href="#introspection" title="Permanent link">&para;</a></h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.catalogue.catalogue" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">catalogue</span>
+
+
+<a href="#django_domain_events.catalogue.catalogue" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">catalogue</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Catalogue</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Describe every declared event, its payload shape and its receivers.</p>
+<p>The artefact a team wants and signals cannot produce: what exists, what
+listens, and under which guarantee - generated from the declarations rather
+than maintained beside them, so it cannot drift.</p>
+<p>Sorted by name throughout. A catalogue is written to a file and diffed
+against the last one, and import order is not a difference.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.render_catalogue.render_catalogue" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">render_catalogue</span>
+
+
+<a href="#django_domain_events.render_catalogue.render_catalogue" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">render_catalogue</span><span class="p">(</span><span class="n">catalogue</span><span class="p">:</span> <span class="n">Catalogue</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="nb">format</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'markdown'</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Render a catalogue as a document, in Markdown or JSON.</p>
+<p>Both, because they answer different questions: Markdown is read by a person
+onboarding onto a codebase, JSON is diffed by a pipeline that wants to fail
+a pull request for removing a field other teams consume.</p>
+<p>Both end in exactly one newline. These are written to a file and diffed,
+and a file with no final newline reports a change on its last line forever.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.what_listens_to.what_listens_to" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">what_listens_to</span>
+
+
+<a href="#django_domain_events.what_listens_to.what_listens_to" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">what_listens_to</span><span class="p">(</span><span class="n">event_class</span><span class="p">:</span> <span class="nb">type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">RegisteredReceiver</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Every receiver declared for one event, sorted by key.</p>
+<p>The question signals cannot answer: a Django signal's receivers are a list
+of weak references keyed by an opaque dispatch uid, so "who reacts to this"
+is answerable only by grepping.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.listens_for.listens_for" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">listens_for</span>
+
+
+<a href="#django_domain_events.listens_for.listens_for" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">listens_for</span><span class="p">(</span><span class="n">receiver_key</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">RegisteredEvent</span> <span class="o">|</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>The event one receiver is declared for, or None if no such receiver.</p>
+<p>The inverse direction, and the one an operator needs: a dead-letter row
+names a receiver key, and the next question is always what it was supposed
+to be receiving.</p>
+<p>None covers two cases that look the same from a delivery row - a key never
+declared, and one whose event class was deleted out from under it.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.quiet_receivers.quiet_receivers" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">quiet_receivers</span>
+
+
+<a href="#django_domain_events.quiet_receivers.quiet_receivers" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">quiet_receivers</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="o">*</span><span class="p">,</span> <span class="n">within</span><span class="p">:</span> <span class="n">timedelta</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">now</span><span class="p">:</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">QuietReceiver</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Declared receivers that have succeeded at nothing inside the window.</p>
+<p>The query an event log makes possible and a signal never will: "this
+receiver has not run since June" is a fact here, not a guess, because every
+durable delivery left a row.</p>
+<p>Driven by the registry rather than by the table, so a receiver that has
+never received anything appears - which is the answer worth having, and
+exactly the one a query over delivery rows alone cannot produce.</p>
+<p>Only DURABLE receivers write rows, so only they are reported. An INLINE or
+ON_COMMIT receiver has no delivery history to be quiet about, and listing it
+as silent forever would train the reader to ignore the output.</p>
+<p>Read off <code>succeeded_at</code> rather than <code>completed_at</code>, and with no status
+filter at all. Both of those describe the <em>current</em> cycle: replay and
+requeue reopen a row and clear them, so an operator who replays yesterday's
+events would then be told the receiver had never run. <code>Max</code> ignores nulls,
+so a receiver whose every delivery failed still reads as never having
+succeeded without a predicate saying so.</p>
+<p>The window defaults to RETENTION_DAYS, which is not a coincidence of
+numbers: past that point the prune has deleted the evidence, so "quiet for
+longer than retention" is the longest answer this can honestly give.</p>
+
+
+    </div>
+
+</div><h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.drain_outbox.drain_outbox" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">drain_outbox</span>
+
+
+<a href="#django_domain_events.drain_outbox.drain_outbox" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">drain_outbox</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">limit</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">respect_backoff</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="n">DeliveryStatus</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Deliver everything owed, from a test, through the production code path.</p>
+<p>Deliberately not a <code>task_always_eager</code> equivalent: bypassing the transport
+hides both the serialisation boundary and the timing, which is how a suite
+passes while production breaks. This runs the same claim, encode, decode and
+acknowledgement as the relay, and skips only the waiting.</p>
+<p>Skipping the waiting includes the retry backoff, which is why this ignores
+it by default: a failed delivery is scheduled a jittered interval ahead - up
+to an hour - and a test cannot sit that out. Pass <code>respect_backoff=True</code>
+to assert the schedule itself.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.assert_fired.assert_fired" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">assert_fired</span>
+
+
+<a href="#django_domain_events.assert_fired.assert_fired" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">assert_fired</span><span class="p">(</span><span class="n">event_class</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">E</span><span class="p">],</span> <span class="o">*</span><span class="p">,</span> <span class="n">times</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">E</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Assert an event was fired, and return the decoded events.</p>
+<p>Reads the log rather than patching <code>fire</code>: a mock records that a function
+was called, while the row is what the rest of the system reacts to. Decoding
+on the way out means a payload that cannot round-trip fails here too.</p>
+
+
+    </div>
+
+</div><h2 id="types">Types<a class="headerlink" href="#types" title="Permanent link">&para;</a></h2>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="django_domain_events.types.delivery_mode.DeliveryMode" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">DeliveryMode</span>
+
+
+<a href="#django_domain_events.types.delivery_mode.DeliveryMode" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="enum.Enum">Enum</span></code></p>
+
+
+
+        <p>Timing and guarantee, declared per receiver.</p>
+<p>Timing is separate from where a receiver's code runs; a queue is only ever an
+answer to the second question.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="django_domain_events.types.delivery_mode.DeliveryMode.INLINE" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">INLINE</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+<a href="#django_domain_events.types.delivery_mode.DeliveryMode.INLINE" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">INLINE</span> <span class="o">=</span> <span class="s1">'inline'</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Inside the firing transaction, and free to abort it by raising.</p>
+<p>Needs no durability: its failure mode is a rollback, so nothing can be owed.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="django_domain_events.types.delivery_mode.DeliveryMode.ON_COMMIT" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">ON_COMMIT</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+<a href="#django_domain_events.types.delivery_mode.DeliveryMode.ON_COMMIT" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">ON_COMMIT</span> <span class="o">=</span> <span class="s1">'on_commit'</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>After commit, in the firing process, best effort. Not recoverable.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="django_domain_events.types.delivery_mode.DeliveryMode.DURABLE" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">DURABLE</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+<a href="#django_domain_events.types.delivery_mode.DeliveryMode.DURABLE" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">DURABLE</span> <span class="o">=</span> <span class="s1">'durable'</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>After commit, at-least-once, retried, with a row recording the debt.</p>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="django_domain_events.types.delivery_status.DeliveryStatus" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">DeliveryStatus</span>
+
+
+<a href="#django_domain_events.types.delivery_status.DeliveryStatus" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="django.db.models.TextChoices">TextChoices</span></code></p>
+
+
+
+        <p>Status of one (event, durable receiver) pair.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="django_domain_events.types.delivery_status.DeliveryStatus.FAILED" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">FAILED</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+<a href="#django_domain_events.types.delivery_status.DeliveryStatus.FAILED" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">FAILED</span> <span class="o">=</span> <span class="p">(</span><span class="s1">'failed'</span><span class="p">,</span> <span class="s1">'Failed'</span><span class="p">)</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Raised, with attempts remaining. Distinct from PENDING so that "has this
+ever failed" is answerable without reading the attempt count.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="django_domain_events.types.delivery_status.DeliveryStatus.ORPHANED" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">ORPHANED</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+<a href="#django_domain_events.types.delivery_status.DeliveryStatus.ORPHANED" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">ORPHANED</span> <span class="o">=</span> <span class="p">(</span><span class="s1">'orphaned'</span><span class="p">,</span> <span class="s1">'Orphaned'</span><span class="p">)</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Addressed to a receiver key the registry no longer has.</p>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="django_domain_events.types.delivery_context.DeliveryContext" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">DeliveryContext</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#django_domain_events.types.delivery_context.DeliveryContext" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>Delivery metadata, passed only to receivers declaring <code>takes_context</code>.</p>
+<p>Frozen data read off the event row, never a live handle: a durable delivery
+can run in another process hours after the scope that produced it has gone.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="django_domain_events.types.scope.Scope" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">Scope</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#django_domain_events.types.scope.Scope" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>The ambient facts captured onto every event fired inside a block.</p>
+<p>Frozen, and nested blocks build a new one rather than mutating: a scope that
+could be edited from inside would let a receiver rewrite the attribution of
+events fired after it.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="django_domain_events.types.scope.Scope.merged" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">merged</span>
+
+
+<a href="#django_domain_events.types.scope.Scope.merged" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">merged</span><span class="p">(</span><span class="n">other</span><span class="p">:</span> <span class="n">Scope</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Scope</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Layer another scope over this one, keeping what it does not set.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="django_domain_events.types.catalogue.Catalogue" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">Catalogue</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#django_domain_events.types.catalogue.Catalogue" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>Every declared event and what listens to it, at one moment.</p>
+<p>A snapshot rather than a live view: it is built to be written to a file and
+compared against the one from last release, which is the whole point of
+having it.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="django_domain_events.types.catalogue_event.CatalogueEvent" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">CatalogueEvent</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#django_domain_events.types.catalogue_event.CatalogueEvent" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>One declared event, its payload shape and everything listening to it.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="django_domain_events.types.catalogue_field.CatalogueField" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">CatalogueField</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#django_domain_events.types.catalogue_field.CatalogueField" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>One field of an event payload, as the catalogue describes it.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="django_domain_events.types.catalogue_field.CatalogueField.required" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">required</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+<a href="#django_domain_events.types.catalogue_field.CatalogueField.required" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">required</span><span class="p">:</span> <span class="nb">bool</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>False when the field has a default, which is also the condition under
+which adding it is a non-breaking change to a log with rows already in it.</p>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="django_domain_events.types.catalogue_receiver.CatalogueReceiver" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">CatalogueReceiver</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#django_domain_events.types.catalogue_receiver.CatalogueReceiver" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>One receiver of one event, as the catalogue describes it.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="django_domain_events.types.quiet_receiver.QuietReceiver" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">QuietReceiver</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#django_domain_events.types.quiet_receiver.QuietReceiver" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>A declared receiver with nothing delivered to it inside the window.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="django_domain_events.types.quiet_receiver.QuietReceiver.last_succeeded_at" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">last_succeeded_at</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+<a href="#django_domain_events.types.quiet_receiver.QuietReceiver.last_succeeded_at" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">last_succeeded_at</span><span class="p">:</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>None means never - which is the more interesting answer of the two.</p>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="django_domain_events.types.registered_event.RegisteredEvent" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">RegisteredEvent</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#django_domain_events.types.registered_event.RegisteredEvent" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="django_domain_events.types.registered_receiver.RegisteredReceiver" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">RegisteredReceiver</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#django_domain_events.types.registered_receiver.RegisteredReceiver" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="django_domain_events.types.task_backend.TaskBackend" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">TaskBackend</span>
+
+
+<a href="#django_domain_events.types.task_backend.TaskBackend" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="typing.Protocol">Protocol</span></code></p>
+
+
+
+        <p>Where a durable receiver's code runs when the relay hands it off.</p>
+<p>The relay claims the row either way; this only decides who executes it. That
+is the whole reason the execution site is a separate knob from the timing:
+a queue is only ever an answer to the second question.</p>
+<p>The backend may lose an enqueue without consequence. The delivery row is the
+record, so anything dropped is reclaimed when the lease lapses - which is
+what makes a lossy queue safe here, and what keeps this a small protocol.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="django_domain_events.types.task_backend.TaskBackend.enqueue" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">enqueue</span>
+
+
+<a href="#django_domain_events.types.task_backend.TaskBackend.enqueue" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">enqueue</span><span class="p">(</span><span class="n">delivery_id</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Arrange for <code>deliver_one(delivery_id)</code> to run somewhere.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="django_domain_events.codecs.payload_codec.PayloadCodec" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">PayloadCodec</span>
+
+
+<a href="#django_domain_events.codecs.payload_codec.PayloadCodec" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="typing.Protocol">Protocol</span></code></p>
+
+
+
+        <p>How an event instance becomes a payload, and comes back.</p>
+<p>A seam because the two halves cost differently: encoding needs nothing this
+package does not have, while decoding a nested payload back into a frozen
+dataclass is worth a dependency. Every codec consumes an ordinary frozen
+dataclass, so the choice never reaches how events are declared.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "search.highlight", "search.suggest", "content.code.copy", "content.code.annotate", "content.action.edit", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
