@@ -91,6 +91,12 @@ The window defaults to `RETENTION_DAYS`, which is not a coincidence of numbers:
 past that point the prune has deleted the evidence, so "quiet for longer than
 retention" is the longest answer this can honestly give.
 
+The success time is read off `succeeded_at`, which is written on success and
+never cleared - unlike `completed_at`, which replay and requeue clear because a
+reopened row has not settled again. Reading the cleared column would tell an
+operator who had just replayed yesterday's events that the receiver they were
+re-running had never run at all.
+
 ## System checks
 
 Run with `python manage.py check`.
