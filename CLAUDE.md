@@ -144,6 +144,11 @@ bodies.
 Absolute and fully qualified, never relative - `ban-relative-imports = "all"` is
 configured and enforced. isort order is stdlib, third party, first party.
 
+`from __future__ import annotations` goes at the top of every annotated file -
+the package, the tests and the example project alike. `required-imports` in the
+isort config is what enforces it rather than leaving it to memory, and the two
+exemptions are re-export `__init__.py` files and Django's generated migrations.
+
 ## Compatibility floor
 
 | | Minimum | Tested against |

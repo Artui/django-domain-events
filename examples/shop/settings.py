@@ -6,6 +6,8 @@ relay over one queue needs SELECT ... FOR UPDATE SKIP LOCKED, which SQLite has
 neither the statement nor the concurrency model for.
 """
 
+from __future__ import annotations
+
 import getpass
 import os
 

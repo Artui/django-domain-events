@@ -6,6 +6,8 @@
 [![Django versions](https://img.shields.io/pypi/djversions/django-domain-events.svg)](https://pypi.org/project/django-domain-events/)
 [![Docs](https://img.shields.io/badge/docs-artui.github.io-blue.svg)](https://artui.github.io/django-domain-events/)
 [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Artui/django-domain-events/gh-pages/coverage.json)](https://github.com/Artui/django-domain-events/actions/workflows/tests.yml)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![License](https://img.shields.io/pypi/l/django-domain-events.svg)](LICENSE)
 
 A Django domain-event log with in-process fan-out.
 
