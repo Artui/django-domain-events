@@ -1,5 +1,7 @@
 """One scenario, start to finish, printing what the log actually recorded."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from django.contrib.auth.models import User

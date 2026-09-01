@@ -9,6 +9,8 @@ concurrent relays have neither the statement nor the concurrency model on SQLite
 so a green SQLite run is compatible with those claims being untested.
 """
 
+from __future__ import annotations
+
 import os
 
 SECRET_KEY = "not-a-secret-this-is-the-test-suite"

@@ -3,6 +3,8 @@
 One file per source file, same name. This one covers the package root.
 """
 
+from __future__ import annotations
+
 import pytest
 
 import django_domain_events

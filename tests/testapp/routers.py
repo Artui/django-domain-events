@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+
 class EventsRouter:
     """Sends this package's models to the ``events`` database."""
 

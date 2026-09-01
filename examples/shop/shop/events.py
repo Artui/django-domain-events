@@ -4,6 +4,8 @@ Written as a worked example: each receiver below exists to show one knob doing
 something a real application would want.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any
 

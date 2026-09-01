@@ -1,5 +1,7 @@
 """A minimal installed app, so declarations have an app label to derive from."""
 
+from __future__ import annotations
+
 from django.apps import AppConfig
 
 

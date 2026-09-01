@@ -5,6 +5,8 @@ Deliberately declared here rather than inside each test: autodiscovery of an
 that only ever registers inline never runs that path.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
