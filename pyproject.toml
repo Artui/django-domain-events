@@ -61,7 +61,7 @@ Issues = "https://github.com/Artui/django-domain-events/issues"
 [dependency-groups]
 dev = [
     "ruff>=0.14.0",
-    "ty>=0.0.1a10",
+    "ty>=0.0.32",
     "pre-commit>=4.0.0",
     "pytest>=8.0.0",
     "pytest-django>=4.9.0",
