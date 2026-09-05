@@ -867,6 +867,11 @@ report an empty queue while work is still outstanding.</p>
 <td>The configured <code>CODEC</code> cannot be imported</td>
 </tr>
 <tr>
+<td><code>E005</code></td>
+<td>Error</td>
+<td>A declared event has a field the configured codec cannot rebuild</td>
+</tr>
+<tr>
 <td><code>W001</code></td>
 <td>Warning</td>
 <td>Deliveries are owed to a receiver key the registry no longer has</td>
@@ -876,12 +881,35 @@ report an empty queue while work is still outstanding.</p>
 <td>Warning</td>
 <td>Deliveries are owed for an event name the registry no longer has</td>
 </tr>
+<tr>
+<td><code>W006</code></td>
+<td>Warning</td>
+<td>A settings dict is named <code>DOMAIN_EVENTS</code> rather than <code>DJANGO_DOMAIN_EVENTS</code></td>
+</tr>
+<tr>
+<td><code>W007</code></td>
+<td>Warning</td>
+<td><code>DJANGO_DOMAIN_EVENTS</code> holds a key this package never reads</td>
+</tr>
 </tbody>
 </table>
 <p><code>E001</code> matters because nothing else would ever say so: the event cannot be fired,
 so there is no failure to observe, only silence.</p>
 <p><code>E002</code> runs at startup because a codec is imported lazily - without it, the first
 symptom of a missing extra is a delivery failing in a worker.</p>
+<p><code>E005</code> asks the harder half of the same question. <code>E002</code> says the codec can be
+imported; <code>E005</code> says it can decode the events this project declares, which is
+what actually fails. The asymmetry is what makes it worth a check: encoding
+accepts whatever the annotation says and commits it inside the caller's
+transaction, so the event exists, and only the decode refuses - in the relay,
+in another process, one dead letter per receiver. A codec that does not
+implement <code>unsupported_fields</code> is not interrogated, because this package should
+not guess at what a codec it did not write can do.</p>
+<p><code>W006</code> and <code>W007</code> exist because both mistakes are otherwise silent. <code>setting()</code>
+reads only the keys this package asks for, so a typo sits in the settings
+looking effective; and the dict is <code>DJANGO_DOMAIN_EVENTS</code> while the app label
+and most prose say "domain events", so a <code>DOMAIN_EVENTS</code> block returns nothing
+and every value falls back to its default with nothing said.</p>
 <p><code>W002</code> catches <strong>a renamed event</strong>, which <code>W001</code> cannot see: the receivers keep
 their keys, so nothing looks orphaned, while every row written under the old name
 now decodes to nothing and spends one attempt budget at a time finding out. Fix

@@ -891,17 +891,28 @@ installed - a codec that picks itself decodes on one machine and raises on
 another.</p>
 <ul>
 <li><code>DataclassCodec</code> (default) - flat dataclasses, every scalar Django's JSON
-  encoder handles, plus <code>Decimal</code>, <code>datetime</code>, <code>UUID</code>, <code>Enum</code> and <code>Literal</code>.</li>
+  encoder handles, plus <code>Decimal</code>, <code>datetime</code>, <code>UUID</code>, <code>Enum</code> and <code>Literal</code>,
+  and <code>list</code> or <code>tuple</code> of any of those.</li>
 <li><code>django_domain_events.codecs.dacite_codec.DaciteCodec</code> - adds <strong>nested</strong>
   dataclasses on the decode side. Needs the <code>dacite</code> extra.</li>
 </ul>
+<p><code>tuple</code> is worth naming because an event is a frozen dataclass, so a <code>tuple</code> is
+the sequence type that belongs in one - a <code>list</code> field is a mutable field in a
+nominally immutable object. JSON has no tuple, so a tuple is written as a list
+and read back as a tuple; the annotation is what decides.</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="s2">"CODEC"</span><span class="p">:</span> <span class="s2">"django_domain_events.codecs.dacite_codec.DaciteCodec"</span><span class="p">,</span>
 </span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>A <a href="../introspection/#system-checks">system check</a> verifies the configured codec
-imports at startup, rather than letting a missing extra first surface as a failed
-delivery in a worker.</p>
+<p>Two <a href="../introspection/#system-checks">system checks</a> run at startup rather than
+letting the problem first surface as a failed delivery in a worker: one verifies
+the configured codec imports, and one verifies it can actually rebuild the events
+this project declares.</p>
+<p>The second exists because the failure it catches is asymmetric. <code>fire()</code> encodes
+and commits whatever the annotation says, so an event the codec cannot decode is
+recorded successfully inside the caller's transaction and then dead-letters on
+every durable delivery - in the relay, in another process, possibly hours later.
+Nothing before that point fails.</p>
 
 
 
