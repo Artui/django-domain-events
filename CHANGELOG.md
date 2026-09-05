@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Both codecs decode `tuple` fields.** An event is a frozen dataclass, so a
+  `tuple` is the sequence type that belongs in one -- a `list` field is a
+  mutable field in a nominally immutable object. The package therefore steers
+  every consumer towards `tuple[X, ...]`, and until now neither codec could
+  read one back: `DataclassCodec` refused it and pointed at `DaciteCodec`, and
+  `DaciteCodec` refused it too with a `WrongTypeError`, because JSON has no
+  tuple and the encoder had written a list. `list[X]` worked in both, so the
+  hint sent readers to a codec that failed the same way for a different reason.
+
+  Fixed-length tuples decode as well, and a payload of the wrong length is
+  refused rather than truncated or padded.
+
+- **A system check that declared events can actually be decoded** (`E005`).
+  The existing codec check asks whether the codec can be *imported*; this one
+  asks whether it can rebuild the events this project declares, which is the
+  question whose answer is silent when it is no. `fire()` encodes and commits
+  whatever the annotation says, so an undecodable event is recorded
+  successfully inside the caller's transaction and then dead-letters on every
+  durable delivery -- in the relay, in another process, possibly hours later.
+
+  Codecs answer through a new optional `unsupported_fields()`. A codec that
+  does not implement it is not interrogated, because this package should not
+  guess at what a codec it did not write can do.
+
+- **Two system checks for the settings block** (`W006`, `W007`), because both
+  mistakes are otherwise silent. `setting()` reads only the keys this package
+  asks for, so an unrecognised key sits in the settings looking effective; and
+  the dict is `DJANGO_DOMAIN_EVENTS` while the app label, the import path and
+  most prose say "domain events", so a `DOMAIN_EVENTS` block returns nothing
+  and every value falls back to its default with nothing said.
+
+  That second case is why this shipped alongside `E005` rather than after it: a
+  consumer set `CODEC` correctly in a misnamed block, saw no effect, and spent
+  a round debugging a decode failure with the fix visibly in place.
+
+- **`DeliveryContext.actor_label`**, beside `actor_key`. `attributed()` already
+  accepted the label and `EventRecord` already persisted it; the object handed
+  to a receiver that declared `takes_context=True` was the one place it did not
+  reach. `actor_key` is `auth.User:1`, which is right for joining and wrong for
+  the line an audit reader sees, and that difference is why the two are separate
+  fields on the row.
+
+  Both construction sites read it off the event row rather than the ambient
+  scope, so a durable delivery running hours later in another process gets the
+  same value as an inline one.
+
 ### Notes
 - **The `ty` floor was raised to `0.0.32`, because the declared one was false.**
   `ty==0.0.1a10` cannot parse the `[tool.ty.environment]` table this repository

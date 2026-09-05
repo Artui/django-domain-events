@@ -158,14 +158,32 @@ Run with `python manage.py check`.
 | --- | --- | --- |
 | `E001` | Error | A receiver listens for a class that was never `@event`-decorated |
 | `E002` | Error | The configured `CODEC` cannot be imported |
+| `E005` | Error | A declared event has a field the configured codec cannot rebuild |
 | `W001` | Warning | Deliveries are owed to a receiver key the registry no longer has |
 | `W002` | Warning | Deliveries are owed for an event name the registry no longer has |
+| `W006` | Warning | A settings dict is named `DOMAIN_EVENTS` rather than `DJANGO_DOMAIN_EVENTS` |
+| `W007` | Warning | `DJANGO_DOMAIN_EVENTS` holds a key this package never reads |
 
 `E001` matters because nothing else would ever say so: the event cannot be fired,
 so there is no failure to observe, only silence.
 
 `E002` runs at startup because a codec is imported lazily - without it, the first
 symptom of a missing extra is a delivery failing in a worker.
+
+`E005` asks the harder half of the same question. `E002` says the codec can be
+imported; `E005` says it can decode the events this project declares, which is
+what actually fails. The asymmetry is what makes it worth a check: encoding
+accepts whatever the annotation says and commits it inside the caller's
+transaction, so the event exists, and only the decode refuses - in the relay,
+in another process, one dead letter per receiver. A codec that does not
+implement `unsupported_fields` is not interrogated, because this package should
+not guess at what a codec it did not write can do.
+
+`W006` and `W007` exist because both mistakes are otherwise silent. `setting()`
+reads only the keys this package asks for, so a typo sits in the settings
+looking effective; and the dict is `DJANGO_DOMAIN_EVENTS` while the app label
+and most prose say "domain events", so a `DOMAIN_EVENTS` block returns nothing
+and every value falls back to its default with nothing said.
 
 `W002` catches **a renamed event**, which `W001` cannot see: the receivers keep
 their keys, so nothing looks orphaned, while every row written under the old name
