@@ -96,6 +96,7 @@ def fire(
         event_name=record.name,
         attempt=1,
         actor_key=record.actor_key,
+        actor_label=record.actor_label,
         scope=record.scope,
     )
 

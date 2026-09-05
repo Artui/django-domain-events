@@ -137,9 +137,15 @@ installed - a codec that picks itself decodes on one machine and raises on
 another.
 
 - `DataclassCodec` (default) - flat dataclasses, every scalar Django's JSON
-  encoder handles, plus `Decimal`, `datetime`, `UUID`, `Enum` and `Literal`.
+  encoder handles, plus `Decimal`, `datetime`, `UUID`, `Enum` and `Literal`,
+  and `list` or `tuple` of any of those.
 - `django_domain_events.codecs.dacite_codec.DaciteCodec` - adds **nested**
   dataclasses on the decode side. Needs the `dacite` extra.
+
+`tuple` is worth naming because an event is a frozen dataclass, so a `tuple` is
+the sequence type that belongs in one - a `list` field is a mutable field in a
+nominally immutable object. JSON has no tuple, so a tuple is written as a list
+and read back as a tuple; the annotation is what decides.
 
 ```python
 DJANGO_DOMAIN_EVENTS = {
@@ -147,6 +153,13 @@ DJANGO_DOMAIN_EVENTS = {
 }
 ```
 
-A [system check](introspection.md#system-checks) verifies the configured codec
-imports at startup, rather than letting a missing extra first surface as a failed
-delivery in a worker.
+Two [system checks](introspection.md#system-checks) run at startup rather than
+letting the problem first surface as a failed delivery in a worker: one verifies
+the configured codec imports, and one verifies it can actually rebuild the events
+this project declares.
+
+The second exists because the failure it catches is asymmetric. `fire()` encodes
+and commits whatever the annotation says, so an event the codec cannot decode is
+recorded successfully inside the caller's transaction and then dead-letters on
+every durable delivery - in the relay, in another process, possibly hours later.
+Nothing before that point fails.

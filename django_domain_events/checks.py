@@ -3,13 +3,18 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from django.conf import settings
 from django.core.checks import Error, Warning
 from django.db import models
 from django.utils.module_loading import import_string
 
 from django_domain_events.registry import registry
-from django_domain_events.settings import setting
+from django_domain_events.settings import DEFAULTS, SETTINGS_NAME, get_codec, setting
 from django_domain_events.utils import TERMINAL, has_table
+
+# The names a reader reaches for instead: the app label, and the prose everyone
+# writes. Neither is read, and neither fails.
+_NEAR_MISS_SETTINGS_NAMES = ("DOMAIN_EVENTS", "DJANGO_DOMAIN_EVENT", "DOMAIN_EVENT")
 
 
 def check_receivers_have_events(**kwargs: Any) -> list[Any]:
@@ -53,6 +58,91 @@ def check_codec_dependency_is_installed(**kwargs: Any) -> list[Any]:
             )
         ]
     return []
+
+
+def check_declared_events_are_decodable(**kwargs: Any) -> list[Any]:
+    """Every declared event can be rebuilt by the configured codec.
+
+    The companion to
+    :func:`check_codec_dependency_is_installed`, and the one that catches the
+    failure that actually happens. That check asks whether the codec can be
+    *imported*; this one asks whether it can decode the events this project
+    declares -- which is a different question, and the one whose answer is
+    silent when it is no.
+
+    The asymmetry is what makes it worth a check. ``fire()`` encodes and commits
+    inside the caller's transaction whatever the annotation says, so an event
+    the codec cannot rebuild is recorded successfully and then dead-letters on
+    every durable delivery, in the relay, in another process, possibly hours
+    later. Nothing before that point fails.
+
+    A codec that does not implement ``unsupported_fields`` is not interrogated:
+    this package should not guess at what a codec it did not write can do.
+    """
+    codec = get_codec()
+    inspect = getattr(codec, "unsupported_fields", None)
+    if inspect is None:
+        return []
+
+    problems: list[Any] = []
+    for registered in registry.events():
+        for field_name, annotation in inspect(registered.event_class):
+            problems.append(
+                Error(
+                    f"{registered.name}.{field_name} is annotated "
+                    f"{annotation!r}, which {type(codec).__name__} cannot rebuild. "
+                    "The event would be recorded and every durable delivery of it "
+                    "would dead-letter.",
+                    hint=(
+                        "Nested dataclasses need the 'dacite' extra and CODEC set to "
+                        "'django_domain_events.codecs.dacite_codec.DaciteCodec'. "
+                        "Otherwise use a type the codec handles: str, int, float, bool, "
+                        "Decimal, UUID, datetime, date, time, enums, literals, optionals, "
+                        "and lists or tuples of those."
+                    ),
+                    id="django_domain_events.E005",
+                )
+            )
+    return problems
+
+
+def check_settings_keys_are_known(**kwargs: Any) -> list[Any]:
+    """The settings dict is named correctly and holds no unrecognised keys.
+
+    Both halves are silent by default. ``setting()`` reads only the keys this
+    package asks for, so a typo sits in the settings looking effective; and the
+    dict is ``DJANGO_DOMAIN_EVENTS`` while the app label, the import path and
+    most prose say ``domain events``, so ``DOMAIN_EVENTS`` returns ``{}`` and
+    every value falls back to its default with nothing said.
+
+    That second case is not hypothetical: it is how a consumer configured
+    ``CODEC`` correctly, saw no effect, and spent a round debugging a decode
+    failure with the fix visibly in place.
+    """
+    problems: list[Any] = []
+
+    for name in _NEAR_MISS_SETTINGS_NAMES:
+        if hasattr(settings, name):
+            problems.append(
+                Warning(
+                    f"settings.{name} is set, but this package reads "
+                    f"{SETTINGS_NAME!r}. Nothing in it is being used.",
+                    hint=f"Rename it to {SETTINGS_NAME}.",
+                    id="django_domain_events.W006",
+                )
+            )
+
+    configured = getattr(settings, SETTINGS_NAME, {})
+    unknown = sorted(set(configured) - set(DEFAULTS))
+    if unknown:
+        problems.append(
+            Warning(
+                f"{SETTINGS_NAME} has unrecognised key(s): {', '.join(unknown)}. They are ignored.",
+                hint=f"Valid keys are: {', '.join(sorted(DEFAULTS))}.",
+                id="django_domain_events.W007",
+            )
+        )
+    return problems
 
 
 def check_no_orphaned_deliveries(

@@ -99,6 +99,7 @@ def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliverySt
         event_name=delivery.event.name,
         attempt=attempt,
         actor_key=delivery.event.actor_key,
+        actor_label=delivery.event.actor_label,
         scope=delivery.event.scope,
     )
     try:
