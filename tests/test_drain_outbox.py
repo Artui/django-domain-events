@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from django.db import transaction
 
-from django_domain_events.drain_outbox import drain_outbox
-from django_domain_events.fire import fire
+from django_domain_events.delivery.drain_outbox import drain_outbox
+from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.testapp.events import OrderPlaced
@@ -32,7 +32,7 @@ def test_the_payload_is_rebuilt_rather_than_reused(order: OrderPlaced, record: l
     worker in another process gets. A helper that passed the original object
     through would agree with a payload that cannot round-trip."""
     seen: list[OrderPlaced] = []
-    from django_domain_events.registry import registry
+    from django_domain_events.declaration.registry import registry
 
     entry = registry.receiver_for_key("testapp.durable_receiver")
     original = entry.func

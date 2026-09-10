@@ -81,7 +81,7 @@ only a subclass could use it.
 
 ```python
 "TASK_BACKEND": {
-    "BACKEND": "django_domain_events.django_tasks_backend.DjangoTasksBackend",
+    "BACKEND": "django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend",
     "queue_name": "events",
 }
 ```

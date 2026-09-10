@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from django_domain_events.what_listens_to import what_listens_to
+from django_domain_events.introspection.what_listens_to import what_listens_to
 from tests.conftest import receiver_deleted
 from tests.testapp.events import Eagerly, OrderPlaced, Unheard
 

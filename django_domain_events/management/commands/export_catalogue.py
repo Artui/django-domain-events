@@ -5,8 +5,8 @@ from typing import Any
 
 from django.core.management.base import BaseCommand
 
-from django_domain_events.catalogue import catalogue
-from django_domain_events.render_catalogue import render_catalogue
+from django_domain_events.introspection.catalogue import catalogue
+from django_domain_events.introspection.render_catalogue import render_catalogue
 
 
 class Command(BaseCommand):

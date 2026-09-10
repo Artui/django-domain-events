@@ -16,9 +16,9 @@ import pytest
 from django.apps import apps
 from django.db import connection, transaction
 
-from django_domain_events.fire import fire
+from django_domain_events.delivery.fire import fire
+from django_domain_events.introspection.quiet_receivers import quiet_receivers
 from django_domain_events.models.delivery_record import DeliveryRecord
-from django_domain_events.quiet_receivers import quiet_receivers
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.testapp.events import OrderPlaced
 

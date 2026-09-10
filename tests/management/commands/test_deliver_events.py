@@ -8,7 +8,7 @@ import pytest
 from django.core.management import call_command
 from django.db import connection, transaction
 
-from django_domain_events.fire import fire
+from django_domain_events.delivery.fire import fire
 from tests.testapp.events import OrderPlaced
 
 pytestmark = pytest.mark.django_db(transaction=True)

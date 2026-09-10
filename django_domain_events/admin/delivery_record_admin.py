@@ -9,7 +9,7 @@ from django.http import HttpRequest
 from django_domain_events.admin.receiver_key_filter import ReceiverKeyFilter
 from django_domain_events.admin.utils import may_change
 from django_domain_events.models.delivery_record import DeliveryRecord
-from django_domain_events.requeue_dead import requeue_dead
+from django_domain_events.operations.requeue_dead import requeue_dead
 
 
 @admin.register(DeliveryRecord)

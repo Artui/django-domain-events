@@ -5,9 +5,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from django.db import connection, transaction
 
-from django_domain_events.fire import fire
+from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.run_relay import run_relay
 from django_domain_events.models.delivery_record import DeliveryRecord
-from django_domain_events.run_relay import run_relay
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.conftest import receiver_replaced
 from tests.testapp.events import OrderPlaced
@@ -86,7 +86,7 @@ def test_the_isolation_helper_swallows_what_deliver_one_does_not() -> None:
     """deliver_one guards the receiver and the decode, not the row fetch. A row
     that vanished between the claim and the delivery must not take the daemon
     with it."""
-    from django_domain_events.run_relay import _deliver_or_survive
+    from django_domain_events.delivery.run_relay import _deliver_or_survive
 
     assert _deliver_or_survive(999_999, "w1") is None
 

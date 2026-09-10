@@ -93,7 +93,7 @@ blast radius, and reading it as "no limit" would give them the largest one.
 
 ```python
 DJANGO_DOMAIN_EVENTS = {
-    "TASK_BACKEND": "django_domain_events.django_tasks_backend.DjangoTasksBackend",
+    "TASK_BACKEND": "django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend",
 }
 ```
 
@@ -102,7 +102,7 @@ or with options:
 ```python
 DJANGO_DOMAIN_EVENTS = {
     "TASK_BACKEND": {
-        "BACKEND": "django_domain_events.django_tasks_backend.DjangoTasksBackend",
+        "BACKEND": "django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend",
         "queue_name": "events",
     },
 }

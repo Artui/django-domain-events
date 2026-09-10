@@ -6,9 +6,9 @@ from unittest import mock
 import pytest
 from django.db import transaction
 
-from django_domain_events.fire import fire
+from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
-from django_domain_events.requeue_dead import requeue_dead
+from django_domain_events.operations.requeue_dead import requeue_dead
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.testapp.events import OrderPlaced
 
@@ -83,7 +83,7 @@ def test_it_will_not_wipe_a_live_claim(order: OrderPlaced, record: list[str]) ->
     CLAIMED by the time requeue writes - so the steal is hooked onto the clock
     read that happens between those two statements.
     """
-    module = importlib.import_module("django_domain_events.requeue_dead")
+    module = importlib.import_module("django_domain_events.operations.requeue_dead")
 
     with transaction.atomic():
         fire(order)

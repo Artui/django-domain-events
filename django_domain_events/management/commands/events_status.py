@@ -6,7 +6,7 @@ from typing import Any
 
 from django.core.management.base import BaseCommand
 
-from django_domain_events.outbox_health import outbox_health
+from django_domain_events.introspection.outbox_health import outbox_health
 
 
 class Command(BaseCommand):

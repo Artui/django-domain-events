@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from django.db import connection
 
-from django_domain_events.wake import notify_relay, wait_for_work
+from django_domain_events.delivery.wake import notify_relay, wait_for_work
 
 pytestmark = pytest.mark.django_db(transaction=True)
 

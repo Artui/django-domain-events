@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from django.db import transaction
 
-from django_domain_events.claim_batch import claim_batch
-from django_domain_events.fire import fire
+from django_domain_events.delivery.claim_batch import claim_batch
+from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.testapp.events import OrderPlaced
@@ -92,7 +92,7 @@ def test_it_locks_as_strongly_as_the_backend_allows() -> None:
     blocking FOR UPDATE is still correct - it serialises the claim rather than
     losing it. Only a backend with no row locking at all falls through, and that
     is what the relay refuses to start on."""
-    from django_domain_events.claim_batch import _locked
+    from django_domain_events.delivery.claim_batch import _locked
     from django_domain_events.models.delivery_record import DeliveryRecord
 
     base = DeliveryRecord.objects.all()

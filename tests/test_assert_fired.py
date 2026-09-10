@@ -7,8 +7,8 @@ from dataclasses import dataclass
 import pytest
 from django.db import transaction
 
-from django_domain_events.assert_fired import assert_fired
-from django_domain_events.fire import fire
+from django_domain_events.delivery.fire import fire
+from django_domain_events.testing.assert_fired import assert_fired
 from tests.testapp.events import OrderPlaced, PinnedName
 
 pytestmark = pytest.mark.django_db(transaction=True)

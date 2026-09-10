@@ -4,9 +4,9 @@ from datetime import datetime, timedelta, timezone
 
 from django.db import models, transaction
 
+from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.settings import setting
 from django_domain_events.utils import TERMINAL
-from django_domain_events.write_alias import write_alias
 
 
 def prune_events(

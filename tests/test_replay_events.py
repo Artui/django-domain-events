@@ -6,10 +6,10 @@ from unittest import mock
 import pytest
 from django.db import transaction
 
-from django_domain_events.drain_outbox import drain_outbox
-from django_domain_events.fire import fire
+from django_domain_events.delivery.drain_outbox import drain_outbox
+from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
-from django_domain_events.replay_events import replay_events
+from django_domain_events.operations.replay_events import replay_events
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.conftest import receiver_deleted
 from tests.testapp.events import OrderPlaced
@@ -102,7 +102,7 @@ def test_it_will_not_wipe_a_live_claim(order: OrderPlaced, record: list[str]) ->
     with the predicate removed. The membership test that decides what to reopen
     runs between the read and the write, so the steal is hooked there.
     """
-    module = importlib.import_module("django_domain_events.replay_events")
+    module = importlib.import_module("django_domain_events.operations.replay_events")
 
     with transaction.atomic():
         event_id = fire(order)
@@ -144,9 +144,9 @@ def test_it_wakes_a_waiting_relay(order: OrderPlaced, record: list[str]) -> None
     low-latency path; otherwise replayed work sits until the next poll."""
     # Patched on the module object, not by dotted path: `__init__` re-exports
     # `replay_events`, so the package attribute of that name is the function and
-    # `mock.patch("django_domain_events.replay_events.notify_relay")` walks into
+    # `mock.patch("django_domain_events.operations.replay_events.notify_relay")` walks into
     # the function rather than the module.
-    module = importlib.import_module("django_domain_events.replay_events")
+    module = importlib.import_module("django_domain_events.operations.replay_events")
     with transaction.atomic():
         event_id = fire(order)
     drain_outbox()
@@ -159,7 +159,7 @@ def test_it_wakes_a_waiting_relay(order: OrderPlaced, record: list[str]) -> None
 def test_it_does_not_wake_anything_when_nothing_changed(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    module = importlib.import_module("django_domain_events.replay_events")
+    module = importlib.import_module("django_domain_events.operations.replay_events")
     with transaction.atomic():
         event_id = fire(order)
 

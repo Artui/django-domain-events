@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from django.db import models
 
-from django_domain_events.registry import registry
+from django_domain_events.declaration.registry import registry
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.quiet_receiver import QuietReceiver

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from django_domain_events.registry import Registry
+from django_domain_events.declaration.registry import Registry
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_event import RegisteredEvent
 from django_domain_events.types.registered_receiver import RegisteredReceiver

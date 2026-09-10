@@ -10,8 +10,8 @@ import pytest
 from django.core.management import call_command
 from django.db import transaction
 
-from django_domain_events.drain_outbox import drain_outbox
-from django_domain_events.fire import fire
+from django_domain_events.delivery.drain_outbox import drain_outbox
+from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.types.delivery_status import DeliveryStatus

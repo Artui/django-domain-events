@@ -4,7 +4,7 @@ from typing import Any
 
 from django.core.management.base import BaseCommand
 
-from django_domain_events.replay_events import replay_events
+from django_domain_events.operations.replay_events import replay_events
 
 
 class Command(BaseCommand):

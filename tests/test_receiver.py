@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from django_domain_events.receiver import receiver
-from django_domain_events.registry import registry
+from django_domain_events.declaration.receiver import receiver
+from django_domain_events.declaration.registry import registry
 from django_domain_events.types.delivery_mode import DeliveryMode
 from tests.testapp.events import OrderPlaced
 
@@ -31,7 +31,7 @@ def test_declared_modes_and_limits_are_recorded() -> None:
 def test_the_decorator_returns_the_function_unchanged() -> None:
     """Receivers stay ordinary callables so they remain unit-testable without
     going anywhere near the outbox."""
-    from django_domain_events.receiver import receiver
+    from django_domain_events.declaration.receiver import receiver
 
     def plain(evt: OrderPlaced) -> None: ...
 
@@ -45,7 +45,7 @@ def test_a_callable_with_no_name_refuses_to_guess_a_key() -> None:
     address later."""
     from functools import partial
 
-    from django_domain_events.receiver import receiver
+    from django_domain_events.declaration.receiver import receiver
 
     def target(evt: OrderPlaced, extra: int) -> None: ...
 
@@ -56,7 +56,7 @@ def test_a_callable_with_no_name_refuses_to_guess_a_key() -> None:
 def test_such_a_callable_is_fine_with_an_explicit_key() -> None:
     from functools import partial
 
-    from django_domain_events.receiver import receiver
+    from django_domain_events.declaration.receiver import receiver
 
     def target(evt: OrderPlaced, extra: int) -> None: ...
 
@@ -68,7 +68,7 @@ def test_such_a_callable_is_fine_with_an_explicit_key() -> None:
 def test_an_unknown_execution_site_is_refused() -> None:
     """Caught at declaration rather than when the relay reaches the row: a typo
     would otherwise mean the receiver quietly runs in the relay forever."""
-    from django_domain_events.receiver import receiver
+    from django_domain_events.declaration.receiver import receiver
 
     with pytest.raises(ValueError, match="site must be"):
         receiver(OrderPlaced, site="celery")
@@ -78,7 +78,7 @@ def test_a_task_site_needs_a_durable_mode() -> None:
     """INLINE and ON_COMMIT have no delivery row, so there is nothing to hand a
     backend. Accepting the combination runs the receiver in the firing process
     while the declaration says otherwise."""
-    from django_domain_events.receiver import receiver
+    from django_domain_events.declaration.receiver import receiver
     from django_domain_events.types.delivery_mode import DeliveryMode
 
     with pytest.raises(ValueError, match="needs mode=DURABLE"):

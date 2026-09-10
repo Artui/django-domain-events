@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import pytest
 from django.db import transaction
 
-from django_domain_events.fire import fire
+from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.types.delivery_status import DeliveryStatus
@@ -67,7 +67,7 @@ def test_an_inline_receiver_raising_takes_the_event_row_with_it(
 ) -> None:
     """The reason INLINE needs no durability: its failure mode is a rollback, so
     the business change and the event both revert and nothing is owed."""
-    from django_domain_events.registry import registry
+    from django_domain_events.declaration.registry import registry
 
     receiver = registry.receiver_for_key("testapp.inline_receiver")
     original = receiver.func
@@ -151,7 +151,7 @@ def test_a_non_eager_receiver_waits_for_the_relay(order: OrderPlaced, record: li
 def test_an_eager_receiver_raising_leaves_the_row_owed(record: list[str]) -> None:
     """The relay is the fallback, so an eager failure is a retry rather than a
     loss. robust=True also keeps it from cancelling the other callbacks."""
-    from django_domain_events.registry import registry
+    from django_domain_events.declaration.registry import registry
 
     entry = registry.receiver_for_key("testapp.eager")
     original = entry.func

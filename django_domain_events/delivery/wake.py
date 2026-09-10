@@ -6,7 +6,7 @@ from typing import Any
 
 from django.db import connections
 
-from django_domain_events.write_alias import write_alias
+from django_domain_events.delivery.write_alias import write_alias
 
 CHANNEL = "django_domain_events"
 

@@ -16,7 +16,7 @@ from django.test.utils import CaptureQueriesContext
 
 from django_domain_events.admin.event_name_filter import EventNameFilter
 from django_domain_events.admin.receiver_key_filter import ReceiverKeyFilter
-from django_domain_events.fire import fire
+from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from tests.testapp.events import OrderPlaced, Unheard

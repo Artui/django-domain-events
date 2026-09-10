@@ -5,7 +5,7 @@ from typing import Any
 
 from django.core.management.base import BaseCommand
 
-from django_domain_events.prune_events import prune_events
+from django_domain_events.operations.prune_events import prune_events
 
 
 class Command(BaseCommand):

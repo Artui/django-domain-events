@@ -9,7 +9,7 @@ from django.db import transaction
 from django.test import RequestFactory
 
 from django_domain_events.admin.delivery_record_admin import DeliveryRecordAdmin
-from django_domain_events.fire import fire
+from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.testapp.events import OrderPlaced

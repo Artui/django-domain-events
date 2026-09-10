@@ -5,11 +5,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from django.db import transaction
 
-from django_domain_events.drain_outbox import drain_outbox
-from django_domain_events.fire import fire
+from django_domain_events.delivery.drain_outbox import drain_outbox
+from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
-from django_domain_events.prune_events import prune_events
+from django_domain_events.operations.prune_events import prune_events
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.testapp.events import OrderPlaced, PinnedName
 
@@ -116,7 +116,7 @@ def test_a_replay_between_the_select_and_the_delete_is_respected(
     """Settledness is re-checked at the delete. A replay landing in between makes
     rows owed again, and the cascade would take them with no record that anything
     was lost - after the operator had been told they were reopened."""
-    from django_domain_events.replay_events import replay_events
+    from django_domain_events.operations.replay_events import replay_events
 
     with transaction.atomic():
         event_id = fire(order)

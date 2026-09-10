@@ -6,7 +6,7 @@ import functools
 from dataclasses import dataclass, field
 from typing import Literal
 
-from django_domain_events.catalogue import catalogue
+from django_domain_events.introspection.catalogue import catalogue
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_receiver import RegisteredReceiver
 from tests.conftest import event_registered, receiver_registered

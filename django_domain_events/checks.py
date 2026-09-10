@@ -8,7 +8,7 @@ from django.core.checks import Error, Warning
 from django.db import models
 from django.utils.module_loading import import_string
 
-from django_domain_events.registry import registry
+from django_domain_events.declaration.registry import registry
 from django_domain_events.settings import DEFAULTS, SETTINGS_NAME, get_codec, setting
 from django_domain_events.utils import TERMINAL, has_table
 

@@ -8,16 +8,16 @@ from typing import Any
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 
-from django_domain_events.backoff import backoff
-from django_domain_events.causation import caused_by
-from django_domain_events.claim_batch import claim_batch
-from django_domain_events.fire import call_receiver
-from django_domain_events.registry import registry
+from django_domain_events.declaration.registry import registry
+from django_domain_events.delivery.backoff import backoff
+from django_domain_events.delivery.claim_batch import claim_batch
+from django_domain_events.delivery.fire import call_receiver
+from django_domain_events.delivery.write_alias import write_alias
+from django_domain_events.scope.causation import caused_by
 from django_domain_events.settings import get_task_backend, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.utils import decode_payload
-from django_domain_events.write_alias import write_alias
 
 logger = logging.getLogger(__name__)
 

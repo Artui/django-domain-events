@@ -10,7 +10,7 @@ from uuid import UUID
 
 import pytest
 
-from django_domain_events.registry import registry
+from django_domain_events.declaration.registry import registry
 from django_domain_events.types.registered_event import RegisteredEvent
 from django_domain_events.types.registered_receiver import RegisteredReceiver
 from tests.testapp.events import Currency, OrderPlaced, calls

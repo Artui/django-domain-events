@@ -6,8 +6,8 @@ from typing import Any
 
 from django.core.management.base import BaseCommand
 
-from django_domain_events.deliver import deliver_pending
-from django_domain_events.run_relay import run_relay
+from django_domain_events.delivery.deliver import deliver_pending
+from django_domain_events.delivery.run_relay import run_relay
 
 
 class Command(BaseCommand):

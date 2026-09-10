@@ -5,9 +5,9 @@ from unittest import mock
 import pytest
 from django.db import transaction
 
-from django_domain_events.deliver import dispatch_one
-from django_domain_events.django_tasks_backend import DjangoTasksBackend, deliver_delivery
-from django_domain_events.fire import fire
+from django_domain_events.delivery.deliver import dispatch_one
+from django_domain_events.delivery.django_tasks_backend import DjangoTasksBackend, deliver_delivery
+from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.conftest import receiver_deleted
@@ -65,7 +65,7 @@ def test_a_task_site_receiver_is_handed_off(
     settings.DJANGO_DOMAIN_EVENTS = {
         "TASK_BACKEND": "tests.test_django_tasks_backend.RecordingBackend"
     }
-    from django_domain_events.registry import registry
+    from django_domain_events.declaration.registry import registry
 
     entry = registry.receiver_for_key("testapp.durable_receiver")
     object.__setattr__(entry, "site", "task")
@@ -129,7 +129,7 @@ def test_the_adapter_falls_back_to_the_backport() -> None:
     import sys
     from unittest import mock
 
-    from django_domain_events.django_tasks_backend import _task
+    from django_domain_events.delivery.django_tasks_backend import _task
 
     with mock.patch.dict(sys.modules, {"django.tasks": None}):
         assert _task().__module__.startswith("django_tasks")
@@ -140,7 +140,7 @@ def test_the_adapter_prefers_core_when_it_is_there() -> None:
     no longer needs."""
     import django
 
-    from django_domain_events.django_tasks_backend import _task
+    from django_domain_events.delivery.django_tasks_backend import _task
 
     if django.VERSION < (6, 0):
         pytest.skip("core has no django.tasks below 6.0")
@@ -161,8 +161,8 @@ def test_every_delivery_path_honours_the_site(
     settings.DJANGO_DOMAIN_EVENTS = {
         "TASK_BACKEND": "tests.test_django_tasks_backend.RecordingBackend"
     }
-    from django_domain_events.drain_outbox import drain_outbox
-    from django_domain_events.registry import registry
+    from django_domain_events.declaration.registry import registry
+    from django_domain_events.delivery.drain_outbox import drain_outbox
 
     entry = registry.receiver_for_key("testapp.durable_receiver")
     object.__setattr__(entry, "site", "task")
@@ -183,7 +183,7 @@ def test_a_task_site_with_no_backend_refuses(order: OrderPlaced, record: list[st
     symptom is work happening in the wrong process."""
     from django.core.exceptions import ImproperlyConfigured
 
-    from django_domain_events.registry import registry
+    from django_domain_events.declaration.registry import registry
 
     entry = registry.receiver_for_key("testapp.durable_receiver")
     object.__setattr__(entry, "site", "task")
@@ -223,7 +223,7 @@ def test_a_backend_can_be_configured_with_options(settings) -> None:
 
     settings.DJANGO_DOMAIN_EVENTS = {
         "TASK_BACKEND": {
-            "BACKEND": "django_domain_events.django_tasks_backend.DjangoTasksBackend",
+            "BACKEND": "django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend",
             "queue_name": "events",
         }
     }
@@ -239,8 +239,8 @@ def test_the_task_site_extends_the_lease_before_enqueueing(
     moment before the relay stops looking at it."""
     from datetime import datetime, timedelta, timezone
 
-    from django_domain_events.claim_batch import claim_batch
-    from django_domain_events.deliver import dispatch_one
+    from django_domain_events.delivery.claim_batch import claim_batch
+    from django_domain_events.delivery.deliver import dispatch_one
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.types.delivery_mode import DeliveryMode
     from django_domain_events.types.registered_receiver import RegisteredReceiver
@@ -272,7 +272,7 @@ def test_the_task_site_extends_the_lease_before_enqueueing(
     with (
         receiver_deleted("testapp.durable_receiver"),
         receiver_registered(entry),
-        mock.patch("django_domain_events.deliver.get_task_backend", lambda: Recording()),
+        mock.patch("django_domain_events.delivery.deliver.get_task_backend", lambda: Recording()),
     ):
         assert dispatch_one(row.pk, worker_id="w1") is None
 
@@ -286,7 +286,7 @@ def test_the_task_site_extends_the_lease_before_enqueueing(
 def test_a_lost_row_is_not_enqueued(order: OrderPlaced, record: list[str]) -> None:
     """Enqueueing a row another worker holds hands the same work to two
     places, which is what the lease exists to prevent."""
-    from django_domain_events.deliver import dispatch_one
+    from django_domain_events.delivery.deliver import dispatch_one
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.types.delivery_mode import DeliveryMode
     from django_domain_events.types.delivery_status import DeliveryStatus
@@ -319,7 +319,7 @@ def test_a_lost_row_is_not_enqueued(order: OrderPlaced, record: list[str]) -> No
     with (
         receiver_deleted("testapp.durable_receiver"),
         receiver_registered(entry),
-        mock.patch("django_domain_events.deliver.get_task_backend", lambda: Recording()),
+        mock.patch("django_domain_events.delivery.deliver.get_task_backend", lambda: Recording()),
     ):
         assert dispatch_one(row.pk, worker_id="w1") is None
 
