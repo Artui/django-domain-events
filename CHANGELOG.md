@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Corrected the comment explaining `DeliveryRecord.event_id`. It claimed the bare
+  annotation stays out of the class dict; the name is in fact there, as the
+  descriptor Django installs. The conclusion held and the reason did not.
+
 ## [0.7.0] — 2026-09-05
 
 ### Added

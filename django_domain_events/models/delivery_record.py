@@ -13,9 +13,27 @@ class DeliveryRecord(models.Model):
     other four. Only ``DURABLE`` receivers get a row.
     """
 
-    # Django adds event_id at runtime. The bare annotation makes it visible to
-    # the type checker without entering the class dict, so field collection
-    # never sees it.
+    # Django creates event_id at runtime -- Field.contribute_to_class installs a
+    # deferred-attribute descriptor -- and ty has no Django support, so nothing
+    # static can see it. The annotation supplies the type.
+    #
+    # Corrected 2026-09-10: this said the annotation stays "out of the class
+    # dict, so field collection never sees it". The conclusion holds and the
+    # reason did not. `event_id` IS in the class dict -- Django puts the
+    # descriptor there itself, which is what makes the attribute work at all.
+    # What keeps field collection away from it is that a bare annotation never
+    # reaches the metaclass's attrs, so it lands in __annotations__ and nowhere
+    # else.
+    #
+    # Tracked as astral-sh/ty#1018, milestone ty-1.1, implementation still open,
+    # so this is removable one day by a ty release rather than by anything here.
+    # Four candidate fixes were measured and none helps: django-stubs is neither
+    # cause nor cure (removing it gives a byte-identical diagnostic, because
+    # <fk>_id comes from the mypy plugin shipped inside it and this repo runs no
+    # mypy), django-types fails the same way, no ty version fixes it, and no
+    # configuration reaches it. Suppressing the rule also works and is worse:
+    # only the annotation supplies a real type, so self.event_id.upper() is
+    # still caught.
     event_id: int
 
     event = models.ForeignKey(

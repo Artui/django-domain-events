@@ -127,6 +127,15 @@ Two rules specific to this package:
 `ty`, scoped to `django_domain_events` via `[tool.ty.environment]`. The package
 ships `py.typed`, so consumers get the annotations.
 
+**`ty` cannot see a foreign key's implicit `<fk>_id`.** Django creates it at
+runtime and ty has no Django support, so declare it as a bare annotation beside
+the field - `event_id: int` on `DeliveryRecord` is the one instance. Prefer that
+over suppressing the rule: the annotation supplies a real type, so
+`self.event_id.upper()` is still caught, where a suppression leaves it unknown.
+Do not reach for django-stubs, a newer ty, a configuration setting or a different
+declaration style; all four were measured on 2026-09-10 and none of them helps.
+Tracked upstream as astral-sh/ty#1018, so it is removable one day by a ty release.
+
 Never a mypy-style `# type: ignore` in the package - a pre-commit hook rejects
 it, because nothing here reads that pragma and leaving one implies a checker
 that is not running.
