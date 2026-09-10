@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TypeVar, overload
 
-from django_domain_events.declaring.registry import registry
+from django_domain_events.declaration.registry import registry
 from django_domain_events.types.registered_event import RegisteredEvent
 from django_domain_events.utils import (
     label_for,

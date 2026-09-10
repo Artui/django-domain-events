@@ -6,7 +6,7 @@ from django.contrib import admin
 from django.db.models import QuerySet
 from django.http import HttpRequest
 
-from django_domain_events.declaring.registry import registry
+from django_domain_events.declaration.registry import registry
 
 
 class EventNameFilter(admin.SimpleListFilter):

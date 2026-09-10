@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from django_domain_events.declaring.registry import registry
+from django_domain_events.declaration.registry import registry
 from django_domain_events.types.registered_receiver import RegisteredReceiver
 
 

@@ -9,7 +9,7 @@ from typing import Any, cast
 from django.apps import apps
 from django.db import connections
 
-from django_domain_events.declaring.registry import registry
+from django_domain_events.declaration.registry import registry
 from django_domain_events.payload_upgrade_failed import PayloadUpgradeFailed
 from django_domain_events.types.delivery_status import DeliveryStatus
 

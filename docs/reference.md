@@ -4,8 +4,8 @@ Everything below is exported from `django_domain_events` directly.
 
 ## Declaring
 
-::: django_domain_events.declaring.event.event
-::: django_domain_events.declaring.receiver.receiver
+::: django_domain_events.declaration.event.event
+::: django_domain_events.declaration.receiver.receiver
 
 ## Firing
 
@@ -36,7 +36,7 @@ Everything below is exported from `django_domain_events` directly.
 ::: django_domain_events.introspection.catalogue.catalogue
 ::: django_domain_events.introspection.render_catalogue.render_catalogue
 ::: django_domain_events.introspection.what_listens_to.what_listens_to
-::: django_domain_events.declaring.listens_for.listens_for
+::: django_domain_events.declaration.listens_for.listens_for
 ::: django_domain_events.introspection.quiet_receivers.quiet_receivers
 ::: django_domain_events.introspection.outbox_health.outbox_health
 

@@ -32,7 +32,7 @@ def test_the_payload_is_rebuilt_rather_than_reused(order: OrderPlaced, record: l
     worker in another process gets. A helper that passed the original object
     through would agree with a payload that cannot round-trip."""
     seen: list[OrderPlaced] = []
-    from django_domain_events.declaring.registry import registry
+    from django_domain_events.declaration.registry import registry
 
     entry = registry.receiver_for_key("testapp.durable_receiver")
     original = entry.func

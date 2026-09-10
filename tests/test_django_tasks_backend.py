@@ -65,7 +65,7 @@ def test_a_task_site_receiver_is_handed_off(
     settings.DJANGO_DOMAIN_EVENTS = {
         "TASK_BACKEND": "tests.test_django_tasks_backend.RecordingBackend"
     }
-    from django_domain_events.declaring.registry import registry
+    from django_domain_events.declaration.registry import registry
 
     entry = registry.receiver_for_key("testapp.durable_receiver")
     object.__setattr__(entry, "site", "task")
@@ -161,7 +161,7 @@ def test_every_delivery_path_honours_the_site(
     settings.DJANGO_DOMAIN_EVENTS = {
         "TASK_BACKEND": "tests.test_django_tasks_backend.RecordingBackend"
     }
-    from django_domain_events.declaring.registry import registry
+    from django_domain_events.declaration.registry import registry
     from django_domain_events.delivery.drain_outbox import drain_outbox
 
     entry = registry.receiver_for_key("testapp.durable_receiver")
@@ -183,7 +183,7 @@ def test_a_task_site_with_no_backend_refuses(order: OrderPlaced, record: list[st
     symptom is work happening in the wrong process."""
     from django.core.exceptions import ImproperlyConfigured
 
-    from django_domain_events.declaring.registry import registry
+    from django_domain_events.declaration.registry import registry
 
     entry = registry.receiver_for_key("testapp.durable_receiver")
     object.__setattr__(entry, "site", "task")

@@ -9,7 +9,7 @@ import pytest
 from django.db import transaction
 
 from django_domain_events import checks
-from django_domain_events.declaring.registry import registry
+from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.fire import fire
 from django_domain_events.scope.suppressed import suppressed
 from django_domain_events.types.delivery_mode import DeliveryMode

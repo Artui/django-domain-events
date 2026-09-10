@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Layout: the package root now holds `__init__.py`, `version.py`, `settings.py`,
   `apps.py`, `checks.py`, `utils.py` and `payload_upgrade_failed.py`. Everything
-  else moved into a subpackage named for a concern: `declaring/`, `delivery/`,
+  else moved into a subpackage named for a concern: `declaration/`, `delivery/`,
   `scope/`, `introspection/`, `operations/` and `testing/`. **The public surface
   is unchanged** - all fifty symbols are still importable from the package root,
   which is where they were always meant to be imported from. Only an import of an

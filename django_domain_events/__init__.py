@@ -1,10 +1,10 @@
 from django_domain_events.codecs.dataclass_codec import DataclassCodec
 from django_domain_events.codecs.payload_codec import PayloadCodec
 from django_domain_events.codecs.unsupported_payload_type import UnsupportedPayloadType
-from django_domain_events.declaring.event import event
-from django_domain_events.declaring.listens_for import listens_for
-from django_domain_events.declaring.receiver import receiver
-from django_domain_events.declaring.registry import Registry, registry
+from django_domain_events.declaration.event import event
+from django_domain_events.declaration.listens_for import listens_for
+from django_domain_events.declaration.receiver import receiver
+from django_domain_events.declaration.registry import Registry, registry
 from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.deliver import deliver_one, deliver_pending

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from django_domain_events.declaring.listens_for import listens_for
+from django_domain_events.declaration.listens_for import listens_for
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_receiver import RegisteredReceiver
 from tests.conftest import receiver_registered

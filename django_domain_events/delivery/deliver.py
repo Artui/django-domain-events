@@ -8,7 +8,7 @@ from typing import Any
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 
-from django_domain_events.declaring.registry import registry
+from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.fire import call_receiver

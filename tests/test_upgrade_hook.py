@@ -15,7 +15,7 @@ from unittest import mock
 import pytest
 from django.db import transaction
 
-from django_domain_events.declaring.event import event
+from django_domain_events.declaration.event import event
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
 from django_domain_events.models.event_record import EventRecord
