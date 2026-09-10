@@ -7,10 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- Corrected the comment explaining `DeliveryRecord.event_id`. It claimed the bare
-  annotation stays out of the class dict; the name is in fact there, as the
-  descriptor Django installs. The conclusion held and the reason did not.
+### Changed
+- `DeliveryRecord.__str__` names the event rather than its id:
+  `receiver <- shop.OrderPlaced#42` where it previously read
+  `receiver <- event 42`. `EventRecord.__str__` is already `name#pk`, so this
+  gains the event name and keeps the join key. It traverses the relation, which
+  costs one query on an instance that did not fetch it; the string renders on the
+  delete confirmation page, in object history and in related-field widgets, not
+  in the changelist.
+
+### Removed
+- The `event_id: int` annotation that existed only so `ty` could see an attribute
+  Django creates at runtime. Traversing the relation removes the need for it.
 
 ## [0.7.0] — 2026-09-05
 

@@ -127,14 +127,22 @@ Two rules specific to this package:
 `ty`, scoped to `django_domain_events` via `[tool.ty.environment]`. The package
 ships `py.typed`, so consumers get the annotations.
 
-**`ty` cannot see a foreign key's implicit `<fk>_id`.** Django creates it at
-runtime and ty has no Django support, so declare it as a bare annotation beside
-the field - `event_id: int` on `DeliveryRecord` is the one instance. Prefer that
-over suppressing the rule: the annotation supplies a real type, so
-`self.event_id.upper()` is still caught, where a suppression leaves it unknown.
+**`ty` cannot see a foreign key's implicit `<fk>_id`**, because Django creates it
+at runtime and ty has no Django support. Tracked upstream as astral-sh/ty#1018.
 Do not reach for django-stubs, a newer ty, a configuration setting or a different
 declaration style; all four were measured on 2026-09-10 and none of them helps.
-Tracked upstream as astral-sh/ty#1018, so it is removable one day by a ty release.
+
+**Prefer traversing the relation to reading the id.** `self.event` rather than
+`self.event_id` needs no annotation, and it is usually the better string anyway:
+`EventRecord.__str__` is `name#pk`, so a delivery reads
+`receiver <- shop.OrderPlaced#42` where the raw id read `receiver <- event 42` -
+the join key *and* what the event was. It costs one query on an instance that did
+not fetch the relation, so keep `select_related` in mind for anything rendering a
+list. There are no `<fk>_id` reads left in this package.
+
+If a traversal ever is the wrong answer, declare a bare annotation beside the
+field rather than suppressing the rule: the annotation supplies a real type, so
+`self.event_id.upper()` is still caught, where a suppression leaves it unknown.
 
 Never a mypy-style `# type: ignore` in the package - a pre-commit hook rejects
 it, because nothing here reads that pragma and leaving one implies a checker
