@@ -69,7 +69,20 @@ Non-negotiable. They keep the package navigable.
    Every other rule above governs a file; this is the one that governs a
    directory.
 
-8. **A concern subpackage re-exports nothing.** Its `__init__.py` is a docstring.
+8. **Two kinds of string in a migration match the same grep and need opposite
+   treatment.** A `validators=`, `default=`, `upload_to=` or `through=` entry is
+   a **module path** and has to follow the module when it moves. A `to=` entry is
+   **`app_label.ModelName`** and must survive a regroup untouched. They look
+   identical here only because this app's label equals its package name, so a
+   blanket rewrite of `django_domain_events.` corrupts every `to=` it touches.
+   Done once, on 2026-09-10, turning `to="django_domain_events.eventrecord"` into
+   a three-part path. The suite caught it immediately because it builds its test
+   database through migrations, but the general form is quieter:
+   `migrations.utils.resolve_relation` splits with `maxsplit=1`, so an extra dot
+   does not raise there - it yields a model name no registered model matches, and
+   fails later pointing at the relation rather than at the edit.
+
+9. **A concern subpackage re-exports nothing.** Its `__init__.py` is a docstring.
    These are internal groupings and the package root is the public surface, so a
    re-export buys nothing and costs a class of circular import: a leaf import
    runs the parent first, so an eager `declaring/__init__` makes

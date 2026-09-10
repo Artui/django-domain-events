@@ -38,6 +38,12 @@ def fire(
     """
     # Imported here, not at module level: Django imports an app's package before
     # the app registry is ready, and this package's __init__ re-exports fire().
+    #
+    # Re-checked after the 2026-09-10 regroup, because moving a module is exactly
+    # the kind of change that quietly makes a workaround obsolete and nobody goes
+    # back to look. It is still required: __init__ imports delivery.fire at
+    # package-import time, so hoisting these two raises ImproperlyConfigured on a
+    # bare `import django_domain_events`. Verified by doing it, not by reading.
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.models.event_record import EventRecord
 
