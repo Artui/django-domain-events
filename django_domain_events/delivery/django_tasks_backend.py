@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from django_domain_events.deliver import deliver_one
+from django_domain_events.delivery.deliver import deliver_one
 
 
 def deliver_delivery(delivery_id: int) -> None:

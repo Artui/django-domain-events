@@ -10,7 +10,7 @@ from django.utils.timesince import timesince
 from django_domain_events.admin.event_name_filter import EventNameFilter
 from django_domain_events.admin.utils import may_change
 from django_domain_events.models.event_record import EventRecord
-from django_domain_events.replay_events import replay_events
+from django_domain_events.operations.replay_events import replay_events
 from django_domain_events.types.delivery_status import DeliveryStatus
 
 

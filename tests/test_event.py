@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 import pytest
 
-from django_domain_events.event import event
-from django_domain_events.registry import registry
+from django_domain_events.declaring.event import event
+from django_domain_events.declaring.registry import registry
 from tests.testapp.events import OrderPlaced, PinnedName
 
 

@@ -4,7 +4,7 @@ from datetime import timedelta
 
 import pytest
 
-from django_domain_events.backoff import backoff
+from django_domain_events.delivery.backoff import backoff
 
 
 def test_the_ceiling_doubles_with_each_attempt() -> None:

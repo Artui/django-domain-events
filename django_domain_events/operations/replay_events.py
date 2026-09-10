@@ -5,11 +5,11 @@ from datetime import datetime, timezone
 
 from django.db import transaction
 
-from django_domain_events.registry import registry
+from django_domain_events.declaring.registry import registry
+from django_domain_events.delivery.wake import notify_relay
+from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
-from django_domain_events.wake import notify_relay
-from django_domain_events.write_alias import write_alias
 
 
 def replay_events(

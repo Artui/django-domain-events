@@ -30,9 +30,9 @@ def propagate_scope(func: Callable[..., R]) -> Callable[..., R]:
     both ways, nor for ``asyncio`` tasks, which inherit a copy at creation. And
     it cannot help across a process boundary, where the answer is the event row.
     """
-    from django_domain_events.attributed import _scope, current_scope
-    from django_domain_events.causation import _cause
-    from django_domain_events.suppressed import _stack
+    from django_domain_events.scope.attributed import _scope, current_scope
+    from django_domain_events.scope.causation import _cause
+    from django_domain_events.scope.suppressed import _stack
 
     scope = current_scope()
     cause = _cause.get()

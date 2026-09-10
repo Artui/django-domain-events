@@ -8,10 +8,10 @@ import pytest
 from django.contrib.auth.models import User
 from django.db import transaction
 
-from django_domain_events.attributed import attributed, current_scope
-from django_domain_events.fire import fire
+from django_domain_events.delivery.fire import fire
 from django_domain_events.models.event_record import EventRecord
-from django_domain_events.propagate_scope import propagate_scope
+from django_domain_events.scope.attributed import attributed, current_scope
+from django_domain_events.scope.propagate_scope import propagate_scope
 from tests.testapp.events import OrderPlaced
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -151,7 +151,7 @@ def test_the_outermost_block_leaves_the_variable_unset() -> None:
     """Reset by token, not by writing the previous value back. Restoring an
     empty Scope leaves the variable *set*, which is a different state - and the
     difference is what a copied context carries into a worker."""
-    from django_domain_events.attributed import _scope
+    from django_domain_events.scope.attributed import _scope
 
     assert _scope.get() is None
     with attributed(actor_key="system:x"):

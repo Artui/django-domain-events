@@ -6,7 +6,7 @@ import typing
 from collections.abc import Callable
 from typing import Any, cast
 
-from django_domain_events.registry import registry
+from django_domain_events.declaring.registry import registry
 from django_domain_events.types.catalogue import Catalogue
 from django_domain_events.types.catalogue_event import CatalogueEvent
 from django_domain_events.types.catalogue_field import CatalogueField

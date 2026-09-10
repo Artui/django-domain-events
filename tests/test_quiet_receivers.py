@@ -8,13 +8,13 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from django.db import transaction
 
-from django_domain_events.drain_outbox import drain_outbox
-from django_domain_events.fire import fire
+from django_domain_events.delivery.drain_outbox import drain_outbox
+from django_domain_events.delivery.fire import fire
+from django_domain_events.introspection.quiet_receivers import quiet_receivers
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
-from django_domain_events.quiet_receivers import quiet_receivers
-from django_domain_events.replay_events import replay_events
-from django_domain_events.requeue_dead import requeue_dead
+from django_domain_events.operations.replay_events import replay_events
+from django_domain_events.operations.requeue_dead import requeue_dead
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver

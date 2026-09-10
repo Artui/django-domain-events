@@ -1,29 +1,31 @@
-from django_domain_events.assert_fired import assert_fired
-from django_domain_events.attributed import attributed, current_scope
-from django_domain_events.backoff import backoff
-from django_domain_events.catalogue import catalogue
-from django_domain_events.causation import caused_by, causing_event_id
-from django_domain_events.claim_batch import claim_batch
 from django_domain_events.codecs.dataclass_codec import DataclassCodec
 from django_domain_events.codecs.payload_codec import PayloadCodec
 from django_domain_events.codecs.unsupported_payload_type import UnsupportedPayloadType
-from django_domain_events.deliver import deliver_one, deliver_pending
-from django_domain_events.drain_outbox import drain_outbox
-from django_domain_events.event import event
-from django_domain_events.fire import fire
-from django_domain_events.listens_for import listens_for
-from django_domain_events.outbox_health import outbox_health
+from django_domain_events.declaring.event import event
+from django_domain_events.declaring.listens_for import listens_for
+from django_domain_events.declaring.receiver import receiver
+from django_domain_events.declaring.registry import Registry, registry
+from django_domain_events.delivery.backoff import backoff
+from django_domain_events.delivery.claim_batch import claim_batch
+from django_domain_events.delivery.deliver import deliver_one, deliver_pending
+from django_domain_events.delivery.drain_outbox import drain_outbox
+from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.run_relay import run_relay
+from django_domain_events.delivery.wake import notify_relay
+from django_domain_events.introspection.catalogue import catalogue
+from django_domain_events.introspection.outbox_health import outbox_health
+from django_domain_events.introspection.quiet_receivers import quiet_receivers
+from django_domain_events.introspection.render_catalogue import render_catalogue
+from django_domain_events.introspection.what_listens_to import what_listens_to
+from django_domain_events.operations.prune_events import prune_events
+from django_domain_events.operations.replay_events import replay_events
+from django_domain_events.operations.requeue_dead import requeue_dead
 from django_domain_events.payload_upgrade_failed import PayloadUpgradeFailed
-from django_domain_events.propagate_scope import propagate_scope
-from django_domain_events.prune_events import prune_events
-from django_domain_events.quiet_receivers import quiet_receivers
-from django_domain_events.receiver import receiver
-from django_domain_events.registry import Registry, registry
-from django_domain_events.render_catalogue import render_catalogue
-from django_domain_events.replay_events import replay_events
-from django_domain_events.requeue_dead import requeue_dead
-from django_domain_events.run_relay import run_relay
-from django_domain_events.suppressed import suppressed
+from django_domain_events.scope.attributed import attributed, current_scope
+from django_domain_events.scope.causation import caused_by, causing_event_id
+from django_domain_events.scope.propagate_scope import propagate_scope
+from django_domain_events.scope.suppressed import suppressed
+from django_domain_events.testing.assert_fired import assert_fired
 from django_domain_events.types.catalogue import Catalogue
 from django_domain_events.types.catalogue_event import CatalogueEvent
 from django_domain_events.types.catalogue_field import CatalogueField
@@ -39,8 +41,6 @@ from django_domain_events.types.registered_receiver import RegisteredReceiver
 from django_domain_events.types.scope import Scope
 from django_domain_events.types.task_backend import TaskBackend
 from django_domain_events.version import __version__
-from django_domain_events.wake import notify_relay
-from django_domain_events.what_listens_to import what_listens_to
 
 DURABLE = DeliveryMode.DURABLE
 INLINE = DeliveryMode.INLINE

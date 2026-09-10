@@ -8,12 +8,12 @@ from datetime import datetime, timedelta, timezone
 
 from django.db import connections
 
-from django_domain_events.claim_batch import claim_batch
-from django_domain_events.deliver import dispatch_one
+from django_domain_events.delivery.claim_batch import claim_batch
+from django_domain_events.delivery.deliver import dispatch_one
+from django_domain_events.delivery.wake import wait_for_work
+from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_status import DeliveryStatus
-from django_domain_events.wake import wait_for_work
-from django_domain_events.write_alias import write_alias
 
 logger = logging.getLogger(__name__)
 

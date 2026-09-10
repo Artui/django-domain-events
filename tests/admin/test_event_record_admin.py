@@ -9,8 +9,8 @@ from django.db import transaction
 from django.test import RequestFactory
 
 from django_domain_events.admin.event_record_admin import EventRecordAdmin
-from django_domain_events.drain_outbox import drain_outbox
-from django_domain_events.fire import fire
+from django_domain_events.delivery.drain_outbox import drain_outbox
+from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from tests.testapp.events import OrderPlaced

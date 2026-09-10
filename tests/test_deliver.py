@@ -8,10 +8,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from django.db import OperationalError, connection, transaction
 
-from django_domain_events.claim_batch import claim_batch
-from django_domain_events.deliver import deliver_one, deliver_pending
-from django_domain_events.drain_outbox import drain_outbox
-from django_domain_events.fire import fire
+from django_domain_events.delivery.claim_batch import claim_batch
+from django_domain_events.delivery.deliver import deliver_one, deliver_pending
+from django_domain_events.delivery.drain_outbox import drain_outbox
+from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.settings import setting
@@ -247,7 +247,7 @@ def test_a_write_conditioned_on_a_lapsed_claim_lands_nowhere(
     whoever legitimately took it, resurrecting a SUCCEEDED row and resetting the
     attempt budget that makes max_attempts mean anything.
     """
-    from django_domain_events.deliver import _Fence
+    from django_domain_events.delivery.deliver import _Fence
 
     with transaction.atomic():
         fire(order)
@@ -368,7 +368,7 @@ def test_a_write_conditioned_on_a_lapsed_claim_lands_nowhere(
     whoever legitimately took it, resurrecting a SUCCEEDED row and resetting the
     attempt budget that makes max_attempts mean anything.
     """
-    from django_domain_events.deliver import _Fence
+    from django_domain_events.delivery.deliver import _Fence
 
     with transaction.atomic():
         fire(order)

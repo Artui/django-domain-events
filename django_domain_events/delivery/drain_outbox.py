@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from django_domain_events.deliver import deliver_pending
+from django_domain_events.delivery.deliver import deliver_pending
 from django_domain_events.types.delivery_status import DeliveryStatus
 
 

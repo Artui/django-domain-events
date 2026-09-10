@@ -21,14 +21,14 @@ from django.db import transaction
 from django.test import override_settings
 
 from django_domain_events import checks
-from django_domain_events.attributed import attributed
 from django_domain_events.codecs.dacite_codec import DaciteCodec
 from django_domain_events.codecs.dataclass_codec import DataclassCodec, _coerce
 from django_domain_events.codecs.unsupported_payload_type import UnsupportedPayloadType
-from django_domain_events.drain_outbox import drain_outbox
-from django_domain_events.event import event
-from django_domain_events.fire import fire
-from django_domain_events.registry import registry
+from django_domain_events.declaring.event import event
+from django_domain_events.declaring.registry import registry
+from django_domain_events.delivery.drain_outbox import drain_outbox
+from django_domain_events.delivery.fire import fire
+from django_domain_events.scope.attributed import attributed
 from django_domain_events.types.delivery_context import DeliveryContext
 from tests.testapp.events import OrderPlaced
 

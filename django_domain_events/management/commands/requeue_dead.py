@@ -4,7 +4,7 @@ from typing import Any
 
 from django.core.management.base import BaseCommand
 
-from django_domain_events.requeue_dead import requeue_dead
+from django_domain_events.operations.requeue_dead import requeue_dead
 
 
 class Command(BaseCommand):

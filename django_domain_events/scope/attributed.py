@@ -8,7 +8,7 @@ from dataclasses import replace
 from typing import Any
 from uuid import UUID, uuid4
 
-from django_domain_events.causation import inherited_correlation_id
+from django_domain_events.scope.causation import inherited_correlation_id
 from django_domain_events.types.scope import Actor, Scope
 
 # Default None rather than a Scope instance. A default would be shared by every

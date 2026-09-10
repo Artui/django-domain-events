@@ -40,18 +40,27 @@ def test_the_public_surface_is_importable() -> None:
 
 def test_the_symbol_wins_over_the_submodule_of_the_same_name() -> None:
     """Under one-symbol-per-file the module and the symbol share a name, and
-    importing the submodule binds the *module* as an attribute of the package.
+    importing the submodule binds the *module* as an attribute of its package.
 
     This is the regression test for a real consumer-facing bug: with a lazy PEP
-    562 re-export, this package's own ``from django_domain_events.fire import
-    context_for`` rebound the attribute, and ``from django_domain_events import
-    fire`` then handed back a module object.
+    562 re-export, this package's own ``from django_domain_events.delivery.fire
+    import context_for`` rebound the attribute, and ``from django_domain_events
+    import fire`` then handed back a module object.
+
+    The subject is the **package root** attribute, which is the public surface.
+    ``delivery.fire`` staying a module is correct and is the other half of the
+    same behaviour: the concern packages re-export nothing on purpose, so
+    nothing there can shadow a submodule and cause an import cycle.
     """
     import django_domain_events
-    import django_domain_events.fire
+    import django_domain_events.delivery.fire
 
     assert callable(django_domain_events.fire)
     assert not hasattr(django_domain_events.fire, "__file__")
+
+    from types import ModuleType
+
+    assert isinstance(django_domain_events.delivery.fire, ModuleType)
 
 
 def test_an_unknown_name_raises_attribute_error() -> None:

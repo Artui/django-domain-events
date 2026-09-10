@@ -4,8 +4,8 @@ from datetime import datetime, timedelta
 
 from django.db import connections, models, transaction
 
+from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.types.delivery_status import DeliveryStatus
-from django_domain_events.write_alias import write_alias
 
 
 def claim_batch(

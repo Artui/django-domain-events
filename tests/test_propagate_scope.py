@@ -3,9 +3,9 @@ from __future__ import annotations
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from django_domain_events.attributed import attributed, current_scope
-from django_domain_events.propagate_scope import propagate_scope
-from django_domain_events.suppressed import suppressed, suppression_for
+from django_domain_events.scope.attributed import attributed, current_scope
+from django_domain_events.scope.propagate_scope import propagate_scope
+from django_domain_events.scope.suppressed import suppressed, suppression_for
 from tests.testapp.events import OrderPlaced
 
 

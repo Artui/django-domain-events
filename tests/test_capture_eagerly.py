@@ -3,10 +3,10 @@ from __future__ import annotations
 import pytest
 from django.db import transaction
 
-from django_domain_events.attributed import attributed, current_scope
-from django_domain_events.drain_outbox import drain_outbox
-from django_domain_events.fire import fire
+from django_domain_events.delivery.drain_outbox import drain_outbox
+from django_domain_events.delivery.fire import fire
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.scope.attributed import attributed, current_scope
 from tests.conftest import receiver_replaced
 from tests.testapp.events import OrderPlaced
 

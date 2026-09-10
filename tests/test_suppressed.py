@@ -3,10 +3,10 @@ from __future__ import annotations
 import pytest
 from django.db import transaction
 
-from django_domain_events.fire import fire
+from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
-from django_domain_events.suppressed import suppressed
+from django_domain_events.scope.suppressed import suppressed
 from tests.testapp.events import OrderPlaced, PinnedName
 
 pytestmark = pytest.mark.django_db(transaction=True)

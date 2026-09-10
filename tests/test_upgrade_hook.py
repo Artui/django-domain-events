@@ -15,12 +15,12 @@ from unittest import mock
 import pytest
 from django.db import transaction
 
-from django_domain_events.assert_fired import assert_fired
-from django_domain_events.drain_outbox import drain_outbox
-from django_domain_events.event import event
-from django_domain_events.fire import fire
+from django_domain_events.declaring.event import event
+from django_domain_events.delivery.drain_outbox import drain_outbox
+from django_domain_events.delivery.fire import fire
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.payload_upgrade_failed import PayloadUpgradeFailed
+from django_domain_events.testing.assert_fired import assert_fired
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver

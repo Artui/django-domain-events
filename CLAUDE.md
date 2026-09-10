@@ -52,8 +52,30 @@ Non-negotiable. They keep the package navigable.
 6. **`__init__.py` is the only re-export point.** Each `__init__.py` lists the
    public surface in `__all__`. Internal modules import from leaf paths, never
    from the package's `__init__`.
-7. **Types live in `types/`.** Value-shape carriers live under `types/`;
-   behavioural code lives at the package root.
+7. **The package root is a table of contents, not a drawer.** It holds
+   `__init__.py`, `version.py`, `settings.py`, `apps.py`, `checks.py`, `utils.py`
+   and nothing else; everything the package does lives in a subpackage named for
+   a **concern** - `declaring/`, `delivery/`, `scope/`, `introspection/`,
+   `operations/`, `testing/` - never for a kind of thing, since `helpers/`,
+   `core/` and `common/` name nothing and become a flat root one level down.
+   Three modules on one concern earn a directory. `types/` is the one standing
+   subpackage, for value-shape carriers. There is no `exceptions/`: an exception
+   lives beside its raiser, which is why `payload_upgrade_failed.py` is at the
+   root next to the `utils.py` that raises it.
+
+   This replaced a rule reading "behavioural code lives at the package root",
+   which did not merely permit the flat root but required it - and had produced
+   33 modules there, with `catalogue` and `outbox_health` existing twice each.
+   Every other rule above governs a file; this is the one that governs a
+   directory.
+
+8. **A concern subpackage re-exports nothing.** Its `__init__.py` is a docstring.
+   These are internal groupings and the package root is the public surface, so a
+   re-export buys nothing and costs a class of circular import: a leaf import
+   runs the parent first, so an eager `declaring/__init__` makes
+   `declaring.registry` pull in `event`, which imports `utils`, which imports
+   `registry`. `models/`, `types/` and `codecs/` do re-export, because nothing
+   inside them imports back out.
 
 ## Constraints that look like tidy-ups
 

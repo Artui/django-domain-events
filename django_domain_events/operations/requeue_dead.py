@@ -6,10 +6,10 @@ from typing import Any
 
 from django.db.models import QuerySet
 
+from django_domain_events.delivery.wake import notify_relay
+from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_status import DeliveryStatus
-from django_domain_events.wake import notify_relay
-from django_domain_events.write_alias import write_alias
 
 
 def requeue_dead(

@@ -6,8 +6,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from django.db import connection, connections, transaction
 
-from django_domain_events.claim_batch import claim_batch
-from django_domain_events.fire import fire
+from django_domain_events.delivery.claim_batch import claim_batch
+from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.testapp.events import OrderPlaced

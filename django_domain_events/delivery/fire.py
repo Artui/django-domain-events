@@ -7,19 +7,19 @@ from uuid import UUID
 
 from django.db import transaction
 
-from django_domain_events.attributed import current_scope
-from django_domain_events.causation import (
+from django_domain_events.declaring.registry import registry
+from django_domain_events.delivery.wake import notify_relay
+from django_domain_events.delivery.write_alias import write_alias
+from django_domain_events.scope.attributed import current_scope
+from django_domain_events.scope.causation import (
     caused_by,
     causing_event_id,
     inherited_correlation_id,
 )
-from django_domain_events.registry import registry
+from django_domain_events.scope.suppressed import suppression_for
 from django_domain_events.settings import get_codec, setting
-from django_domain_events.suppressed import suppression_for
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
-from django_domain_events.wake import notify_relay
-from django_domain_events.write_alias import write_alias
 
 
 def fire(
@@ -149,8 +149,8 @@ def _deliver_eagerly(delivery_ids: list[int]) -> Callable[[], None]:
     """
 
     def run() -> None:
-        from django_domain_events.claim_batch import claim_batch
-        from django_domain_events.deliver import dispatch_one
+        from django_domain_events.delivery.claim_batch import claim_batch
+        from django_domain_events.delivery.deliver import dispatch_one
 
         now = datetime.now(timezone.utc)
         claimed = claim_batch(

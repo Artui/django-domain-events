@@ -5,7 +5,7 @@ from typing import Any
 
 from django.core.management.base import BaseCommand
 
-from django_domain_events.quiet_receivers import quiet_receivers
+from django_domain_events.introspection.quiet_receivers import quiet_receivers
 
 
 class Command(BaseCommand):

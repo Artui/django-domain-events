@@ -9,9 +9,9 @@ import pytest
 from django.db import transaction
 
 from django_domain_events import checks
-from django_domain_events.fire import fire
-from django_domain_events.registry import registry
-from django_domain_events.suppressed import suppressed
+from django_domain_events.declaring.registry import registry
+from django_domain_events.delivery.fire import fire
+from django_domain_events.scope.suppressed import suppressed
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_receiver import RegisteredReceiver
 from tests.conftest import event_deleted, receiver_deleted
@@ -145,7 +145,7 @@ def test_a_settled_row_naming_a_retired_event_is_not_reported(
 ) -> None:
     """History, not a problem. Warning about it on every ``check`` run teaches
     the reader to skip the output."""
-    from django_domain_events.drain_outbox import drain_outbox
+    from django_domain_events.delivery.drain_outbox import drain_outbox
 
     with transaction.atomic():
         fire(order)
