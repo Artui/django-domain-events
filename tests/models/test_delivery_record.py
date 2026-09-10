@@ -27,7 +27,7 @@ def test_it_identifies_the_pair_it_represents() -> None:
     row = DeliveryRecord.objects.create(
         event=event, receiver_key="testapp.durable_receiver", available_at=event.recorded_at
     )
-    assert str(row) == f"testapp.durable_receiver <- event {event.pk} (pending)"
+    assert str(row) == f"testapp.durable_receiver <- {event.name}#{event.pk} (pending)"
 
 
 def test_one_delivery_per_event_and_receiver() -> None:

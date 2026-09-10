@@ -13,11 +13,6 @@ class DeliveryRecord(models.Model):
     other four. Only ``DURABLE`` receivers get a row.
     """
 
-    # Django adds event_id at runtime. The bare annotation makes it visible to
-    # the type checker without entering the class dict, so field collection
-    # never sees it.
-    event_id: int
-
     event = models.ForeignKey(
         "django_domain_events.EventRecord",
         on_delete=models.CASCADE,
@@ -94,4 +89,26 @@ class DeliveryRecord(models.Model):
         verbose_name_plural = "delivery records"
 
     def __str__(self) -> str:
-        return f"{self.receiver_key} <- event {self.event_id} ({self.status})"
+        # Traverses the relation rather than reading ``event_id``, and gains
+        # rather than costs: ``EventRecord.__str__`` is ``name#pk``, so this
+        # reads "receiver <- shop.OrderPlaced#42" where the id alone read
+        # "receiver <- event 42". An operator gets the join key *and* what the
+        # event was.
+        #
+        # The traversal costs one query on an instance that did not fetch the
+        # event, so it is worth knowing where this actually renders: **not** the
+        # changelist, whose first ``list_display`` column is ``receiver_key``,
+        # so ``__str__`` is never its link text. It renders on the delete
+        # confirmation page, in object history, and in related-field widgets.
+        # Bounded, and the same trade every other model in the family makes.
+        #
+        # A growth test over the changelist was written to guard this and then
+        # deleted: it passed with ``list_select_related`` removed, because
+        # ``list_display`` names ``event`` and Django select_relates on its own
+        # whenever a related field appears there. A test that cannot fail is
+        # worse than no test, and this one was also aimed at the wrong page.
+        #
+        # It also removes the ``event_id: int`` annotation this file used to
+        # carry for ty's benefit. That was the smaller reason and it is a
+        # welcome side effect, not the argument.
+        return f"{self.receiver_key} <- {self.event} ({self.status})"
