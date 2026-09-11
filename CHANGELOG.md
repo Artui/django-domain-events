@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `tests/` mirrors the package again. The layout regroup in 0.8.0 moved the source
+  into subpackages and rewrote the test imports without moving the test files, so
+  the two stopped matching what `CLAUDE.md` requires. Twenty-nine files moved; six
+  stay at the test root because their subjects do.
+
 ## [0.8.0] — 2026-09-11
 
 ### Added

@@ -42,7 +42,10 @@ def test_a_relay_site_receiver_is_delivered_in_place(
     order: OrderPlaced, record: list[str], settings
 ) -> None:
     settings.DJANGO_DOMAIN_EVENTS = {
-        "TASK_BACKEND": "tests.test_django_tasks_backend.RecordingBackend"
+        # The dotted path names this module, so it has to move with the file.
+        # It is the one reference a rename cannot follow: everything else is an
+        # import the tooling rewrites, and this is a string a setting resolves.
+        "TASK_BACKEND": "tests.delivery.test_django_tasks_backend.RecordingBackend"
     }
     with transaction.atomic():
         fire(order)
@@ -63,7 +66,7 @@ def test_a_task_site_receiver_is_handed_off(
     has happened to it yet. If the enqueue is lost the lease lapses and the
     relay reclaims it, which is what makes a lossy queue safe here."""
     settings.DJANGO_DOMAIN_EVENTS = {
-        "TASK_BACKEND": "tests.test_django_tasks_backend.RecordingBackend"
+        "TASK_BACKEND": "tests.delivery.test_django_tasks_backend.RecordingBackend"
     }
     from django_domain_events.declaration.registry import registry
 
@@ -159,7 +162,7 @@ def test_every_delivery_path_honours_the_site(
     docstring exists to prevent.
     """
     settings.DJANGO_DOMAIN_EVENTS = {
-        "TASK_BACKEND": "tests.test_django_tasks_backend.RecordingBackend"
+        "TASK_BACKEND": "tests.delivery.test_django_tasks_backend.RecordingBackend"
     }
     from django_domain_events.declaration.registry import registry
     from django_domain_events.delivery.drain_outbox import drain_outbox
