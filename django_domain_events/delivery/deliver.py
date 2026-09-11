@@ -16,6 +16,7 @@ from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.scope.causation import caused_by
 from django_domain_events.settings import get_task_backend, setting
 from django_domain_events.types.delivery_context import DeliveryContext
+from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.utils import decode_payload
 
@@ -226,10 +227,12 @@ def _fail(
     now = datetime.now(timezone.utc)
     attempts = attempt if attempt is not None else row.attempts + 1
     exhausted = attempts >= row.max_attempts
-    return fence.write(
-        status=DeliveryStatus.DEAD if exhausted else DeliveryStatus.FAILED,
+    status = DeliveryStatus.DEAD if exhausted else DeliveryStatus.FAILED
+    truncated = message[:2000]
+    outcome = fence.write(
+        status=status,
         attempts=attempts,
-        last_error=message[:2000],
+        last_error=truncated,
         completed_at=now if exhausted else None,
         available_at=now
         + backoff(
@@ -239,6 +242,51 @@ def _fail(
             jitter=random.random(),
         ),
     )
+    if outcome is not None:
+        _notify_failure(row, status=status, attempt=attempts, error=truncated)
+    return outcome
+
+
+def _notify_failure(row: Any, *, status: DeliveryStatus, attempt: int, error: str) -> None:
+    """Tell the receiver its attempt failed, if it asked to be told.
+
+    Called from here rather than from the delivery block above, and that is the
+    whole point of the hook. A receiver runs inside the transaction carrying its
+    acknowledgement, so everything it wrote is rolled back the moment it raises;
+    it had no way to keep a record of its own failure. This runs after that
+    rollback and after the row is written, so what the hook writes survives.
+
+    Only when the row was actually claimed by this worker -- ``outcome`` is None
+    when the lease lapsed and somebody else owns the delivery now, and telling a
+    receiver about a failure another worker will re-attempt would log the same
+    attempt twice.
+
+    A raising hook is logged and swallowed. It is on the failure path, and a
+    failure path that fails leaves the delivery row correct and the operator
+    with a traceback about logging rather than about the delivery.
+    """
+    receiver = registry.receiver_for_key(row.receiver_key)
+    if receiver is None or receiver.on_failure is None:
+        return
+    try:
+        receiver.on_failure(
+            DeliveryFailure(
+                delivery_id=row.pk,
+                event_id=row.event_id,
+                event_name=row.event.name,
+                receiver_key=row.receiver_key,
+                attempt=attempt,
+                status=status,
+                error=error,
+            )
+        )
+    except Exception:
+        logger.exception(
+            "on_failure hook for receiver %s raised while recording delivery %s; "
+            "the delivery row is correct and the hook's record is lost",
+            row.receiver_key,
+            row.pk,
+        )
 
 
 def deliver_pending(

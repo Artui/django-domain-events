@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `receiver(..., on_failure=...)` and `DeliveryFailure`. A receiver can now keep a
+  durable record of its own failure, which it could not before: it runs inside the
+  transaction carrying its acknowledgement, so everything it writes is discarded
+  the moment it raises, and the attempts worth logging were exactly the ones that
+  could not be logged. The hook runs after the delivery row is written and outside
+  that rolled-back transaction, so what it writes survives.
+  It is called for `FAILED` and for `DEAD`, because "it failed again" and "it will
+  not be tried again" are different things to record. It is not called by a worker
+  whose write landed nowhere, since whoever legitimately holds the row will report
+  its own outcome. A hook that raises is logged and swallowed: a failure path that
+  fails is worse than a lost log line.
+
 ### Changed
 - Layout: the package root now holds `__init__.py`, `version.py`, `settings.py`,
   `apps.py`, `checks.py`, `utils.py` and `payload_upgrade_failed.py`. Everything

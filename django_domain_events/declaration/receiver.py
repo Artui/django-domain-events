@@ -5,6 +5,7 @@ from typing import Literal, TypeVar, overload
 
 from django_domain_events.declaration.registry import registry
 from django_domain_events.types.delivery_context import DeliveryContext
+from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_receiver import RegisteredReceiver
 from django_domain_events.utils import label_for
@@ -26,6 +27,7 @@ def receiver(
     eager: bool = False,
     site: str = "relay",
     lease_seconds: int | None = None,
+    on_failure: Callable[[DeliveryFailure], None] | None = None,
 ) -> Callable[[Plain[E]], Plain[E]]: ...
 @overload
 def receiver(
@@ -38,6 +40,7 @@ def receiver(
     eager: bool = False,
     site: str = "relay",
     lease_seconds: int | None = None,
+    on_failure: Callable[[DeliveryFailure], None] | None = None,
 ) -> Callable[[WithContext[E]], WithContext[E]]: ...
 def receiver(
     event_class: type[E],
@@ -49,6 +52,7 @@ def receiver(
     eager: bool = False,
     site: str = "relay",
     lease_seconds: int | None = None,
+    on_failure: Callable[[DeliveryFailure], None] | None = None,
 ) -> Callable[[Callable[..., None]], Callable[..., None]]:
     """Register a callable to receive one event type.
 
@@ -70,6 +74,14 @@ def receiver(
     loses. It is what stops ``DURABLE`` feeling slow: outbox durability at
     on-commit latency, at the cost of a duplicate when the process dies
     mid-receiver - which at-least-once already required everyone to tolerate.
+
+    ``on_failure`` is called after a failed attempt has been recorded, outside
+    the transaction that was just rolled back, so a receiver can keep a durable
+    record of its own failure. It could not before: everything a receiver writes
+    commits with its acknowledgement and is discarded the moment it raises, so
+    the attempts worth logging were exactly the ones that could not be logged.
+    The hook must not raise; one that does is logged and swallowed, because a
+    failure path that fails is worse than a lost log line.
 
     ``lease_seconds`` overrides ``LEASE_SECONDS`` for this receiver alone, and
     is the answer for one that legitimately runs long. A receiver still working
@@ -125,6 +137,7 @@ def receiver(
                 max_attempts=max_attempts,
                 eager=eager,
                 site=site,
+                on_failure=on_failure,
                 lease_seconds=lease_seconds,
             )
         )

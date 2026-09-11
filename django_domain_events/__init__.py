@@ -31,6 +31,7 @@ from django_domain_events.types.catalogue_event import CatalogueEvent
 from django_domain_events.types.catalogue_field import CatalogueField
 from django_domain_events.types.catalogue_receiver import CatalogueReceiver
 from django_domain_events.types.delivery_context import DeliveryContext
+from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.outbox_health import OutboxHealth
@@ -54,6 +55,7 @@ __all__ = [
     "DURABLE",
     "DataclassCodec",
     "DeliveryContext",
+    "DeliveryFailure",
     "DeliveryMode",
     "DeliveryStatus",
     "INLINE",
