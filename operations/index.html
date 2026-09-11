@@ -824,13 +824,13 @@ was broken and now is not. From Python it is also scopeable by row:</p>
 blast radius, and reading it as "no limit" would give them the largest one.</p>
 <h2 id="handing-delivery-to-a-task-queue">Handing delivery to a task queue<a class="headerlink" href="#handing-delivery-to-a-task-queue" title="Permanent link">&para;</a></h2>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.django_tasks_backend.DjangoTasksBackend"</span><span class="p">,</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend"</span><span class="p">,</span>
 </span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>or with options:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
 </span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="p">{</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>        <span class="s2">"BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.django_tasks_backend.DjangoTasksBackend"</span><span class="p">,</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>        <span class="s2">"BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend"</span><span class="p">,</span>
 </span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>        <span class="s2">"queue_name"</span><span class="p">:</span> <span class="s2">"events"</span><span class="p">,</span>
 </span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="p">},</span>
 </span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="p">}</span>
