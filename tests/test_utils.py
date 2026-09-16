@@ -9,7 +9,6 @@ import pytest
 
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.utils import (
-    TARGET_MAX_LENGTH,
     label_for,
     require_frozen_dataclass,
     resolve_targets,
@@ -127,16 +126,3 @@ def test_a_blank_target_is_refused() -> None:
     """Blank is what a receiver without targets= writes."""
     with pytest.raises(ValueError, match="returned an empty string"):
         _resolve("a", "")
-
-
-def test_a_target_longer_than_the_column_is_refused() -> None:
-    """Only some databases enforce the length, so the refusal is made here."""
-    assert _resolve("x" * TARGET_MAX_LENGTH) == ["x" * TARGET_MAX_LENGTH]
-    with pytest.raises(ValueError, match="a target of 256 characters"):
-        _resolve("x" * (TARGET_MAX_LENGTH + 1))
-
-
-def test_the_length_limit_is_the_columns() -> None:
-    from django_domain_events.models.delivery_record import DeliveryRecord
-
-    assert DeliveryRecord._meta.get_field("target").max_length == TARGET_MAX_LENGTH == 255

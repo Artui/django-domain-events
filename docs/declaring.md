@@ -132,9 +132,9 @@ retries, and the receiver is told which one it is delivering to as
 
 - A target returned twice is delivered **once**.
 - **An empty list writes no row**, and is not an error.
-- A target must be a non-empty string of at most 255 characters. Anything else
-  is refused where it is returned: blank is what a receiver *without* `targets=`
-  writes, and only some databases enforce the column's length.
+- A target must be a non-empty string. Anything else is refused where it is
+  returned: blank is what a receiver *without* `targets=` writes, and a
+  non-string would be stored as its `str()` and never match itself on replay.
 
 !!! danger "The callable runs inside the caller's transaction"
     It runs at fire time, beside the event row, in whatever transaction

@@ -14,15 +14,6 @@ from django_domain_events.payload_upgrade_failed import PayloadUpgradeFailed
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_status import DeliveryStatus
 
-TARGET_MAX_LENGTH = 255
-"""The longest target a fan-out receiver may return.
-
-Checked in Python rather than left to the column, because only some backends
-enforce a ``varchar`` length: Postgres refuses an overlong value, SQLite stores
-it, and a fan-out that works in the test suite and fails in production is the
-worst way to learn which one a project runs.
-"""
-
 TERMINAL = (DeliveryStatus.SUCCEEDED, DeliveryStatus.DEAD, DeliveryStatus.ORPHANED)
 """Statuses a delivery does not come back from.
 
@@ -167,14 +158,13 @@ def resolve_targets(
     Shared by ``fire()`` and ``replay_events()``, so a replay cannot write a
     target that firing would have refused.
 
-    Three refusals, each raised rather than skipped, because this runs inside a
+    Two refusals, each raised rather than skipped, because this runs inside a
     transaction somebody else opened and the alternative to raising is a
     delivery that silently never happens. A non-string is refused because the
     column would store its ``str()`` while a replay compares the original
     value, so the two would never match. An empty string is refused because it
     is what a receiver *without* targets writes, and a blank row from a fan-out
-    would read as not being one. An overlong one is refused here because only
-    some databases enforce the column's length.
+    would read as not being one.
 
     Duplicates are dropped, first occurrence kept: one delivery per target is
     the promise, and the unique constraint would otherwise turn a callable that
@@ -191,11 +181,6 @@ def resolve_targets(
             raise ValueError(
                 f"targets for receiver {receiver_key!r} returned an empty string. A blank "
                 f"target is what a receiver without targets= writes, so it cannot name one."
-            )
-        if len(target) > TARGET_MAX_LENGTH:
-            raise ValueError(
-                f"targets for receiver {receiver_key!r} returned a target of {len(target)} "
-                f"characters; the most a delivery row holds is {TARGET_MAX_LENGTH}."
             )
         resolved[target] = None
     return list(resolved)

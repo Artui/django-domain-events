@@ -3,7 +3,6 @@ from __future__ import annotations
 from django.db import models
 
 from django_domain_events.types.delivery_status import DeliveryStatus
-from django_domain_events.utils import TARGET_MAX_LENGTH
 
 
 class DeliveryRecord(models.Model):
@@ -23,7 +22,7 @@ class DeliveryRecord(models.Model):
     )
     receiver_key = models.CharField(max_length=255, db_index=True)
 
-    target = models.CharField(max_length=TARGET_MAX_LENGTH, blank=True, default="")
+    target = models.TextField(blank=True, default="")
     """Which of a fan-out receiver's targets this delivery is for, or blank.
 
     Blank for every receiver declared without ``targets=``, which is every
@@ -31,6 +30,9 @@ class DeliveryRecord(models.Model):
     is what those rows would have been written with anyway, and nothing needs
     backfilling. A fan-out receiver never writes a blank one: ``fire()``
     refuses an empty target rather than let it read as "not a fan-out".
+
+    Text rather than a bounded string: a target is whatever a consumer's
+    callable names, and this package imposes no length of its own on it.
 
     No index of its own. The unique constraint below leads with the event, and
     every query that reads this column also names the event.

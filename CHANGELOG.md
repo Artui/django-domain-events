@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DeliveryContext` and returning strings. `fire()` writes one delivery row per
   target instead of one per receiver, each with its own attempts, backoff and
   dead-letter, and writes none when it returns nothing. A target returned twice
-  is delivered once; a non-string, blank or overlong target is refused.
+  is delivered once; a non-string or blank target is refused.
   **The callable runs at fire time inside the caller's transaction**: if it
   raises, `fire()` raises and the caller's change rolls back with the event, and
   it costs its query on every event it is owed.

@@ -304,6 +304,25 @@ def test_the_callable_is_handed_the_event_and_the_fire_time_context() -> None:
     )
 
 
+def test_a_target_is_written_as_long_as_it_was_returned() -> None:
+    """No length is imposed on a target, in Python or by the column.
+
+    Backend-dependent in half. Nothing in Python may refuse it on either
+    backend. The column type is held only on Postgres, which refuses a value
+    longer than a varchar's length where SQLite stores it anyway - so on SQLite
+    this test passes with a bounded column, and on Postgres it does not.
+    """
+    long_target = "endpoint:" + "x" * 991
+    receiver(Unheard, key="probe.long", targets=lambda event, context: [long_target])(
+        lambda event: None
+    )
+    with transaction.atomic():
+        fire(Unheard(value=1))
+
+    assert _rows("probe.long") == [(long_target, DeliveryStatus.PENDING, 0)]
+    assert len(long_target) == 1000
+
+
 def test_a_raising_callable_fails_the_callers_transaction() -> None:
     """The business change, the event and the deliveries roll back together.
 

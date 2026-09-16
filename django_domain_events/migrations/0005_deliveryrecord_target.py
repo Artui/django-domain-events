@@ -17,7 +17,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="deliveryrecord",
             name="target",
-            field=models.CharField(blank=True, default="", max_length=255),
+            field=models.TextField(blank=True, default=""),
         ),
         migrations.AddConstraint(
             model_name="deliveryrecord",

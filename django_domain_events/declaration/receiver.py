@@ -108,8 +108,7 @@ def receiver(
     as ``DeliveryContext.target``. A target returned twice is delivered once,
     and a callable returning nothing writes no row at all, which is how a
     wildcard receiver says "not this event". Each target must be a non-empty
-    string of at most 255 characters; anything else is refused where it is
-    returned.
+    string; anything else is refused where it is returned.
 
     **The callable runs inside the caller's transaction, at fire time**, exactly
     as the event row is written - so ``fire()``'s transactional contract is its
