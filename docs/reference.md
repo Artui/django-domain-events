@@ -23,6 +23,8 @@ Everything below is exported from `django_domain_events` directly.
 ::: django_domain_events.delivery.deliver.deliver_pending
 ::: django_domain_events.delivery.claim_batch.claim_batch
 ::: django_domain_events.delivery.backoff.backoff
+::: django_domain_events.delivery.permanent_failure.PermanentFailure
+::: django_domain_events.delivery.retry_after.RetryAfter
 ::: django_domain_events.delivery.wake.notify_relay
 
 ## Operations
@@ -50,6 +52,7 @@ Everything below is exported from `django_domain_events` directly.
 ::: django_domain_events.types.delivery_mode.DeliveryMode
 ::: django_domain_events.types.delivery_status.DeliveryStatus
 ::: django_domain_events.types.delivery_context.DeliveryContext
+::: django_domain_events.types.delivery_failure.DeliveryFailure
 ::: django_domain_events.types.scope.Scope
 ::: django_domain_events.types.catalogue.Catalogue
 ::: django_domain_events.types.catalogue_event.CatalogueEvent

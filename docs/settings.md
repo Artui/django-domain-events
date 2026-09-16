@@ -22,6 +22,7 @@ are changing.
 | `POLL_SECONDS` | `1.0` | Relay poll interval, and the floor under `LISTEN`/`NOTIFY`. |
 | `BACKOFF_BASE_SECONDS` | `2.0` | First retry ceiling; doubles per attempt. |
 | `BACKOFF_CAP_SECONDS` | `3600.0` | Ceiling the doubling stops at. |
+| `MAX_RECEIVER_RETRY_DELAY_SECONDS` | `86400.0` | Longest delay a `RetryAfter` may ask for. |
 | `RETENTION_DAYS` | `90` | Prune window, and the default quiet-receiver window. |
 | `TASK_BACKEND` | `None` | Dotted path, or a `{"BACKEND": ..., **options}` mapping. |
 
@@ -62,6 +63,23 @@ lost or double-recorded acknowledgement.
     ```
 
     `outbox_health().lapsed_leases` tells you when you have got it wrong.
+
+### `MAX_RECEIVER_RETRY_DELAY_SECONDS`
+
+The ceiling on a receiver's own schedule, when it raises `RetryAfter`. A request
+past it is clamped, with a warning naming the receiver, the delivery and both
+numbers, so an operator can tell whether the ceiling or the destination is the
+one to question.
+
+Separate from `BACKOFF_CAP_SECONDS` on purpose. That setting bounds the
+exponential curve, and a destination's `Retry-After` is not a point on a curve:
+sharing one number would clamp an hour-long request to five minutes and hammer
+the thing that asked to be left alone.
+
+It is a ceiling at all because a delivery waiting in the future is still owed.
+`prune_events` removes only settled events, so a row parked for a month keeps its
+event past `RETENTION_DAYS` for that month, and a destination answering with an
+absurd number would keep it indefinitely.
 
 ### `BATCH_SIZE`
 

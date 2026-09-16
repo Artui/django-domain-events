@@ -40,6 +40,9 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
 | `outbox_health()` | whether the queue is draining, as opposed to whether a receiver is running |
 | A backfill | `suppressed()` recording without delivering, and saying why |
 | A row from before a field existed | the `upgrade()` hook migrating a v1 payload |
+| The marketplace answers `410 Gone` | `PermanentFailure` dead-lettering on the attempt that raised it, one of five spent |
+| The carrier asks for two minutes | `RetryAfter` scheduling the next attempt when it asked, and counting the attempt |
+| The customs broker asks for two days | the request clamped to `MAX_RECEIVER_RETRY_DELAY_SECONDS`, with a warning naming both numbers |
 
 ## The declarations
 
@@ -64,6 +67,15 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
 6. **`warm_cache`** - `ON_COMMIT`. Best effort, no row, no retry, which is right
    for work that is pure optimisation.
 7. **`refund`** - deliberately broken, so the dead-letter path is visible.
+8. **`notify_marketplace`** - `PermanentFailure`, because the marketplace has
+   said `410 Gone` and four more attempts across the next hour would only be
+   four more refusals.
+9. **`register_tracking`** - `RetryAfter`, because the carrier's rate limiter
+   said when to come back, and the backoff curve would only guess. It still
+   costs an attempt, so a limiter that never relents still dead-letters.
+10. **`book_customs_clearance`** - `RetryAfter` past the ceiling. A delivery
+    parked in the future is still owed and keeps its event past retention, so
+    the relay caps the wait and says so.
 
 ## Other things to try
 

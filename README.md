@@ -86,7 +86,10 @@ python manage.py deliver_events --once   # one pass, for cron or CI
 The relay claims with `SELECT ... FOR UPDATE SKIP LOCKED` under a lease, so you
 can run as many as you like: two workers never take the same row, and one that
 dies without acknowledging has its rows reclaimed when the lease lapses. Failed
-deliveries retry with exponential backoff and full jitter, then dead-letter.
+deliveries retry with exponential backoff and full jitter, then dead-letter. A
+receiver that knows better says so by raising: `PermanentFailure` dead-letters on
+the attempt that raised it, and `RetryAfter(seconds=120)` schedules the next
+attempt when the destination asked for it rather than when the curve guesses.
 
 Add `eager=True` to a receiver to also attempt it immediately after commit, in
 the firing process, with the relay as the fallback.
