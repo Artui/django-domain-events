@@ -15,6 +15,7 @@ from django_domain_events import (
     DURABLE,
     INLINE,
     ON_COMMIT,
+    AnyEvent,
     DeliveryContext,
     PermanentFailure,
     RetryAfter,
@@ -206,3 +207,45 @@ def book_customs_clearance(evt: ParcelDispatched) -> None:
     day by default - and logs a warning naming both numbers.
     """
     raise RetryAfter(seconds=2 * 86400, reason="the broker is closed for a two-day holiday")
+
+
+def partners_subscribed(evt: object, ctx: DeliveryContext) -> list[str]:
+    """The partners that want this event, read from the table they are kept in.
+
+    Called by `fire()` for every event the shop fires, inside the transaction
+    that fired it, so it is one indexed query in every write this app makes - and
+    if it raised, the write would roll back with it rather than deliver to
+    nobody. An event no partner subscribes to returns nothing, and nothing
+    returned means no delivery row at all.
+    """
+    from shop.models import PartnerSubscription
+
+    return list(
+        PartnerSubscription.objects.filter(event_name=ctx.event_name)
+        .order_by("partner")
+        .values_list("partner", flat=True)
+    )
+
+
+@receiver(
+    AnyEvent,
+    mode=DURABLE,
+    takes_context=True,
+    key="shop.forward_to_partners",
+    targets=partners_subscribed,
+)
+def forward_to_partners(evt: object, ctx: DeliveryContext) -> None:
+    """`AnyEvent` with `targets=`: a transport, owed every event, once per partner.
+
+    Declared once for every event rather than once per event class, so an event
+    added next year - by an app installed after this one - is forwarded without
+    anyone remembering to. Each partner gets a delivery row of its own, with its
+    own attempts and its own dead-letter, and learns which one it is from
+    `ctx.target`. A replay asks `partners_subscribed` again, so it goes to the
+    partners subscribed at replay time.
+    """
+    from shop.models import PartnerNotice
+
+    PartnerNotice.objects.create(
+        partner=ctx.target, event_name=ctx.event_name, event_id=ctx.event_id
+    )

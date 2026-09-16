@@ -2,20 +2,46 @@
 
 from __future__ import annotations
 
+import hashlib
+import importlib
+import secrets
 import warnings
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from unittest import mock
 
 import pytest
+from django.contrib.auth.models import User
 from django.db import transaction
 
+from django_domain_events.declaration.receiver import receiver
+from django_domain_events.declaration.registry import registry
+from django_domain_events.delivery.deliver import deliver_pending
+from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.scope.attributed import attributed
+from django_domain_events.scope.suppressed import suppressed
+from django_domain_events.types.delivery_context import DeliveryContext
+from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_status import DeliveryStatus
-from tests.testapp.events import Eagerly, OrderPlaced, PinnedName
+from tests.testapp.events import Eagerly, OrderPlaced, PinnedName, Unheard
 
 pytestmark = pytest.mark.django_db(transaction=True)
+
+# By module object rather than dotted path: the package root re-exports the
+# function under the module's own name, so the dotted path walks into it.
+_fire_module = importlib.import_module("django_domain_events.delivery.fire")
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_receivers() -> Iterator[None]:
+    """Take this file's ad-hoc receivers back out of the process-wide registry."""
+    yield
+    for key in [key for key in registry._receivers if key.startswith("probe.")]:
+        registry._receivers.pop(key)
 
 
 def test_an_unregistered_class_refuses(record: list[str]) -> None:
@@ -170,3 +196,216 @@ def test_an_eager_receiver_raising_leaves_the_row_owed(record: list[str]) -> Non
     assert row.status == DeliveryStatus.FAILED
     assert row.attempts == 1
     assert row.available_at > row.event.recorded_at
+
+
+def _rows(key: str) -> list[tuple[str, str, int]]:
+    return list(
+        DeliveryRecord.objects.filter(receiver_key=key)
+        .order_by("target")
+        .values_list("target", "status", "attempts")
+    )
+
+
+def test_a_fan_out_writes_one_row_per_target_each_with_its_own_attempts() -> None:
+    """Three targets, three rows, and a failing one does not drag the others.
+
+    One claim of all three, so each is attempted exactly once, then the relay
+    left to spend the failing target's whole budget: the two that succeeded
+    must still read one attempt each at the end.
+    """
+    delivered: list[str] = []
+    failures: list[DeliveryFailure] = []
+
+    def deliver(event: Unheard, context: DeliveryContext) -> None:
+        delivered.append(context.target)
+        if context.target == "b":
+            raise RuntimeError("b is down")
+
+    receiver(
+        Unheard,
+        key="probe.fan",
+        takes_context=True,
+        targets=lambda event, context: ["a", "b", "c"],
+        on_failure=failures.append,
+    )(deliver)
+    with transaction.atomic():
+        fire(Unheard(value=1))
+
+    assert _rows("probe.fan") == [
+        ("a", DeliveryStatus.PENDING, 0),
+        ("b", DeliveryStatus.PENDING, 0),
+        ("c", DeliveryStatus.PENDING, 0),
+    ]
+
+    deliver_pending(limit=3)
+    assert sorted(delivered) == ["a", "b", "c"]
+    assert _rows("probe.fan") == [
+        ("a", DeliveryStatus.SUCCEEDED, 1),
+        ("b", DeliveryStatus.FAILED, 1),
+        ("c", DeliveryStatus.SUCCEEDED, 1),
+    ]
+
+    drain_outbox()
+    assert _rows("probe.fan") == [
+        ("a", DeliveryStatus.SUCCEEDED, 1),
+        ("b", DeliveryStatus.DEAD, 5),
+        ("c", DeliveryStatus.SUCCEEDED, 1),
+    ]
+    # The failure hook can say which target failed, not only which receiver.
+    assert {failure.target for failure in failures} == {"b"}
+
+
+def test_no_targets_writes_no_rows_and_raises_nothing() -> None:
+    """Returning nothing is how a fan-out says "not this event"."""
+    receiver(Unheard, key="probe.nobody", targets=lambda event, context: [])(lambda event: None)
+
+    with mock.patch.object(_fire_module, "notify_relay") as notify, transaction.atomic():
+        event_id = fire(Unheard(value=1))
+
+    assert EventRecord.objects.filter(pk=event_id).exists()
+    assert DeliveryRecord.objects.filter(event_id=event_id).count() == 0
+    # Nothing owed, so nothing to wake a relay for.
+    notify.assert_not_called()
+
+
+def test_one_target_is_enough_to_wake_the_relay() -> None:
+    """The control for the test above: the patch reaches the call, so its
+    silence there is a finding rather than a patch that missed."""
+    receiver(Unheard, key="probe.one", targets=lambda event, context: ["x"])(lambda event: None)
+
+    with mock.patch.object(_fire_module, "notify_relay") as notify, transaction.atomic():
+        fire(Unheard(value=1))
+
+    notify.assert_called_once_with()
+
+
+def test_the_callable_is_handed_the_event_and_the_fire_time_context() -> None:
+    """Everything a data-driven lookup needs: the event, its name, and the scope
+    it was fired under."""
+    seen: list[tuple[object, DeliveryContext]] = []
+
+    def targets(event: Unheard, context: DeliveryContext) -> list[str]:
+        seen.append((event, context))
+        return ["only"]
+
+    receiver(Unheard, key="probe.lookup", targets=targets)(lambda event: None)
+    with transaction.atomic(), attributed(actor_key="auth.User:9", tenant="acme"):
+        event_id = fire(Unheard(value=4))
+
+    [(event, context)] = seen
+    assert event == Unheard(value=4)
+    assert (context.event_id, context.event_name, context.attempt) == (
+        event_id,
+        "testapp.Unheard",
+        1,
+    )
+    assert (context.actor_key, context.scope, context.target) == (
+        "auth.User:9",
+        {"tenant": "acme"},
+        "",
+    )
+
+
+def test_a_target_is_written_as_long_as_it_was_returned() -> None:
+    """Ten thousand incompressible characters, written and read back.
+
+    Backend-dependent, and the Postgres half is the point. A btree index entry
+    there holds at most 2704 bytes, so a target the unique constraint indexed
+    directly would be refused inside the caller's transaction; the constraint
+    indexes the target's digest instead, and the text sits in no index at all.
+    SQLite imposes neither limit, so there this pins only that nothing in
+    Python refuses the length.
+    """
+    long_target = secrets.token_urlsafe(7500)[:10_000]
+    receiver(Unheard, key="probe.long", targets=lambda event, context: [long_target])(
+        lambda event: None
+    )
+    with transaction.atomic():
+        fire(Unheard(value=1))
+
+    assert _rows("probe.long") == [(long_target, DeliveryStatus.PENDING, 0)]
+    assert len(long_target) == 10_000
+
+
+def test_every_row_fire_writes_carries_the_digest_of_its_target() -> None:
+    """Both kinds of row: a fan-out target, and the blank one a plain receiver
+    writes, whose digest is the digest of the empty string rather than a
+    special case."""
+    receiver(Unheard, key="probe.fan", targets=lambda event, context: ["a", "b" * 3000])(
+        lambda event: None
+    )
+    receiver(Unheard, key="probe.plain")(lambda event: None)
+    with transaction.atomic():
+        fire(Unheard(value=1))
+
+    stored = list(
+        DeliveryRecord.objects.filter(receiver_key__startswith="probe.").values_list(
+            "target", "target_digest"
+        )
+    )
+    assert len(stored) == 3
+    assert {"", "a", "b" * 3000} == {target for target, _ in stored}
+    for target, digest in stored:
+        assert digest == hashlib.sha256(target.encode()).hexdigest()
+
+
+def test_a_raising_callable_fails_the_callers_transaction() -> None:
+    """The business change, the event and the deliveries roll back together.
+
+    A fan-out that swallowed this and delivered to nobody would leave a
+    committed change whose consequences silently never happened.
+    """
+
+    def broken(event: Unheard, context: DeliveryContext) -> list[str]:
+        raise RuntimeError("the endpoint table is locked")
+
+    receiver(Unheard, key="probe.broken", targets=broken)(lambda event: None)
+
+    with pytest.raises(RuntimeError, match="the endpoint table is locked"), transaction.atomic():
+        User.objects.create(username="placed-an-order")
+        fire(Unheard(value=1))
+
+    assert not User.objects.filter(username="placed-an-order").exists()
+    assert EventRecord.objects.count() == 0
+    assert DeliveryRecord.objects.count() == 0
+
+
+def test_a_plain_receiver_beside_a_fan_out_keeps_its_single_blank_row() -> None:
+    receiver(Unheard, key="probe.fan", targets=lambda event, context: ["x", "y"])(lambda e: None)
+    receiver(Unheard, key="probe.plain")(lambda event: None)
+
+    with transaction.atomic():
+        fire(Unheard(value=1))
+
+    assert [target for target, _, _ in _rows("probe.plain")] == [""]
+    assert [target for target, _, _ in _rows("probe.fan")] == ["x", "y"]
+
+
+def test_an_eager_fan_out_attempts_every_target_at_commit() -> None:
+    delivered: list[str] = []
+
+    def deliver(event: Unheard, context: DeliveryContext) -> None:
+        delivered.append(context.target)
+
+    receiver(
+        Unheard,
+        key="probe.eager_fan",
+        takes_context=True,
+        eager=True,
+        targets=lambda event, context: ["x", "y"],
+    )(deliver)
+    with transaction.atomic():
+        fire(Unheard(value=1))
+
+    assert sorted(delivered) == ["x", "y"]
+    assert {status for _, status, _ in _rows("probe.eager_fan")} == {DeliveryStatus.SUCCEEDED}
+
+
+def test_the_callable_is_not_called_for_a_suppressed_event() -> None:
+    """Suppression is about the event: nothing is owed, so nothing is looked up."""
+    targets = mock.Mock(return_value=["x"])
+    receiver(Unheard, key="probe.suppressed", targets=targets)(lambda event: None)
+    with transaction.atomic(), suppressed(Unheard, reason="backfill"):
+        fire(Unheard(value=1))
+
+    targets.assert_not_called()

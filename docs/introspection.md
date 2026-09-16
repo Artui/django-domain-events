@@ -38,6 +38,15 @@ diff.
     The Markdown says **"Nothing listens to this event."** rather than leaving
     the section empty. That is the usual reason to read a catalogue at all.
 
+Wildcard receivers, declared for `AnyEvent`, are listed **once**, in an *Every
+event* section at the top, and each event says "Plus every wildcard receiver"
+rather than repeating them - a transport listed under two hundred events is a
+catalogue nobody reads. An event with no receivers of its own says it still
+reaches the wildcards, because "nothing listens" would be false. A fan-out
+receiver has a line under its table naming the callable its targets come from,
+and the JSON carries the same as `targets` on each receiver and
+`wildcard_receivers` at the top level.
+
 Building a catalogue never runs consumer code: a `default_factory` is **named**,
 not called.
 
@@ -53,6 +62,11 @@ listens_for("orders.reserve_stock")  # RegisteredEvent | None
 `what_listens_to` spans every mode, not only the durable ones: "who reacts to
 this" is a question about the code, and an inline receiver is as much a reaction
 as a queued one.
+
+It does not repeat wildcard receivers under each event. They receive it - they
+receive everything - and `what_listens_to(AnyEvent)` returns exactly them.
+`listens_for` returns `None` for a wildcard's key, since it is owed no single
+event; its delivery row already says which one it was.
 
 `listens_for` is the direction an operator actually needs. A dead-letter row
 names a receiver key, and the next question is always what it was supposed to be
@@ -204,7 +218,10 @@ Add `django.contrib.admin` and both models appear, read-only, with actions.
 - **Event records** - filter by name and date, see how many deliveries are still
   owed per event, and **Replay selected events**.
 - **Delivery records** - the dead-letter queue, filterable by status and
-  receiver, with **Requeue selected dead deliveries**.
+  receiver, with **Requeue selected dead deliveries**. Each row shows its
+  target, and the search covers the receiver key, the target and the last error,
+  since the target is what an operator is holding when one destination of a
+  fan-out says it never received something.
 
 Both are read-only, and that is deliberate: the one guarantee this package sells
 is that a row exists if and only if the change committed, and a form that can
@@ -222,7 +239,8 @@ It reports what it skipped: a mixed selection requeues only the dead rows.
 !!! warning "Both actions need the model's **change** permission"
     Django offers an action with no declared permission to anyone who can reach
     the changelist, and `has_change_permission` gates the form alone. Replay
-    re-runs every durable receiver - re-sent emails, re-called webhooks - so a
+    re-runs every durable receiver - re-sent emails, re-called webhooks, and a
+    fan-out receiver's targets asked for again - so a
     view-only grant must not carry it. Give `change_eventrecord` /
     `change_deliveryrecord` to whoever may run them; the edit form stays refused
     either way.

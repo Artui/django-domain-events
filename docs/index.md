@@ -78,8 +78,9 @@ with transaction.atomic():
     fire(OrderPlaced(order_id=order.id, total_cents=order.total_cents))
 ```
 
-The event row and one delivery row per durable receiver are written in that same
-transaction. Then run the relay:
+The event row and one delivery row per durable receiver - one per target, for a
+receiver declared with `targets=` - are written in that same transaction. Then
+run the relay:
 
 ```bash
 python manage.py deliver_events
@@ -88,7 +89,8 @@ python manage.py deliver_events
 ## Where to go next
 
 - [Declaring events and receivers](declaring.md) - the two decorators, payload
-  rules, and what happens when a payload changes shape.
+  rules, what happens when a payload changes shape, receivers for every event,
+  and fan-out to destinations that live in data.
 - [Delivery](delivery.md) - the two knobs, the relay, what failure means in
   each mode, and how a receiver declares a failure permanent or says when to
   retry.

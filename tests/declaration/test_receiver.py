@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 
+from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.declaration.receiver import receiver
 from django_domain_events.declaration.registry import registry
+from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
 from tests.testapp.events import OrderPlaced
 
@@ -91,6 +93,7 @@ def test_a_task_site_needs_a_durable_mode() -> None:
         ({"max_attempts": 8}, "max_attempts=8 needs mode=DURABLE"),
         ({"eager": True}, "eager=True needs mode=DURABLE"),
         ({"lease_seconds": 60}, "lease_seconds=60 needs mode=DURABLE"),
+        ({"targets": lambda evt, ctx: []}, "targets=<function .*> needs mode=DURABLE"),
     ],
 )
 def test_row_shaped_knobs_are_refused_without_a_row(kwargs, needle) -> None:
@@ -113,3 +116,34 @@ def test_a_non_positive_lease_is_refused(value: int) -> None:
 
         @receiver(OrderPlaced, key="tests.zero_lease", lease_seconds=value)
         def handler(evt: OrderPlaced) -> None: ...
+
+
+def test_a_targets_callable_is_recorded_on_the_registration() -> None:
+    def owed(evt: OrderPlaced, ctx: DeliveryContext) -> list[str]:
+        return []
+
+    @receiver(OrderPlaced, key="tests.fan_out", targets=owed)
+    def handler(evt: OrderPlaced) -> None: ...
+
+    try:
+        assert registry.receiver_for_key("tests.fan_out").targets is owed
+        assert registry.receiver_for_key("testapp.durable_receiver").targets is None
+    finally:
+        registry._receivers.pop("tests.fan_out", None)
+
+
+def test_a_targets_that_cannot_be_called_is_refused_at_the_decorator() -> None:
+    """Otherwise the first fire() would raise inside somebody's transaction."""
+    with pytest.raises(TypeError, match="targets must be callable, got list"):
+        receiver(OrderPlaced, key="tests.not_callable", targets=["a", "b"])
+    assert registry.receiver_for_key("tests.not_callable") is None
+
+
+def test_a_wildcard_can_be_declared() -> None:
+    @receiver(AnyEvent, key="tests.everything")
+    def handler(evt: object) -> None: ...
+
+    try:
+        assert registry.receiver_for_key("tests.everything").event_class is AnyEvent
+    finally:
+        registry._receivers.pop("tests.everything", None)

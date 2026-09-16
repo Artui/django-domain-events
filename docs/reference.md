@@ -6,6 +6,7 @@ Everything below is exported from `django_domain_events` directly.
 
 ::: django_domain_events.declaration.event.event
 ::: django_domain_events.declaration.receiver.receiver
+::: django_domain_events.declaration.any_event.AnyEvent
 
 ## Firing
 

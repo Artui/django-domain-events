@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pytest
 
-from django_domain_events.utils import label_for, require_frozen_dataclass
+from django_domain_events.types.delivery_context import DeliveryContext
+from django_domain_events.utils import (
+    label_for,
+    require_frozen_dataclass,
+    resolve_targets,
+)
 
 
 def test_label_comes_from_the_app_label_not_the_import_path() -> None:
@@ -79,3 +85,44 @@ def test_an_offset_datetime_parses_too() -> None:
     assert parse_datetime("2026-08-31T09:00:00+02:00") == datetime(
         2026, 8, 31, 9, tzinfo=timezone(timedelta(hours=2))
     )
+
+
+def _context() -> DeliveryContext:
+    return DeliveryContext(
+        event_id=1, event_name="testapp.Unheard", attempt=1, actor_key="", actor_label="", scope={}
+    )
+
+
+def _resolve(*returned: object) -> list[str]:
+    return resolve_targets("probe.fan", lambda event, context: list(returned), object(), _context())
+
+
+def test_targets_come_back_in_the_order_the_callable_gave_them() -> None:
+    assert _resolve("c", "a", "b") == ["c", "a", "b"]
+
+
+def test_a_target_returned_twice_is_delivered_once() -> None:
+    """One delivery per target is the promise, and the unique constraint would
+    otherwise turn a callable that reached one destination twice into a failed
+    transaction."""
+    assert _resolve("a", "b", "a") == ["a", "b"]
+
+
+def test_any_iterable_will_do() -> None:
+    def generated(event: object, context: DeliveryContext) -> Iterator[str]:
+        yield from ("x", "y")
+
+    assert resolve_targets("probe.fan", generated, object(), _context()) == ["x", "y"]
+
+
+def test_a_target_that_is_not_a_string_is_refused_by_receiver() -> None:
+    """The column would store ``str(42)`` while a replay compared ``42``, and the
+    two would never match."""
+    with pytest.raises(TypeError, match=r"targets for receiver 'probe.fan' returned 42, a int"):
+        _resolve("a", 42)
+
+
+def test_a_blank_target_is_refused() -> None:
+    """Blank is what a receiver without targets= writes."""
+    with pytest.raises(ValueError, match="returned an empty string"):
+        _resolve("a", "")

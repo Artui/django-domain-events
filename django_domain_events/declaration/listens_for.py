@@ -12,7 +12,10 @@ def listens_for(receiver_key: str) -> RegisteredEvent | None:
     to be receiving.
 
     None covers two cases that look the same from a delivery row - a key never
-    declared, and one whose event class was deleted out from under it.
+    declared, and one whose event class was deleted out from under it - and a
+    third that does not: a wildcard receiver, declared for ``AnyEvent``, is owed
+    every event and so names no single one. Its delivery row already says which
+    event it was.
     """
     receiver = registry.receiver_for_key(receiver_key)
     if receiver is None:

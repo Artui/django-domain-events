@@ -3,14 +3,16 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import typing
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any, cast
 
+from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.declaration.registry import registry
 from django_domain_events.types.catalogue import Catalogue
 from django_domain_events.types.catalogue_event import CatalogueEvent
 from django_domain_events.types.catalogue_field import CatalogueField
 from django_domain_events.types.catalogue_receiver import CatalogueReceiver
+from django_domain_events.types.registered_receiver import RegisteredReceiver
 
 
 def catalogue() -> Catalogue:
@@ -22,23 +24,14 @@ def catalogue() -> Catalogue:
 
     Sorted by name throughout. A catalogue is written to a file and diffed
     against the last one, and import order is not a difference.
+
+    Wildcard receivers are listed once, in their own section, and not under
+    each event they receive - which is every event.
     """
     events = []
     for entry in sorted(registry.events(), key=lambda e: e.name):
         cls = entry.event_class
-        receivers = tuple(
-            CatalogueReceiver(
-                key=r.key,
-                callable_path=_callable_path(r.func),
-                mode=r.mode.value,
-                site=r.site,
-                max_attempts=r.max_attempts,
-                eager=r.eager,
-                takes_context=r.takes_context,
-                lease_seconds=r.lease_seconds,
-            )
-            for r in sorted(registry.receivers_for(cls), key=lambda r: r.key)
-        )
+        receivers = _described(r for r in registry.receivers() if r.event_class is cls)
         events.append(
             CatalogueEvent(
                 name=entry.name,
@@ -50,7 +43,28 @@ def catalogue() -> Catalogue:
                 receivers=receivers,
             )
         )
-    return Catalogue(events=tuple(events))
+    return Catalogue(
+        events=tuple(events),
+        wildcard_receivers=_described(r for r in registry.receivers() if r.event_class is AnyEvent),
+    )
+
+
+def _described(receivers: Iterable[RegisteredReceiver]) -> tuple[CatalogueReceiver, ...]:
+    """Catalogue entries for some receivers, sorted by key."""
+    return tuple(
+        CatalogueReceiver(
+            key=r.key,
+            callable_path=_callable_path(r.func),
+            mode=r.mode.value,
+            site=r.site,
+            max_attempts=r.max_attempts,
+            eager=r.eager,
+            takes_context=r.takes_context,
+            lease_seconds=r.lease_seconds,
+            targets=None if r.targets is None else _callable_path(r.targets),
+        )
+        for r in sorted(receivers, key=lambda r: r.key)
+    )
 
 
 def _doc(cls: type) -> str:

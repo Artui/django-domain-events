@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.declaration.registry import Registry
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_event import RegisteredEvent
@@ -110,3 +111,32 @@ def test_clear_forgets_everything() -> None:
     assert r.events() == []
     assert r.receivers() == []
     assert r.event_for_name("app.Alpha") is None
+
+
+def test_a_wildcard_is_returned_for_every_class_in_declaration_order() -> None:
+    def a(evt: Alpha) -> None: ...
+    def everything(evt: object) -> None: ...
+    def b(evt: Beta) -> None: ...
+
+    r = Registry()
+    r.register_receiver(_receiver("app.a", Alpha, a))
+    r.register_receiver(_receiver("app.everything", AnyEvent, everything))
+    r.register_receiver(_receiver("app.b", Beta, b))
+
+    assert [x.key for x in r.receivers_for(Alpha)] == ["app.a", "app.everything"]
+    assert [x.key for x in r.receivers_for(Beta)] == ["app.everything", "app.b"]
+
+
+def test_a_wildcard_is_matched_when_asked_not_when_declared() -> None:
+    """A class the registry has never heard of still gets the wildcard: nothing
+    is expanded at declaration, so nothing can be missed by declaring early."""
+
+    @dataclass(frozen=True)
+    class DeclaredLater:
+        value: int
+
+    r = Registry()
+    r.register_receiver(_receiver("app.everything", AnyEvent, lambda evt: None))
+    r.register_event(_entry(DeclaredLater, "app.DeclaredLater"))
+
+    assert [x.key for x in r.receivers_for(DeclaredLater)] == ["app.everything"]

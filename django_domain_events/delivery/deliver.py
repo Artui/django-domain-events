@@ -104,6 +104,7 @@ def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliverySt
         actor_key=delivery.event.actor_key,
         actor_label=delivery.event.actor_label,
         scope=delivery.event.scope,
+        target=delivery.target,
     )
     try:
         with (
@@ -339,6 +340,7 @@ def _notify_failure(row: Any, *, status: DeliveryStatus, attempt: int, error: st
                 attempt=attempt,
                 status=status,
                 error=error,
+                target=row.target,
             )
         )
     except Exception:

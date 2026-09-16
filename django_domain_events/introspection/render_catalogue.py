@@ -4,6 +4,7 @@ import dataclasses
 import json
 
 from django_domain_events.types.catalogue import Catalogue
+from django_domain_events.types.catalogue_receiver import CatalogueReceiver
 
 
 def render_catalogue(catalogue: Catalogue, *, format: str = "markdown") -> str:
@@ -25,6 +26,18 @@ def render_catalogue(catalogue: Catalogue, *, format: str = "markdown") -> str:
 
 def _markdown(catalogue: Catalogue) -> str:
     lines = ["# Event catalogue", ""]
+    wildcards = bool(catalogue.wildcard_receivers)
+    if wildcards:
+        # First, because every section below refers to it, and a reader told
+        # "plus every wildcard receiver" should not have to scroll past two
+        # hundred events to find out who that is.
+        lines += [
+            "## Every event",
+            "",
+            "Declared for `AnyEvent`, so owed every event in this catalogue.",
+            "",
+        ]
+        lines += _receiver_table(catalogue.wildcard_receivers)
     if not catalogue.events:
         lines.append("No events are declared.")
         return _joined(lines)
@@ -49,28 +62,52 @@ def _markdown(catalogue: Catalogue) -> str:
         if not event.receivers:
             # Worth saying rather than leaving the section empty: an event with
             # no receivers is a real finding, and the usual reason to read a
-            # catalogue at all.
-            lines += ["Nothing listens to this event.", ""]
+            # catalogue at all. Said differently when a wildcard exists, because
+            # then "nothing listens" is false.
+            lines += [
+                "No receiver is declared for this event alone; every wildcard receiver "
+                "still receives it."
+                if wildcards
+                else "Nothing listens to this event.",
+                "",
+            ]
             continue
-        lines += [
-            "| Receiver | Mode | Site | Max attempts | Eager | Lease |",
-            "| --- | --- | --- | --- | --- | --- |",
-        ]
-        for receiver in event.receivers:
-            # Blanked rather than printed for a mode they do not apply to. The
-            # declaration carries defaults nobody chose, and "5" beside an
-            # INLINE receiver reads as a retry budget it will never have.
-            durable = receiver.mode == "durable"
-            site = _cell(receiver.site) if durable else "-"
-            attempts = str(receiver.max_attempts) if durable else "-"
-            eager = ("yes" if receiver.eager else "no") if durable else "-"
-            lease = "default" if receiver.lease_seconds is None else f"{receiver.lease_seconds}s"
-            lines.append(
-                f"| `{_cell(receiver.key)}` | {_cell(receiver.mode)} | {site} | "
-                f"{attempts} | {eager} | {lease if durable else '-'} |"
-            )
-        lines.append("")
+        lines += _receiver_table(event.receivers)
+        if wildcards:
+            lines += ["Plus every wildcard receiver.", ""]
     return _joined(lines)
+
+
+def _receiver_table(receivers: tuple[CatalogueReceiver, ...]) -> list[str]:
+    lines = [
+        "| Receiver | Mode | Site | Max attempts | Eager | Lease |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for receiver in receivers:
+        # Blanked rather than printed for a mode they do not apply to. The
+        # declaration carries defaults nobody chose, and "5" beside an
+        # INLINE receiver reads as a retry budget it will never have.
+        durable = receiver.mode == "durable"
+        site = _cell(receiver.site) if durable else "-"
+        attempts = str(receiver.max_attempts) if durable else "-"
+        eager = ("yes" if receiver.eager else "no") if durable else "-"
+        lease = "default" if receiver.lease_seconds is None else f"{receiver.lease_seconds}s"
+        lines.append(
+            f"| `{_cell(receiver.key)}` | {_cell(receiver.mode)} | {site} | "
+            f"{attempts} | {eager} | {lease if durable else '-'} |"
+        )
+    lines.append("")
+    # Prose under the table rather than a seventh column. A column would
+    # change every table in every catalogue a project has already committed,
+    # for a property most receivers do not have.
+    for receiver in receivers:
+        if receiver.targets is not None:
+            lines += [
+                f"`{_cell(receiver.key)}` writes one delivery per target returned by "
+                f"`{receiver.targets}`.",
+                "",
+            ]
+    return lines
 
 
 def _cell(value: str) -> str:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.declaration.listens_for import listens_for
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_receiver import RegisteredReceiver
@@ -49,3 +50,20 @@ def test_a_receiver_whose_event_was_deleted_is_also_none() -> None:
     )
     with receiver_registered(entry):
         assert listens_for("tests.dangling") is None
+
+
+def test_a_wildcard_names_no_single_event() -> None:
+    """Owed every event, so there is no one answer; the delivery row already
+    says which event it was."""
+    wildcard = RegisteredReceiver(
+        key="testapp.everything",
+        event_class=AnyEvent,
+        func=lambda evt: None,
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=5,
+        eager=False,
+        site="relay",
+    )
+    with receiver_registered(wildcard):
+        assert listens_for("testapp.everything") is None

@@ -9,6 +9,7 @@ import pytest
 from django.db import transaction
 
 from django_domain_events import checks
+from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.fire import fire
 from django_domain_events.scope.suppressed import suppressed
@@ -231,3 +232,10 @@ def test_both_warnings_agree_on_what_is_still_owed(order: OrderPlaced, record: l
         undeclared = checks.check_recorded_events_are_declared(databases=["default"])
     assert [p.id for p in orphaned] == ["django_domain_events.W001"]
     assert [p.id for p in undeclared] == ["django_domain_events.W002"]
+
+
+def test_a_wildcard_receiver_is_not_an_undeclared_event() -> None:
+    """AnyEvent is a marker, never declared as an event, and a receiver for it
+    listens to everything that is."""
+    with _receiver_registered("testapp.everything", AnyEvent):
+        assert checks.check_receivers_have_events() == []

@@ -6,6 +6,7 @@ import functools
 from dataclasses import dataclass, field
 from typing import Literal
 
+from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.introspection.catalogue import catalogue
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_receiver import RegisteredReceiver
@@ -215,3 +216,42 @@ def test_an_upgrade_hook_is_published() -> None:
 
     with event_registered(Migrating, "tests.migrating"):
         assert _by_name("tests.migrating").migrates_older_rows is True
+
+
+def _durable(key: str, event_class: type, **fields: object) -> RegisteredReceiver:
+    return RegisteredReceiver(
+        key=key,
+        event_class=event_class,
+        func=lambda evt: None,
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=5,
+        eager=False,
+        site="relay",
+        **fields,
+    )
+
+
+def owed_endpoints(evt: object, ctx: object) -> list[str]:
+    return []
+
+
+def test_a_wildcard_gets_a_section_of_its_own_and_is_not_repeated_per_event() -> None:
+    with receiver_registered(_durable("testapp.everything", AnyEvent)):
+        built = catalogue()
+
+    assert [r.key for r in built.wildcard_receivers] == ["testapp.everything"]
+    for event in built.events:
+        assert "testapp.everything" not in [r.key for r in event.receivers]
+
+
+def test_with_no_wildcards_the_section_is_empty() -> None:
+    assert catalogue().wildcard_receivers == ()
+
+
+def test_a_fan_out_publishes_where_its_targets_come_from() -> None:
+    with receiver_registered(_durable("testapp.fan", AnyEvent, targets=owed_endpoints)):
+        [fan] = catalogue().wildcard_receivers
+
+    assert fan.targets == "tests.introspection.test_catalogue.owed_endpoints"
+    assert _by_name("testapp.OrderPlaced").receivers[0].targets is None

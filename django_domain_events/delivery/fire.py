@@ -20,6 +20,7 @@ from django_domain_events.scope.suppressed import suppression_for
 from django_domain_events.settings import get_codec, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
+from django_domain_events.utils import resolve_targets
 
 
 def fire(
@@ -35,6 +36,14 @@ def fire(
     transaction, so the obligation exists if and only if the business change
     committed. A durable receiver therefore cannot signal failure back here -
     only ``INLINE`` receivers can, by raising.
+
+    A durable receiver declared with ``targets=`` gets one row per target
+    instead, and **its callable runs here, inside the caller's transaction**.
+    If it raises, this raises, and the caller's change rolls back with the event:
+    a fan-out that delivered to nobody would be a committed change whose
+    consequences silently never happened. It also costs whatever the callable
+    costs, on every event it is owed - one query per fired event per fan-out
+    receiver, for one that reads a table.
     """
     # Imported here, not at module level: Django imports an app's package before
     # the app registry is ready, and this package's __init__ re-exports fire().
@@ -107,20 +116,31 @@ def fire(
     )
 
     receivers = registry.receivers_for(type(event))
-    durable = [r for r in receivers if r.mode is DeliveryMode.DURABLE]
-    if durable:
+    # One entry per row to write. A fan-out receiver's callable runs here, in
+    # the caller's transaction, and whatever it raises is not caught: see the
+    # docstring for why a failed fan-out must fail the change.
+    owed = [
+        (r, target)
+        for r in receivers
+        if r.mode is DeliveryMode.DURABLE
+        for target in (
+            [""] if r.targets is None else resolve_targets(r.key, r.targets, event, context)
+        )
+    ]
+    if owed:
         rows = DeliveryRecord.objects.bulk_create(
             [
                 DeliveryRecord(
                     event=record,
                     receiver_key=r.key,
+                    target=target,
                     max_attempts=r.max_attempts,
                     available_at=record.recorded_at,
                 )
-                for r in durable
+                for r, target in owed
             ]
         )
-        eager_ids = [row.pk for row, r in zip(rows, durable, strict=True) if r.eager]
+        eager_ids = [row.pk for row, (r, _) in zip(rows, owed, strict=True) if r.eager]
         if eager_ids:
             transaction.on_commit(_deliver_eagerly(eager_ids), using=alias, robust=True)
         # After commit, because a notification sent before it would wake a relay

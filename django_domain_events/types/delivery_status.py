@@ -4,7 +4,7 @@ from django.db import models
 
 
 class DeliveryStatus(models.TextChoices):
-    """Status of one (event, durable receiver) pair."""
+    """Status of one delivery: an event, a durable receiver, and its target if any."""
 
     PENDING = "pending", "Pending"
     CLAIMED = "claimed", "Claimed"

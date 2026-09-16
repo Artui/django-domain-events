@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Literal, TypeVar, overload
 
 from django_domain_events.declaration.registry import registry
@@ -14,6 +14,7 @@ E = TypeVar("E")
 
 Plain = Callable[[E], None]
 WithContext = Callable[[E, DeliveryContext], None]
+Targets = Callable[[E, DeliveryContext], Iterable[str]]
 
 
 @overload
@@ -28,6 +29,7 @@ def receiver(
     site: str = "relay",
     lease_seconds: int | None = None,
     on_failure: Callable[[DeliveryFailure], None] | None = None,
+    targets: Targets[E] | None = None,
 ) -> Callable[[Plain[E]], Plain[E]]: ...
 @overload
 def receiver(
@@ -41,6 +43,7 @@ def receiver(
     site: str = "relay",
     lease_seconds: int | None = None,
     on_failure: Callable[[DeliveryFailure], None] | None = None,
+    targets: Targets[E] | None = None,
 ) -> Callable[[WithContext[E]], WithContext[E]]: ...
 def receiver(
     event_class: type[E],
@@ -53,8 +56,13 @@ def receiver(
     site: str = "relay",
     lease_seconds: int | None = None,
     on_failure: Callable[[DeliveryFailure], None] | None = None,
+    targets: Targets[E] | None = None,
 ) -> Callable[[Callable[..., None]], Callable[..., None]]:
-    """Register a callable to receive one event type.
+    """Register a callable to receive one event type, or every event.
+
+    ``event_class`` may be ``AnyEvent``, which declares a wildcard: the receiver
+    is owed every event fired, including events declared by apps that load
+    after it. See ``AnyEvent`` for what that is for and what it costs.
 
     ``takes_context`` is the spelling ``django.tasks.task`` uses for the same
     idea. The overloads make a checker enforce the arity it implies, so
@@ -91,6 +99,38 @@ def receiver(
     that cannot work: the receiver runs inside the transaction that carries its
     acknowledgement, so anything it writes is invisible to every other worker
     until it has already finished.
+
+    ``targets`` makes the receiver a **fan-out**: a callable taking the event and
+    a ``DeliveryContext``, returning the strings this event is owed to - endpoint
+    ids, tenant slugs, anything that names a destination. ``fire()`` writes one
+    delivery row per target instead of one per receiver, each with its own
+    attempt count, backoff and dead-letter, and hands the target to the receiver
+    as ``DeliveryContext.target``. A target returned twice is delivered once,
+    and a callable returning nothing writes no row at all, which is how a
+    wildcard receiver says "not this event". Each target must be a non-empty
+    string; anything else is refused where it is returned.
+
+    **The callable runs inside the caller's transaction, at fire time**, exactly
+    as the event row is written - so ``fire()``'s transactional contract is its
+    contract too. What it reads is what the business change can see, including
+    that change's own uncommitted rows. **If it raises, ``fire()`` raises**, and
+    the caller's transaction fails with it: the change, the event and every
+    delivery row roll back together. That is deliberate. A fan-out that swallowed
+    the error and delivered to nobody would commit a change whose consequences
+    silently never happened, which is the failure this package exists to rule
+    out. Keep the callable's failure modes in view: it is code in the middle of
+    somebody else's write.
+
+    **It is also a query in the hot path.** ``fire()`` calls every fan-out
+    receiver's callable on every event it is owed - for a wildcard, every event
+    fired - so a callable that queries a table costs one query per fired event
+    per fan-out receiver. For a transport replacing an event per destination
+    that is a clear saving; for one declared carelessly it is a cost paid by
+    every write in the system. Make the lookup indexed, and make it return
+    early for events it can rule out without one.
+
+    ``replay_events`` calls it again, so a replay goes to the targets that exist
+    at replay time.
     """
 
     if site not in ("relay", "task"):
@@ -103,6 +143,10 @@ def receiver(
             f"site='task' needs mode=DURABLE; {mode.name} receivers run in the "
             f"firing process and have no delivery row to hand over."
         )
+    if targets is not None and not callable(targets):
+        # Refused here rather than at the first fire, which would raise inside
+        # somebody's business transaction for a declaration mistake.
+        raise TypeError(f"targets must be callable, got {type(targets).__name__}")
     if lease_seconds is not None and lease_seconds <= 0:
         # A zero lease expires the instant before the receiver starts, so a
         # second relay reclaims the row immediately and both run it - the exact
@@ -118,12 +162,13 @@ def receiver(
             ("max_attempts", max_attempts, 5),
             ("eager", eager, False),
             ("lease_seconds", lease_seconds, None),
+            ("targets", targets, None),
         ):
             if value != default:
                 raise ValueError(
                     f"{name}={value!r} needs mode=DURABLE; a {mode.name} receiver "
                     f"has no delivery row, so it is never retried, never attempted "
-                    f"a second time and never leased."
+                    f"a second time, never leased and never fanned out."
                 )
 
     def decorate(func: Callable[..., None]) -> Callable[..., None]:
@@ -139,6 +184,7 @@ def receiver(
                 site=site,
                 on_failure=on_failure,
                 lease_seconds=lease_seconds,
+                targets=targets,
             )
         )
         return func

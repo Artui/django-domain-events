@@ -20,9 +20,19 @@ class DeliveryRecordAdmin(admin.ModelAdmin):
     is how a claimed row gets handed to a second worker.
     """
 
-    list_display = ("receiver_key", "event", "status", "attempts", "available_at", "claimed_by")
+    list_display = (
+        "receiver_key",
+        "target",
+        "event",
+        "status",
+        "attempts",
+        "available_at",
+        "claimed_by",
+    )
     list_filter = ("status", ReceiverKeyFilter)
-    search_fields = ("receiver_key", "last_error")
+    # The target is searchable because it is what an operator is holding when a
+    # fan-out delivery goes wrong: "endpoint 42 says it never got it".
+    search_fields = ("receiver_key", "target", "last_error")
     ordering = ("-pk",)
     # No date hierarchy on available_at: the model keeps no plain index on
     # it on purpose, and a hierarchy would put MIN/MAX and a SELECT DISTINCT

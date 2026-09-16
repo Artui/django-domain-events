@@ -10,6 +10,8 @@ import pytest
 from django_domain_events.introspection.catalogue import catalogue
 from django_domain_events.introspection.render_catalogue import render_catalogue
 from django_domain_events.types.catalogue import Catalogue
+from django_domain_events.types.catalogue_event import CatalogueEvent
+from django_domain_events.types.catalogue_receiver import CatalogueReceiver
 
 
 def test_markdown_names_every_event_and_its_receivers() -> None:
@@ -136,3 +138,85 @@ def test_the_upgrade_hook_is_called_out_in_prose() -> None:
         document = render_catalogue(catalogue())
     section = document.split("## `tests.noted`")[1].split("## ")[0]
     assert "Declares `upgrade()`" in section
+
+
+def _receiver(key: str, *, targets: str | None = None) -> CatalogueReceiver:
+    return CatalogueReceiver(
+        key=key,
+        callable_path=f"shop.receivers.{key}",
+        mode="durable",
+        site="relay",
+        max_attempts=5,
+        eager=False,
+        takes_context=True,
+        targets=targets,
+    )
+
+
+def _event(name: str, *receivers: CatalogueReceiver) -> CatalogueEvent:
+    return CatalogueEvent(
+        name=name,
+        version=1,
+        class_path=f"shop.events.{name}",
+        doc="",
+        fields=(),
+        receivers=receivers,
+    )
+
+
+WITH_WILDCARD = Catalogue(
+    events=(_event("shop.Heard", _receiver("shop.audit")), _event("shop.Unheard")),
+    wildcard_receivers=(_receiver("hooks.deliver", targets="hooks.targets.owed"),),
+)
+
+
+def test_wildcards_are_listed_once_before_the_events() -> None:
+    document = render_catalogue(WITH_WILDCARD)
+    head, _, events = document.partition("## `shop.Heard`")
+    assert "## Every event" in head
+    assert "| `hooks.deliver` | durable | relay | 5 | no | default |" in head
+    assert "hooks.deliver" not in events
+
+
+def test_each_event_says_plus_every_wildcard_rather_than_listing_them() -> None:
+    document = render_catalogue(WITH_WILDCARD)
+    heard = document.split("## `shop.Heard`")[1].split("## ")[0]
+    assert "`shop.audit`" in heard
+    assert "Plus every wildcard receiver." in heard
+
+
+def test_an_event_with_only_wildcards_does_not_claim_nothing_listens() -> None:
+    """ "Nothing listens" would be false: every wildcard still receives it."""
+    document = render_catalogue(WITH_WILDCARD)
+    unheard = document.split("## `shop.Unheard`")[1]
+    assert "Nothing listens to this event." not in unheard
+    assert "every wildcard receiver still receives it" in unheard
+
+
+def test_a_fan_out_says_where_its_targets_come_from() -> None:
+    document = render_catalogue(WITH_WILDCARD)
+    assert (
+        "`hooks.deliver` writes one delivery per target returned by `hooks.targets.owed`."
+        in document
+    )
+
+
+def test_wildcards_are_rendered_even_with_no_events_declared() -> None:
+    document = render_catalogue(
+        Catalogue(events=(), wildcard_receivers=(_receiver("hooks.deliver"),))
+    )
+    assert "## Every event" in document
+    assert "No events are declared." in document
+
+
+def test_without_wildcards_no_section_and_no_plus_line() -> None:
+    document = render_catalogue(catalogue())
+    assert "## Every event" not in document
+    assert "Plus every wildcard receiver." not in document
+
+
+def test_json_carries_the_wildcards_and_the_targets() -> None:
+    parsed = json.loads(render_catalogue(WITH_WILDCARD, format="json"))
+    assert [r["key"] for r in parsed["wildcard_receivers"]] == ["hooks.deliver"]
+    assert parsed["wildcard_receivers"][0]["targets"] == "hooks.targets.owed"
+    assert parsed["events"][0]["receivers"][0]["targets"] is None

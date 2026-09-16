@@ -25,3 +25,14 @@ class DeliveryContext:
     #: place the label did not reach.
     actor_label: str
     scope: dict[str, Any]
+
+    target: str = ""
+    """Which target of a fan-out receiver this delivery is for.
+
+    Blank for a receiver declared without ``targets=``, and for any row written
+    before the receiver gained one - which is the case worth handling: adding
+    ``targets=`` to a receiver with deliveries still owed leaves those rows
+    blank, and they are delivered as they were written.
+
+    Last, and defaulted, so adding it does not break a consumer constructing one
+    - this is an exported type."""

@@ -1,6 +1,7 @@
 from django_domain_events.codecs.dataclass_codec import DataclassCodec
 from django_domain_events.codecs.payload_codec import PayloadCodec
 from django_domain_events.codecs.unsupported_payload_type import UnsupportedPayloadType
+from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.declaration.event import event
 from django_domain_events.declaration.listens_for import listens_for
 from django_domain_events.declaration.receiver import receiver
@@ -50,6 +51,7 @@ INLINE = DeliveryMode.INLINE
 ON_COMMIT = DeliveryMode.ON_COMMIT
 
 __all__ = [
+    "AnyEvent",
     "Catalogue",
     "CatalogueEvent",
     "CatalogueField",

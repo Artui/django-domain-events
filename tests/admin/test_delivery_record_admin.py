@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 from django.contrib import admin
 from django.contrib.messages.storage.fallback import FallbackStorage
@@ -11,6 +13,7 @@ from django.test import RequestFactory
 from django_domain_events.admin.delivery_record_admin import DeliveryRecordAdmin
 from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
+from django_domain_events.models.event_record import EventRecord
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.testapp.events import OrderPlaced
 
@@ -95,3 +98,25 @@ def test_a_selection_with_nothing_dead_says_so(order: OrderPlaced, record: list[
         list(request._messages)[0].message
         == "Requeued 0 deliveries. 2 were not dead and were left alone."
     )
+
+
+def test_a_fan_out_delivery_can_be_found_by_its_target(admin_client) -> None:
+    """What an operator holds when a fan-out goes wrong is the target: "endpoint
+    42 says it never got it"."""
+    event = EventRecord.objects.create(
+        name="testapp.Unheard",
+        version=1,
+        payload={"value": 1},
+        occurred_at=datetime(2026, 9, 16, tzinfo=timezone.utc),
+    )
+    for target in ("endpoint-42", "endpoint-7"):
+        DeliveryRecord.objects.create(
+            event=event, receiver_key="probe.fan", target=target, available_at=event.recorded_at
+        )
+
+    response = admin_client.get("/admin/django_domain_events/deliveryrecord/", {"q": "endpoint-42"})
+
+    assert response.status_code == 200
+    rows = list(response.context["cl"].result_list)
+    assert [row.target for row in rows] == ["endpoint-42"]
+    assert "endpoint-42" in response.content.decode()
