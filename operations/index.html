@@ -808,6 +808,14 @@ somebody invokes, with a name, and not an accident of a deploy.</p>
 </ul>
 <p>A delivery still in flight is left alone. Reopening a claimed row would hand the
 same work to two receivers, which is the one thing the lease exists to prevent.</p>
+<p>A <a href="../declaring/#fan-out-one-delivery-per-target">fan-out receiver</a> has its
+<code>targets</code> callable <strong>called again</strong>, so a replay goes to the targets that exist
+now. A target it still returns is reopened or added like any receiver; one it no
+longer returns is left exactly as it was and not counted. A target registered
+after the event was fired receives it - a replay is a new delivery, not a re-run
+of an old one. Calling the callable means rebuilding the event, so replaying a
+fan-out receiver for a payload that no longer decodes raises, where a plain
+receiver's reopened row would dead-letter in the relay.</p>
 <h2 id="requeue-from-the-dead-letter-queue">Requeue from the dead-letter queue<a class="headerlink" href="#requeue-from-the-dead-letter-queue" title="Permanent link">&para;</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>requeue_dead
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>requeue_dead<span class="w"> </span>--receiver<span class="w"> </span>orders.reserve_stock

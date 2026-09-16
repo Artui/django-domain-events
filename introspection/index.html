@@ -732,6 +732,14 @@ diff.</p>
 <p>The Markdown says <strong>"Nothing listens to this event."</strong> rather than leaving
 the section empty. That is the usual reason to read a catalogue at all.</p>
 </div>
+<p>Wildcard receivers, declared for <code>AnyEvent</code>, are listed <strong>once</strong>, in an <em>Every
+event</em> section at the top, and each event says "Plus every wildcard receiver"
+rather than repeating them - a transport listed under two hundred events is a
+catalogue nobody reads. An event with no receivers of its own says it still
+reaches the wildcards, because "nothing listens" would be false. A fan-out
+receiver has a line under its table naming the callable its targets come from,
+and the JSON carries the same as <code>targets</code> on each receiver and
+<code>wildcard_receivers</code> at the top level.</p>
 <p>Building a catalogue never runs consumer code: a <code>default_factory</code> is <strong>named</strong>,
 not called.</p>
 <h2 id="who-listens-to-what">Who listens to what<a class="headerlink" href="#who-listens-to-what" title="Permanent link">&para;</a></h2>
@@ -743,6 +751,10 @@ not called.</p>
 <p><code>what_listens_to</code> spans every mode, not only the durable ones: "who reacts to
 this" is a question about the code, and an inline receiver is as much a reaction
 as a queued one.</p>
+<p>It does not repeat wildcard receivers under each event. They receive it - they
+receive everything - and <code>what_listens_to(AnyEvent)</code> returns exactly them.
+<code>listens_for</code> returns <code>None</code> for a wildcard's key, since it is owed no single
+event; its delivery row already says which one it was.</p>
 <p><code>listens_for</code> is the direction an operator actually needs. A dead-letter row
 names a receiver key, and the next question is always what it was supposed to be
 receiving. <code>None</code> covers two cases that look identical from a delivery row - a
@@ -926,7 +938,10 @@ run teaches the reader to skip the output.</p>
 <li><strong>Event records</strong> - filter by name and date, see how many deliveries are still
   owed per event, and <strong>Replay selected events</strong>.</li>
 <li><strong>Delivery records</strong> - the dead-letter queue, filterable by status and
-  receiver, with <strong>Requeue selected dead deliveries</strong>.</li>
+  receiver, with <strong>Requeue selected dead deliveries</strong>. Each row shows its
+  target, and the search covers the receiver key, the target and the last error,
+  since the target is what an operator is holding when one destination of a
+  fan-out says it never received something.</li>
 </ul>
 <p>Both are read-only, and that is deliberate: the one guarantee this package sells
 is that a row exists if and only if the change committed, and a form that can
@@ -942,7 +957,8 @@ It reports what it skipped: a mixed selection requeues only the dead rows.</p>
 <p class="admonition-title">Both actions need the model's <strong>change</strong> permission</p>
 <p>Django offers an action with no declared permission to anyone who can reach
 the changelist, and <code>has_change_permission</code> gates the form alone. Replay
-re-runs every durable receiver - re-sent emails, re-called webhooks - so a
+re-runs every durable receiver - re-sent emails, re-called webhooks, and a
+fan-out receiver's targets asked for again - so a
 view-only grant must not carry it. Give <code>change_eventrecord</code> /
 <code>change_deliveryrecord</code> to whoever may run them; the edit form stays refused
 either way.</p>

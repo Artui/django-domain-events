@@ -520,6 +520,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#max_receiver_retry_delay_seconds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MAX_RECEIVER_RETRY_DELAY_SECONDS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#batch_size" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -653,6 +664,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#max_receiver_retry_delay_seconds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MAX_RECEIVER_RETRY_DELAY_SECONDS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#batch_size" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -770,6 +792,11 @@ are changing.</p>
 <td>Ceiling the doubling stops at.</td>
 </tr>
 <tr>
+<td><code>MAX_RECEIVER_RETRY_DELAY_SECONDS</code></td>
+<td><code>86400.0</code></td>
+<td>Longest delay a <code>RetryAfter</code> may ask for.</td>
+</tr>
+<tr>
 <td><code>RETENTION_DAYS</code></td>
 <td><code>90</code></td>
 <td>Prune window, and the default quiet-receiver window.</td>
@@ -809,6 +836,19 @@ the original expiry.</p>
 </span></code></pre></div>
 <p><code>outbox_health().lapsed_leases</code> tells you when you have got it wrong.</p>
 </div>
+<h3 id="max_receiver_retry_delay_seconds"><code>MAX_RECEIVER_RETRY_DELAY_SECONDS</code><a class="headerlink" href="#max_receiver_retry_delay_seconds" title="Permanent link">&para;</a></h3>
+<p>The ceiling on a receiver's own schedule, when it raises <code>RetryAfter</code>. A request
+past it is clamped, with a warning naming the receiver, the delivery and both
+numbers, so an operator can tell whether the ceiling or the destination is the
+one to question.</p>
+<p>Separate from <code>BACKOFF_CAP_SECONDS</code> on purpose. That setting bounds the
+exponential curve, and a destination's <code>Retry-After</code> is not a point on a curve:
+sharing one number would clamp an hour-long request to five minutes and hammer
+the thing that asked to be left alone.</p>
+<p>It is a ceiling at all because a delivery waiting in the future is still owed.
+<code>prune_events</code> removes only settled events, so a row parked for a month keeps its
+event past <code>RETENTION_DAYS</code> for that month, and a destination answering with an
+absurd number would keep it indefinitely.</p>
 <h3 id="batch_size"><code>BATCH_SIZE</code><a class="headerlink" href="#batch_size" title="Permanent link">&para;</a></h3>
 <p>Three jobs, deliberately one number: it is "how many rows this package touches in
 one statement", and the reasons to raise or lower it point the same way for all
