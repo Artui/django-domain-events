@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from django.db import transaction
 
+from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
 from django_domain_events.introspection.quiet_receivers import quiet_receivers
@@ -181,3 +182,22 @@ def test_a_row_that_never_succeeded_has_no_timestamp_to_keep(
     DeliveryRecord.objects.update(status=DeliveryStatus.DEAD, attempts=5)
     quiet = {q.key: q for q in quiet_receivers()}
     assert quiet["testapp.durable_receiver"].last_succeeded_at is None
+
+
+def test_a_quiet_wildcard_is_reported_under_the_name_it_was_declared_with() -> None:
+    """A wildcard is declared for no event, so the name reported is the marker's,
+    which is what the declaration in the source says."""
+    wildcard = RegisteredReceiver(
+        key="testapp.everything",
+        event_class=AnyEvent,
+        func=lambda evt: None,
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=5,
+        eager=False,
+        site="relay",
+    )
+    with receiver_registered(wildcard):
+        quiet = {q.key: q for q in quiet_receivers()}
+    assert quiet["testapp.everything"].event_name == "AnyEvent"
+    assert quiet["testapp.everything"].last_succeeded_at is None

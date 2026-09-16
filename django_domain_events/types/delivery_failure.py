@@ -32,3 +32,9 @@ class DeliveryFailure:
 
     error: str
     """The message the relay stored, already truncated as the column is."""
+
+    target: str = ""
+    """The target this delivery was for, blank for a receiver without
+    ``targets=``. Part of the delivery's identity for a fan-out receiver, since
+    ``receiver_key`` alone no longer says which of its deliveries failed.
+    Defaulted so adding it does not break a consumer constructing one."""

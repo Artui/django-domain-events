@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.introspection.what_listens_to import what_listens_to
-from tests.conftest import receiver_deleted
+from django_domain_events.types.delivery_mode import DeliveryMode
+from django_domain_events.types.registered_receiver import RegisteredReceiver
+from tests.conftest import receiver_deleted, receiver_registered
 from tests.testapp.events import Eagerly, OrderPlaced, Unheard
 
 
@@ -38,3 +41,29 @@ def test_an_unregistered_class_returns_nothing_rather_than_raising() -> None:
 def test_deleting_a_receiver_removes_it_from_the_answer() -> None:
     with receiver_deleted("testapp.eager"):
         assert [r.key for r in what_listens_to(Eagerly)] == ["testapp.not_eager"]
+
+
+WILDCARD = RegisteredReceiver(
+    key="testapp.everything",
+    event_class=AnyEvent,
+    func=lambda evt: None,
+    mode=DeliveryMode.DURABLE,
+    takes_context=False,
+    max_attempts=5,
+    eager=False,
+    site="relay",
+)
+
+
+def test_a_wildcard_is_the_plus_and_is_not_listed_per_event() -> None:
+    """It receives the event, as it receives every event; listing a transport
+    under each one says nothing about any of them."""
+    with receiver_registered(WILDCARD):
+        assert "testapp.everything" not in [r.key for r in what_listens_to(OrderPlaced)]
+        assert what_listens_to(Unheard) == []
+
+
+def test_asking_about_any_event_returns_exactly_the_wildcards() -> None:
+    with receiver_registered(WILDCARD):
+        assert what_listens_to(AnyEvent) == [WILDCARD]
+    assert what_listens_to(AnyEvent) == []

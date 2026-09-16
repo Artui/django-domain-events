@@ -3,14 +3,17 @@ from __future__ import annotations
 from django.db import models
 
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.utils import TARGET_MAX_LENGTH
 
 
 class DeliveryRecord(models.Model):
-    """What is owed to one receiver for one event.
+    """What is owed to one receiver for one event - or to one of its targets.
 
     Separate from the event because a single outbox row cannot express
     per-receiver retries: one failing receiver must not replay or block the
-    other four. Only ``DURABLE`` receivers get a row.
+    other four. Only ``DURABLE`` receivers get a row, and a receiver declared
+    with ``targets=`` gets one per target, for the same reason one step down:
+    one failing target must not drag the others through its retries.
     """
 
     event = models.ForeignKey(
@@ -19,6 +22,19 @@ class DeliveryRecord(models.Model):
         related_name="deliveries",
     )
     receiver_key = models.CharField(max_length=255, db_index=True)
+
+    target = models.CharField(max_length=TARGET_MAX_LENGTH, blank=True, default="")
+    """Which of a fan-out receiver's targets this delivery is for, or blank.
+
+    Blank for every receiver declared without ``targets=``, which is every
+    receiver there was before the column existed - so the migration's default
+    is what those rows would have been written with anyway, and nothing needs
+    backfilling. A fan-out receiver never writes a blank one: ``fire()``
+    refuses an empty target rather than let it read as "not a fan-out".
+
+    No index of its own. The unique constraint below leads with the event, and
+    every query that reads this column also names the event.
+    """
     status = models.CharField(
         max_length=16, choices=DeliveryStatus.choices, default=DeliveryStatus.PENDING
     )
@@ -63,9 +79,13 @@ class DeliveryRecord(models.Model):
 
     class Meta:
         constraints = [
+            # The target is part of the identity, which is what lets one
+            # receiver owe one event to many targets. A receiver without
+            # targets= writes the blank target, so for it this is exactly the
+            # (event, receiver_key) constraint it replaced.
             models.UniqueConstraint(
-                fields=["event", "receiver_key"],
-                name="unique_delivery_per_event_and_receiver",
+                fields=["event", "receiver_key", "target"],
+                name="unique_delivery_per_event_receiver_and_target",
             )
         ]
         # One index per arm of the claim query. The predicates have to match the

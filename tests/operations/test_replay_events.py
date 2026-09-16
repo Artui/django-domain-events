@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 import importlib
+from collections.abc import Iterator
 from unittest import mock
 
 import pytest
 from django.db import transaction
 
+from django_domain_events.declaration.receiver import receiver
+from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
+from django_domain_events.models.event_record import EventRecord
 from django_domain_events.operations.replay_events import replay_events
+from django_domain_events.scope.attributed import attributed
+from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.conftest import receiver_deleted
-from tests.testapp.events import OrderPlaced
+from tests.testapp.events import OrderPlaced, Unheard
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -166,3 +172,117 @@ def test_it_does_not_wake_anything_when_nothing_changed(
     with mock.patch.object(module, "notify_relay") as notify:
         replay_events([event_id])
     assert not notify.called
+
+
+@pytest.fixture
+def owed_targets() -> Iterator[list[str]]:
+    """A fan-out receiver whose targets a test can change between fire and replay.
+
+    The callable reads this list each time it is called, so rewriting it is how
+    a test says "the destinations are different now".
+    """
+    current = ["a", "b"]
+    receiver(Unheard, key="probe.fan", targets=lambda event, context: list(current))(
+        lambda event: None
+    )
+    yield current
+    registry._receivers.pop("probe.fan", None)
+
+
+def _fan_rows() -> list[tuple[str, str, int]]:
+    return list(
+        DeliveryRecord.objects.filter(receiver_key="probe.fan")
+        .order_by("target")
+        .values_list("target", "status", "attempts")
+    )
+
+
+def test_a_fan_out_replay_goes_to_the_targets_that_exist_now(owed_targets: list[str]) -> None:
+    """Re-derived rather than re-run: ``b`` is still owed and is reopened, ``c``
+    is new and is added, and ``a`` - no longer returned - is left exactly as it
+    was, neither reopened nor counted."""
+    with transaction.atomic():
+        event_id = fire(Unheard(value=1))
+    drain_outbox()
+    owed_targets[:] = ["b", "c"]
+
+    assert replay_events([event_id]) == {"reopened": 1, "added": 1}
+    assert _fan_rows() == [
+        ("a", DeliveryStatus.SUCCEEDED, 1),
+        ("b", DeliveryStatus.PENDING, 0),
+        ("c", DeliveryStatus.PENDING, 0),
+    ]
+
+
+def test_a_blank_row_from_before_the_receiver_fanned_out_is_left_alone() -> None:
+    """The row every receiver had before ``targets=`` existed.
+
+    A receiver that gains a callable has said the event is owed to what the
+    callable returns, and the blank row is not among it.
+    """
+    receiver(Unheard, key="probe.fan")(lambda event: None)
+    try:
+        with transaction.atomic():
+            event_id = fire(Unheard(value=1))
+        drain_outbox()
+        object.__setattr__(
+            registry.receiver_for_key("probe.fan"), "targets", lambda event, context: ["a"]
+        )
+
+        assert replay_events([event_id]) == {"reopened": 0, "added": 1}
+        assert _fan_rows() == [("", DeliveryStatus.SUCCEEDED, 1), ("a", DeliveryStatus.PENDING, 0)]
+    finally:
+        registry._receivers.pop("probe.fan", None)
+
+
+def test_the_callable_is_handed_the_rebuilt_event_and_the_recorded_context() -> None:
+    seen: list[tuple[object, DeliveryContext]] = []
+
+    def targets(event: Unheard, context: DeliveryContext) -> list[str]:
+        seen.append((event, context))
+        return ["a"]
+
+    receiver(Unheard, key="probe.fan", targets=targets)(lambda event: None)
+    try:
+        with transaction.atomic(), attributed(actor_key="auth.User:9", tenant="acme"):
+            event_id = fire(Unheard(value=4))
+        seen.clear()
+
+        replay_events([event_id])
+
+        [(event, context)] = seen
+        assert event == Unheard(value=4)
+        assert (context.event_id, context.event_name, context.attempt, context.target) == (
+            event_id,
+            "testapp.Unheard",
+            1,
+            "",
+        )
+        assert (context.actor_key, context.scope) == ("auth.User:9", {"tenant": "acme"})
+    finally:
+        registry._receivers.pop("probe.fan", None)
+
+
+def test_a_fan_out_replay_of_a_payload_that_no_longer_decodes_raises(
+    owed_targets: list[str],
+) -> None:
+    """Loud, to the operator who asked, rather than an empty replay."""
+    with transaction.atomic():
+        event_id = fire(Unheard(value=1))
+    EventRecord.objects.filter(pk=event_id).update(payload={})
+
+    with pytest.raises(TypeError, match="missing 1 required positional argument"):
+        replay_events([event_id])
+
+
+def test_a_plain_receiver_replay_never_rebuilds_the_event(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The rebuild is for the callable, so only a fan-out pays for it. A plain
+    receiver's reopened row dead-letters in the relay, as it always has."""
+    with transaction.atomic():
+        event_id = fire(order)
+    drain_outbox()
+    EventRecord.objects.filter(pk=event_id).update(payload={})
+
+    assert replay_events([event_id]) == {"reopened": 2, "added": 0}

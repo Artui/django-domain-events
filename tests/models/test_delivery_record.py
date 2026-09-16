@@ -54,3 +54,37 @@ def test_deleting_an_event_takes_its_deliveries() -> None:
     )
     event.delete()
     assert DeliveryRecord.objects.count() == 0
+
+
+def test_one_event_may_owe_one_receiver_several_targets() -> None:
+    event = _event()
+    for target in ("a", "b"):
+        DeliveryRecord.objects.create(
+            event=event, receiver_key="probe.fan", target=target, available_at=event.recorded_at
+        )
+    assert DeliveryRecord.objects.filter(event=event).count() == 2
+
+
+@pytest.mark.parametrize("target", ["a", ""])
+def test_two_rows_for_one_event_receiver_and_target_are_refused(target: str) -> None:
+    """Including the blank target, which is every receiver without targets=:
+    for those this is still the constraint it replaced."""
+    event = _event()
+    DeliveryRecord.objects.create(
+        event=event, receiver_key="probe.fan", target=target, available_at=event.recorded_at
+    )
+    with pytest.raises(IntegrityError), transaction.atomic():
+        DeliveryRecord.objects.create(
+            event=event, receiver_key="probe.fan", target=target, available_at=event.recorded_at
+        )
+
+
+def test_a_row_written_without_a_target_has_the_blank_one() -> None:
+    """What every row that predates the column holds, and what a receiver
+    without targets= writes forever."""
+    event = _event()
+    row = DeliveryRecord.objects.create(
+        event=event, receiver_key="testapp.durable_receiver", available_at=event.recorded_at
+    )
+    row.refresh_from_db()
+    assert row.target == ""

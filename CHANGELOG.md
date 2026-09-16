@@ -30,8 +30,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with its warning. Each is checked, so the demo fails if one stops being true.
 - The delivery docs cover `on_failure` and `DeliveryFailure`, which 0.8.0 shipped
   with only a docstring.
+- `AnyEvent`: a receiver declared for it is owed every event fired. The wildcard
+  is matched when an event is fired rather than expanded when the receiver is
+  declared, so it reaches events declared by apps that load after it - the case
+  a registry walk at startup silently misses. It is listed once, in a section of
+  its own, by the catalogue; `what_listens_to(SomeEvent)` leaves it out and
+  `what_listens_to(AnyEvent)` returns exactly the wildcards.
+- `receiver(..., targets=...)`: a callable taking the event and a
+  `DeliveryContext` and returning strings. `fire()` writes one delivery row per
+  target instead of one per receiver, each with its own attempts, backoff and
+  dead-letter, and writes none when it returns nothing. A target returned twice
+  is delivered once; a non-string, blank or overlong target is refused.
+  **The callable runs at fire time inside the caller's transaction**: if it
+  raises, `fire()` raises and the caller's change rolls back with the event, and
+  it costs its query on every event it is owed.
+- `DeliveryRecord.target`, `DeliveryContext.target` and `DeliveryFailure.target`
+  carry which target a delivery is for, blank for a receiver without `targets=`.
+  The catalogue publishes where a fan-out receiver's targets come from.
 
 ### Changed
+- `replay_events` calls a fan-out receiver's `targets` again, so a replay goes to
+  the targets that exist at replay time. A target no longer returned is left as
+  it was and not counted.
+- The delivery table's unique constraint is now `(event, receiver_key, target)`,
+  replacing `(event, receiver_key)`. **Migration `0005` adds the column and
+  rebuilds that index**: every existing row gets the blank target, which is what
+  a receiver without `targets=` writes, so nothing is backfilled - but building
+  a unique index takes a lock proportional to the table on some backends, so
+  prune before migrating a large one.
+- `check_receivers_have_events` (`E001`) no longer reports a wildcard receiver,
+  whose `AnyEvent` is a marker rather than a declared event.
+- The delivery admin shows and searches by target.
 - `tests/` mirrors the package again. The layout regroup in 0.8.0 moved the source
   into subpackages and rewrote the test imports without moving the test files, so
   the two stopped matching what `CLAUDE.md` requires. Twenty-nine files moved; six

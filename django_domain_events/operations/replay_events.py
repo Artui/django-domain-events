@@ -2,14 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import datetime, timezone
+from typing import Any
 
 from django.db import transaction
 
 from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.wake import notify_relay
 from django_domain_events.delivery.write_alias import write_alias
+from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.types.registered_receiver import RegisteredReceiver
+from django_domain_events.utils import decode_payload, resolve_targets
 
 
 def replay_events(
@@ -30,6 +34,20 @@ def replay_events(
     A delivery still in flight is left alone. Reopening a claimed row would hand
     the same work to two receivers, which is the one thing the lease exists to
     prevent.
+
+    A receiver declared with ``targets=`` has its callable **called again**, so
+    a replay goes to the targets that exist now: a target it still returns is
+    reopened or added exactly as a receiver is, and one it no longer returns is
+    left as it was - neither reopened nor counted - because the callable has
+    just said it is not owed this event. That includes a blank row written
+    before the receiver gained ``targets=``. A replay is a new delivery, not a
+    re-run of an old one, and a target registered after the event was fired
+    receiving it is the point rather than a side effect.
+
+    Calling the callable means rebuilding the event, so a fan-out receiver's
+    replay fails loudly on a payload that no longer decodes, where a plain
+    receiver's reopened row would dead-letter in the relay instead. Either is
+    raised to the operator who asked; only the second waits to be found.
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.models.event_record import EventRecord
@@ -47,64 +65,96 @@ def replay_events(
             entry = registry.event_for_name(record.name)
             if entry is None:
                 continue
-            durable = {
-                r.key: r
-                for r in registry.receivers_for(entry.event_class)
-                if r.mode is DeliveryMode.DURABLE and (wanted is None or r.key in wanted)
-            }
-            keys = set(durable)
-            existing = dict(
-                DeliveryRecord.objects.filter(event=record, receiver_key__in=keys).values_list(
-                    "receiver_key", "status"
-                )
+            durable = sorted(
+                (
+                    r
+                    for r in registry.receivers_for(entry.event_class)
+                    if r.mode is DeliveryMode.DURABLE and (wanted is None or r.key in wanted)
+                ),
+                key=lambda r: r.key,
             )
-            reopen = [k for k, status in existing.items() if status in _TERMINAL]
-            # The status predicate is what keeps this from wiping a live lease.
-            # Between reading the statuses above and this update, a relay can
-            # claim a row - and clearing claimed_by on it would hand the same
-            # work to two workers, which is the one thing the lease prevents.
-            counts["reopened"] += DeliveryRecord.objects.filter(
-                event=record, receiver_key__in=reopen, status__in=_TERMINAL
-            ).update(
-                status=DeliveryStatus.PENDING,
-                attempts=0,
-                available_at=now,
-                claimed_by="",
-                claimed_at=None,
-                lease_expires_at=None,
-                completed_at=None,
-                last_error="",
-            )
-            missing = keys - set(existing)
-            if missing:
-                # ignore_conflicts, because a concurrent replay of the same
-                # event races the unique constraint on (event, receiver_key) -
-                # and losing that race means the row exists, which is what was
-                # wanted.
-                DeliveryRecord.objects.bulk_create(
-                    [
-                        DeliveryRecord(
-                            event=record,
-                            receiver_key=key,
-                            max_attempts=durable[key].max_attempts,
-                            available_at=now,
-                        )
-                        for key in sorted(missing)
-                    ],
-                    ignore_conflicts=True,
+            for receiver in durable:
+                targets = _targets_now(receiver, record, entry.event_class)
+                existing = dict(
+                    DeliveryRecord.objects.filter(
+                        event=record, receiver_key=receiver.key, target__in=targets
+                    ).values_list("target", "status")
                 )
-                # Counted by asking what is there now rather than by what
-                # bulk_create returned: with ignore_conflicts most backends
-                # return no primary keys, and a row a concurrent replay created
-                # is owed either way, which is what the operator asked for.
-                counts["added"] += DeliveryRecord.objects.filter(
-                    event=record, receiver_key__in=missing
-                ).count()
+                reopen = [t for t, status in existing.items() if status in _TERMINAL]
+                # The status predicate is what keeps this from wiping a live
+                # lease. Between reading the statuses above and this update, a
+                # relay can claim a row - and clearing claimed_by on it would
+                # hand the same work to two workers, which is the one thing the
+                # lease prevents.
+                counts["reopened"] += DeliveryRecord.objects.filter(
+                    event=record,
+                    receiver_key=receiver.key,
+                    target__in=reopen,
+                    status__in=_TERMINAL,
+                ).update(
+                    status=DeliveryStatus.PENDING,
+                    attempts=0,
+                    available_at=now,
+                    claimed_by="",
+                    claimed_at=None,
+                    lease_expires_at=None,
+                    completed_at=None,
+                    last_error="",
+                )
+                missing = [t for t in targets if t not in existing]
+                if missing:
+                    # ignore_conflicts, because a concurrent replay of the same
+                    # event races the unique constraint on (event, receiver_key,
+                    # target) - and losing that race means the row exists,
+                    # which is what was wanted.
+                    DeliveryRecord.objects.bulk_create(
+                        [
+                            DeliveryRecord(
+                                event=record,
+                                receiver_key=receiver.key,
+                                target=target,
+                                max_attempts=receiver.max_attempts,
+                                available_at=now,
+                            )
+                            for target in missing
+                        ],
+                        ignore_conflicts=True,
+                    )
+                    # Counted by asking what is there now rather than by what
+                    # bulk_create returned: with ignore_conflicts most backends
+                    # return no primary keys, and a row a concurrent replay
+                    # created is owed either way, which is what the operator
+                    # asked for.
+                    counts["added"] += DeliveryRecord.objects.filter(
+                        event=record, receiver_key=receiver.key, target__in=missing
+                    ).count()
     if counts["reopened"] or counts["added"]:
         # The operations make rows owed just as fire() does, so they wake a
         # waiting relay too; otherwise replayed work sits until the next poll.
         notify_relay()
     return counts
+
+
+def _targets_now(receiver: RegisteredReceiver, record: Any, event_class: type) -> list[str]:
+    """The targets one receiver is owed this event at replay time.
+
+    The blank target for a receiver without ``targets=``, which is the row it
+    has always had. For a fan-out receiver, whatever its callable returns now,
+    handed the same context ``fire()`` built - attempt one, because a replayed
+    delivery starts its budget again.
+    """
+    if receiver.targets is None:
+        return [""]
+    context = DeliveryContext(
+        event_id=record.pk,
+        event_name=record.name,
+        attempt=1,
+        actor_key=record.actor_key,
+        actor_label=record.actor_label,
+        scope=record.scope,
+    )
+    event = decode_payload(event_class, record.payload, record.version)
+    return resolve_targets(receiver.key, receiver.targets, event, context)
 
 
 _TERMINAL = (DeliveryStatus.SUCCEEDED, DeliveryStatus.DEAD, DeliveryStatus.ORPHANED)

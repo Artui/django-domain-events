@@ -67,6 +67,15 @@ Two things happen, counted separately because they are different decisions:
 A delivery still in flight is left alone. Reopening a claimed row would hand the
 same work to two receivers, which is the one thing the lease exists to prevent.
 
+A [fan-out receiver](declaring.md#fan-out-one-delivery-per-target) has its
+`targets` callable **called again**, so a replay goes to the targets that exist
+now. A target it still returns is reopened or added like any receiver; one it no
+longer returns is left exactly as it was and not counted. A target registered
+after the event was fired receives it - a replay is a new delivery, not a re-run
+of an old one. Calling the callable means rebuilding the event, so replaying a
+fan-out receiver for a payload that no longer decodes raises, where a plain
+receiver's reopened row would dead-letter in the relay.
+
 ## Requeue from the dead-letter queue
 
 ```bash

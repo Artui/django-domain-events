@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.types.registered_event import RegisteredEvent
 from django_domain_events.types.registered_receiver import RegisteredReceiver
 
@@ -53,7 +54,18 @@ class Registry:
         return self._events_by_name.get(name)
 
     def receivers_for(self, event_class: type) -> list[RegisteredReceiver]:
-        return [r for r in self._receivers.values() if r.event_class is event_class]
+        """Every receiver an event of this class is owed to, in declaration order.
+
+        The ones declared for the class, **and** every wildcard declared for
+        ``AnyEvent``. The wildcard is matched here, at the moment of asking,
+        rather than expanded when it is declared - which is what makes it reach
+        an event declared by an app that loaded after it.
+        """
+        return [
+            r
+            for r in self._receivers.values()
+            if r.event_class is event_class or r.event_class is AnyEvent
+        ]
 
     def receiver_for_key(self, key: str) -> RegisteredReceiver | None:
         return self._receivers.get(key)

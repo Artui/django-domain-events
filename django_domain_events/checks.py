@@ -8,6 +8,7 @@ from django.core.checks import Error, Warning
 from django.db import models
 from django.utils.module_loading import import_string
 
+from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.declaration.registry import registry
 from django_domain_events.settings import DEFAULTS, SETTINGS_NAME, get_codec, setting
 from django_domain_events.utils import TERMINAL, has_table
@@ -22,10 +23,16 @@ def check_receivers_have_events(**kwargs: Any) -> list[Any]:
 
     Nothing else would say so: the event cannot be fired, so there is no failure
     to observe, only silence.
+
+    A wildcard is exempt: ``AnyEvent`` is a marker, never declared as an event,
+    and a receiver for it listens to everything that is.
     """
     problems = []
     for receiver in registry.receivers():
-        if registry.event_for_class(receiver.event_class) is None:
+        if (
+            receiver.event_class is not AnyEvent
+            and registry.event_for_class(receiver.event_class) is None
+        ):
             problems.append(
                 Error(
                     f"Receiver {receiver.key!r} listens for "

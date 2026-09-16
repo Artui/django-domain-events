@@ -38,6 +38,15 @@ diff.
     The Markdown says **"Nothing listens to this event."** rather than leaving
     the section empty. That is the usual reason to read a catalogue at all.
 
+Wildcard receivers, declared for `AnyEvent`, are listed **once**, in an *Every
+event* section at the top, and each event says "Plus every wildcard receiver"
+rather than repeating them - a transport listed under two hundred events is a
+catalogue nobody reads. An event with no receivers of its own says it still
+reaches the wildcards, because "nothing listens" would be false. A fan-out
+receiver has a line under its table naming the callable its targets come from,
+and the JSON carries the same as `targets` on each receiver and
+`wildcard_receivers` at the top level.
+
 Building a catalogue never runs consumer code: a `default_factory` is **named**,
 not called.
 
@@ -53,6 +62,11 @@ listens_for("orders.reserve_stock")  # RegisteredEvent | None
 `what_listens_to` spans every mode, not only the durable ones: "who reacts to
 this" is a question about the code, and an inline receiver is as much a reaction
 as a queued one.
+
+It does not repeat wildcard receivers under each event. They receive it - they
+receive everything - and `what_listens_to(AnyEvent)` returns exactly them.
+`listens_for` returns `None` for a wildcard's key, since it is owed no single
+event; its delivery row already says which one it was.
 
 `listens_for` is the direction an operator actually needs. A dead-letter row
 names a receiver key, and the next question is always what it was supposed to be

@@ -94,6 +94,11 @@ attempt when the destination asked for it rather than when the curve guesses.
 Add `eager=True` to a receiver to also attempt it immediately after commit, in
 the firing process, with the relay as the fallback.
 
+A receiver whose destinations live in data - customer endpoints, tenants - takes
+`targets=`, a callable returning one string per destination, and gets a delivery
+row for each with its own retries. Declared for `AnyEvent`, a receiver is owed
+every event fired, including events declared by apps that load after it.
+
 In tests, `drain_outbox()` runs the real delivery path to completion, and
 `assert_fired(OrderPlaced, times=1)` reads the log rather than a mock.
 

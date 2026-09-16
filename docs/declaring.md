@@ -48,6 +48,8 @@ def reserve_stock(evt: OrderPlaced) -> None: ...
 | `site` | `"relay"` | Where the code runs. `"task"` hands it to a task backend. |
 | `lease_seconds` | `None` | Override `LEASE_SECONDS` for a receiver that runs long. |
 | `takes_context` | `False` | Receive a second `DeliveryContext` argument. |
+| `on_failure` | `None` | Called after a failed attempt is recorded. See [delivery](delivery.md#failure). |
+| `targets` | `None` | One delivery per target this returns. See [fan-out](#fan-out-one-delivery-per-target). |
 
 `takes_context` is the spelling `django.tasks.task` uses for the same idea. The
 overloads make a type checker enforce the arity it implies, so declaring one and
@@ -70,6 +72,97 @@ def audit(evt: OrderPlaced, ctx: DeliveryContext) -> None:
 !!! note "`max_attempts` is frozen at fire time"
     It is copied onto the delivery row when the event is fired, so lowering it
     later cannot retroactively dead-letter rows already in flight.
+
+## Every event: `AnyEvent`
+
+A receiver declared for `AnyEvent` is owed **every** event fired.
+
+```python
+from django_domain_events import AnyEvent, DeliveryContext, receiver
+
+
+@receiver(AnyEvent, key="bridge.forward", takes_context=True)
+def forward(evt: object, ctx: DeliveryContext) -> None:
+    broker.publish(ctx.event_name, evt)
+```
+
+It is for a **transport** - something that forwards events without knowing what
+they are. The wildcard is matched when an event is fired, not expanded when the
+receiver is declared, and that is the whole point: the alternative spelling,
+walking the registry at startup and declaring one receiver per event, silently
+misses every event declared by an app that loads afterwards.
+
+!!! warning "A wildcard on its own writes a row for every event"
+    Every event the system fires gains a delivery row for it, including the
+    thousands nobody wants forwarded. Declare it with
+    [`targets=`](#fan-out-one-delivery-per-target) and return nothing for an
+    event it should skip: an empty list writes no row at all.
+
+The catalogue lists wildcards once, in a section of their own, and
+`what_listens_to(OrderPlaced)` leaves them out; `what_listens_to(AnyEvent)` lists
+exactly them.
+
+## Fan-out: one delivery per target
+
+`targets=` makes a durable receiver owe each event to **several destinations
+that live in data** - endpoint rows, tenants, subscriptions - with a delivery row
+of its own for each.
+
+```python
+def endpoints_owed(evt: object, ctx: DeliveryContext) -> list[str]:
+    return [
+        str(pk)
+        for pk in Endpoint.objects.filter(
+            active=True, subscriptions__event_name=ctx.event_name
+        ).values_list("pk", flat=True)
+    ]
+
+
+@receiver(AnyEvent, key="hooks.deliver", takes_context=True, targets=endpoints_owed)
+def deliver(evt: object, ctx: DeliveryContext) -> None:
+    endpoint = Endpoint.objects.get(pk=ctx.target)
+    ...
+```
+
+`fire()` calls the callable with the event and a `DeliveryContext`, and writes one
+row per string it returns. Each row has its own attempt count, backoff and
+dead-letter, so one target that is down does not drag the others through its
+retries, and the receiver is told which one it is delivering to as
+`DeliveryContext.target` (and an `on_failure` hook as `DeliveryFailure.target`).
+
+- A target returned twice is delivered **once**.
+- **An empty list writes no row**, and is not an error.
+- A target must be a non-empty string of at most 255 characters. Anything else
+  is refused where it is returned: blank is what a receiver *without* `targets=`
+  writes, and only some databases enforce the column's length.
+
+!!! danger "The callable runs inside the caller's transaction"
+    It runs at fire time, beside the event row, in whatever transaction
+    `fire()` was called from - so `fire()`'s contract is its contract too. It
+    sees the business change's own uncommitted rows. **If it raises, `fire()`
+    raises, and the caller's change rolls back** with the event and every
+    delivery row.
+
+    That is deliberate. Swallowing the error and delivering to nobody would
+    commit a change whose consequences silently never happened, which is the
+    failure this package exists to rule out. Treat the callable as code in the
+    middle of somebody else's write, because it is.
+
+!!! warning "It is also a query in `fire()`'s hot path"
+    Every fan-out receiver's callable is called on every event it is owed - for
+    a wildcard, **every event fired** - so a callable that reads a table costs
+    one query per fired event per fan-out receiver. For a transport that would
+    otherwise fire a second event per destination that is a clear saving. For
+    one declared carelessly, it is a cost every write in the system pays. Index
+    the lookup, and return early for events you can rule out without one.
+
+`replay_events` calls the callable again, so a replay goes to the targets that
+exist at replay time; see [replay](operations.md#replay).
+
+!!! note "Adding `targets=` to a receiver with rows still owed"
+    Rows written before the receiver had a callable carry the blank target, and
+    they are delivered as written - `DeliveryContext.target` is `""`. Either
+    handle the blank target in the receiver or let those rows drain first.
 
 ## Where declarations live
 

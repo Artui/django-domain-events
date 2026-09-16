@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_mode import DeliveryMode
 
@@ -34,3 +35,11 @@ class RegisteredReceiver:
     """None means the LEASE_SECONDS setting. Defaulted because it is the one
     field of a declaration that is genuinely optional: every other value here
     is something the decorator always resolves."""
+
+    targets: Callable[[Any, DeliveryContext], Iterable[str]] | None = None
+    """Called at fire time to name this receiver's targets, or None.
+
+    None writes one delivery row per event, as every receiver always has. A
+    callable writes one per string it returns, each with its own attempt count,
+    backoff and dead-letter, and none when it returns nothing. It runs inside
+    the caller's transaction; see ``receiver`` for what that obliges."""
