@@ -89,8 +89,9 @@ python manage.py deliver_events
 
 - [Declaring events and receivers](declaring.md) - the two decorators, payload
   rules, and what happens when a payload changes shape.
-- [Delivery](delivery.md) - the two knobs, the relay, and what failure means in
-  each mode.
+- [Delivery](delivery.md) - the two knobs, the relay, what failure means in
+  each mode, and how a receiver declares a failure permanent or says when to
+  retry.
 - [Scope and attribution](scope.md) - `attributed()`, `suppressed()`, causation
   chains, and the one rule that matters for threads.
 - [Operations](operations.md) - prune, replay, requeue, and running the relay

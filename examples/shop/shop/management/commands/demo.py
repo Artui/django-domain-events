@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+from datetime import timedelta
 from typing import Any
 
 from django.contrib.auth.models import User
@@ -19,7 +21,7 @@ from django_domain_events import (
 )
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
-from shop.events import OrderCancelled, OrderPlaced
+from shop.events import OrderCancelled, OrderPlaced, ParcelDispatched
 from shop.models import Order, Reservation, SentEmail, StockLevel
 
 
@@ -64,6 +66,17 @@ def fire_order(order: Order) -> None:
         ),
         dedupe_key=f"order-placed:{order.pk}",
     )
+
+
+class _Collect(logging.Handler):
+    """Keeps the warnings the relay logs, so a step can check one was written."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
 
 
 class Command(BaseCommand):
@@ -169,4 +182,57 @@ class Command(BaseCommand):
         print(f"   decoded a v1 row as: {rebuilt}")
         print("   currency came from OrderPlaced.upgrade()")
         check("the upgrade hook fills the field the row never had", rebuilt.currency, "EUR")
+
+        head("9. A receiver that knows the destination is gone stops at once")
+        with transaction.atomic():
+            from django_domain_events import fire
+
+            fire(ParcelDispatched(order_id=order.pk, carrier="parcelforce"))
+        warnings = _Collect()
+        relay_log = logging.getLogger("django_domain_events.delivery.deliver")
+        relay_log.addHandler(warnings)
+        before = now()
+        try:
+            print(f"   {deliver_pending(worker_id='demo')}")
+        finally:
+            relay_log.removeHandler(warnings)
+        after = now()
+        gone = DeliveryRecord.objects.get(receiver_key="shop.notify_marketplace")
+        print(f"   {gone.receiver_key}: {gone.status} after {gone.attempts} of {gone.max_attempts}")
+        print(f"         {gone.last_error}")
+        check("PermanentFailure dead-letters on the attempt that raised it", gone.status, "dead")
+        check("having spent one attempt of five", (gone.attempts, gone.max_attempts), (1, 5))
+
+        head("10. A receiver told when to come back is retried then, within a ceiling")
+        limited = DeliveryRecord.objects.get(receiver_key="shop.register_tracking")
+        wait = limited.available_at - before
+        print(
+            f"   {limited.receiver_key}: {limited.status}, next attempt in {wait.total_seconds():.0f}s"
+        )
+        print(f"         {limited.last_error}")
+        check("RetryAfter counts the attempt", (limited.status, limited.attempts), ("failed", 1))
+        check(
+            "and schedules the next one when the carrier asked",
+            before + timedelta(seconds=120)
+            <= limited.available_at
+            <= after + timedelta(seconds=120),
+            True,
+        )
+        closed = DeliveryRecord.objects.get(receiver_key="shop.book_customs_clearance")
+        parked = closed.available_at - before
+        print(
+            f"   {closed.receiver_key}: asked for 2 days, parked for {parked.total_seconds():.0f}s"
+        )
+        for message in warnings.messages:
+            print(f"         warned: {message}")
+        check(
+            "a request past MAX_RECEIVER_RETRY_DELAY_SECONDS is clamped to it",
+            before + timedelta(days=1) <= closed.available_at <= after + timedelta(days=1),
+            True,
+        )
+        check(
+            "and the clamp is logged",
+            [m for m in warnings.messages if "MAX_RECEIVER_RETRY_DELAY_SECONDS" in m] != [],
+            True,
+        )
         print("\nEvery claim above was checked.")

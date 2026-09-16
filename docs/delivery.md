@@ -84,7 +84,8 @@ you can run as many as you like:
 ## Failure
 
 A `DURABLE` receiver that raises is retried with **exponential backoff and full
-jitter**, up to `max_attempts`, then dead-lettered:
+jitter**, up to `max_attempts`, then dead-lettered - unless it says otherwise,
+which is [when the receiver knows better](#when-the-receiver-knows-better):
 
 ```
 ceiling      = min(BACKOFF_BASE_SECONDS * 2 ** (attempt - 1), BACKOFF_CAP_SECONDS)
@@ -110,6 +111,41 @@ Dead is where a delivery stops **on its own**, not where it stops for good - see
 
 `failed` is distinct from `pending` so that "has this ever failed" is answerable
 without reading the attempt count.
+
+## Recording a failed attempt
+
+A receiver cannot keep a record of its own failure by writing one: it runs inside
+the transaction that carries its acknowledgement, so everything it wrote is
+rolled back the moment it raises. `on_failure` is called afterwards, outside that
+transaction and after the delivery row is updated, so what it writes survives.
+
+```python
+from django_domain_events import DeliveryFailure, receiver
+
+
+def log_failure(failure: DeliveryFailure) -> None:
+    DeliveryLog.objects.create(
+        delivery_id=failure.delivery_id,
+        attempt=failure.attempt,
+        status=failure.status,
+        error=failure.error,
+    )
+
+
+@receiver(OrderPlaced, on_failure=log_failure)
+def notify_partner(evt: OrderPlaced) -> None: ...
+```
+
+It is called for `failed` and for `dead`, because "it failed again" and "it will
+not be tried again" are different things to record. `DeliveryFailure` carries the
+delivery's identity - `delivery_id`, `event_id`, `event_name`, `receiver_key` -
+with the `attempt`, the `status` and the stored `error`, rather than the row
+itself, since another worker may own the row by the time the hook runs.
+
+A worker whose lease lapsed does not call it: whoever holds the row now will
+report its own outcome. A hook that raises is logged and swallowed, because a
+failure path that fails leaves the operator a traceback about logging instead of
+about the delivery.
 
 ## When the receiver knows better
 

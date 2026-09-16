@@ -16,6 +16,8 @@ from django_domain_events import (
     INLINE,
     ON_COMMIT,
     DeliveryContext,
+    PermanentFailure,
+    RetryAfter,
     event,
     fire,
     receiver,
@@ -57,6 +59,15 @@ class StockReserved:
     order_id: int
     sku: str
     quantity: int
+
+
+@event(name="shop.ParcelDispatched")
+@dataclass(frozen=True, slots=True)
+class ParcelDispatched:
+    """The parcel left the warehouse, and three outside systems want to know."""
+
+    order_id: int
+    carrier: str
 
 
 @receiver(OrderPlaced, mode=INLINE)
@@ -157,3 +168,41 @@ def release_stock(evt: OrderCancelled) -> None:
 def refund(evt: OrderCancelled) -> None:
     """Deliberately broken, to show the dead-letter path and the requeue."""
     raise RuntimeError("payment gateway timed out")
+
+
+@receiver(ParcelDispatched, mode=DURABLE, key="shop.notify_marketplace")
+def notify_marketplace(evt: ParcelDispatched) -> None:
+    """`PermanentFailure`, because the other side has said it will never accept this.
+
+    The marketplace answered `410 Gone`: it de-listed the shop. Raising an
+    ordinary exception would spend the whole attempt budget - five POSTs across
+    the next hour to a URL that has already said no. Raising this dead-letters
+    the delivery on the attempt that learned it. Deliberately always gone, so
+    the demo can show it.
+    """
+    raise PermanentFailure("410 Gone: the marketplace de-listed this shop")
+
+
+@receiver(ParcelDispatched, mode=DURABLE, key="shop.register_tracking")
+def register_tracking(evt: ParcelDispatched) -> None:
+    """`RetryAfter`, because the carrier said exactly when to come back.
+
+    Its tracking API answered `429` with `Retry-After: 120`. The backoff curve
+    would guess, arrive early and be refused again; this schedules the next
+    attempt for when the carrier asked. It still counts as an attempt, so a
+    carrier that rate-limits forever still dead-letters within the budget.
+    Deliberately always rate limited, so the demo can show it.
+    """
+    raise RetryAfter(seconds=120, reason="the carrier answered 429 with Retry-After: 120")
+
+
+@receiver(ParcelDispatched, mode=DURABLE, key="shop.book_customs_clearance")
+def book_customs_clearance(evt: ParcelDispatched) -> None:
+    """`RetryAfter` past the ceiling, because a destination's number is advice.
+
+    The customs broker is closed for a two-day holiday and says so. A delivery
+    parked in the future is still owed, which keeps its event past retention,
+    so the relay clamps the request to `MAX_RECEIVER_RETRY_DELAY_SECONDS` - a
+    day by default - and logs a warning naming both numbers.
+    """
+    raise RetryAfter(seconds=2 * 86400, reason="the broker is closed for a two-day holiday")

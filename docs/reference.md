@@ -52,6 +52,7 @@ Everything below is exported from `django_domain_events` directly.
 ::: django_domain_events.types.delivery_mode.DeliveryMode
 ::: django_domain_events.types.delivery_status.DeliveryStatus
 ::: django_domain_events.types.delivery_context.DeliveryContext
+::: django_domain_events.types.delivery_failure.DeliveryFailure
 ::: django_domain_events.types.scope.Scope
 ::: django_domain_events.types.catalogue.Catalogue
 ::: django_domain_events.types.catalogue_event.CatalogueEvent

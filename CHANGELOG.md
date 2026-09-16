@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the delivery and both numbers. It is not `BACKOFF_CAP_SECONDS`, which bounds the
   curve; clamping a destination's hour-long request to that ceiling would retry
   something that asked to be left alone.
+- The example shop demonstrates both: a marketplace answering `410 Gone`
+  dead-letters on its first attempt, a carrier's `Retry-After: 120` schedules the
+  next attempt two minutes out, and a two-day request is clamped to the ceiling
+  with its warning. Each is checked, so the demo fails if one stops being true.
+- The delivery docs cover `on_failure` and `DeliveryFailure`, which 0.8.0 shipped
+  with only a docstring.
 
 ### Changed
 - `tests/` mirrors the package again. The layout regroup in 0.8.0 moved the source
