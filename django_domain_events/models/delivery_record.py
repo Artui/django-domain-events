@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from django.db import models
 
+from django_domain_events.models.target_digest_field import TargetDigestField
 from django_domain_events.types.delivery_status import DeliveryStatus
 
 
@@ -34,9 +35,16 @@ class DeliveryRecord(models.Model):
     Text rather than a bounded string: a target is whatever a consumer's
     callable names, and this package imposes no length of its own on it.
 
-    No index of its own. The unique constraint below leads with the event, and
-    every query that reads this column also names the event.
+    In no index, and that is what makes the text safe to leave unbounded: a
+    btree entry has a size limit on Postgres, and some backends refuse a text
+    column in a unique index outright. Uniqueness is enforced on
+    ``target_digest`` instead, and lookups go through it.
     """
+
+    target_digest = TargetDigestField()
+    """SHA-256 of ``target``, derived on every write, and what the unique
+    constraint covers. The blank target has a digest like any other, so a row
+    from a receiver without ``targets=`` is not a special case."""
     status = models.CharField(
         max_length=16, choices=DeliveryStatus.choices, default=DeliveryStatus.PENDING
     )
@@ -82,11 +90,13 @@ class DeliveryRecord(models.Model):
     class Meta:
         constraints = [
             # The target is part of the identity, which is what lets one
-            # receiver owe one event to many targets. A receiver without
-            # targets= writes the blank target, so for it this is exactly the
-            # (event, receiver_key) constraint it replaced.
+            # receiver owe one event to many targets - through its digest, so
+            # the index entry is fixed-width however long the target is. A
+            # receiver without targets= writes the blank target, one digest
+            # for every row, so for it this is exactly the (event,
+            # receiver_key) constraint it replaced.
             models.UniqueConstraint(
-                fields=["event", "receiver_key", "target"],
+                fields=["event", "receiver_key", "target_digest"],
                 name="unique_delivery_per_event_receiver_and_target",
             )
         ]

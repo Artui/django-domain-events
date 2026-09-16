@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import inspect
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
@@ -184,3 +185,14 @@ def resolve_targets(
             )
         resolved[target] = None
     return list(resolved)
+
+
+def target_digest(target: str) -> str:
+    """The digest a delivery row's uniqueness is enforced on, for one target.
+
+    The one place it is computed: the model field derives it from here on every
+    write, and replay looks existing rows up by it. SHA-256 of the UTF-8 text,
+    as 64 hex characters, so every target - the blank one included - indexes as
+    the same fixed width however long the text is.
+    """
+    return hashlib.sha256(target.encode()).hexdigest()

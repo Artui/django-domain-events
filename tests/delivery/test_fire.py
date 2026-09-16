@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
+import secrets
 import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -305,14 +307,16 @@ def test_the_callable_is_handed_the_event_and_the_fire_time_context() -> None:
 
 
 def test_a_target_is_written_as_long_as_it_was_returned() -> None:
-    """No length is imposed on a target, in Python or by the column.
+    """Ten thousand incompressible characters, written and read back.
 
-    Backend-dependent in half. Nothing in Python may refuse it on either
-    backend. The column type is held only on Postgres, which refuses a value
-    longer than a varchar's length where SQLite stores it anyway - so on SQLite
-    this test passes with a bounded column, and on Postgres it does not.
+    Backend-dependent, and the Postgres half is the point. A btree index entry
+    there holds at most 2704 bytes, so a target the unique constraint indexed
+    directly would be refused inside the caller's transaction; the constraint
+    indexes the target's digest instead, and the text sits in no index at all.
+    SQLite imposes neither limit, so there this pins only that nothing in
+    Python refuses the length.
     """
-    long_target = "endpoint:" + "x" * 991
+    long_target = secrets.token_urlsafe(7500)[:10_000]
     receiver(Unheard, key="probe.long", targets=lambda event, context: [long_target])(
         lambda event: None
     )
@@ -320,7 +324,29 @@ def test_a_target_is_written_as_long_as_it_was_returned() -> None:
         fire(Unheard(value=1))
 
     assert _rows("probe.long") == [(long_target, DeliveryStatus.PENDING, 0)]
-    assert len(long_target) == 1000
+    assert len(long_target) == 10_000
+
+
+def test_every_row_fire_writes_carries_the_digest_of_its_target() -> None:
+    """Both kinds of row: a fan-out target, and the blank one a plain receiver
+    writes, whose digest is the digest of the empty string rather than a
+    special case."""
+    receiver(Unheard, key="probe.fan", targets=lambda event, context: ["a", "b" * 3000])(
+        lambda event: None
+    )
+    receiver(Unheard, key="probe.plain")(lambda event: None)
+    with transaction.atomic():
+        fire(Unheard(value=1))
+
+    stored = list(
+        DeliveryRecord.objects.filter(receiver_key__startswith="probe.").values_list(
+            "target", "target_digest"
+        )
+    )
+    assert len(stored) == 3
+    assert {"", "a", "b" * 3000} == {target for target, _ in stored}
+    for target, digest in stored:
+        assert digest == hashlib.sha256(target.encode()).hexdigest()
 
 
 def test_a_raising_callable_fails_the_callers_transaction() -> None:

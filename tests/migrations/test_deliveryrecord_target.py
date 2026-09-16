@@ -8,6 +8,7 @@ rewind can produce such a row.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator
 from datetime import datetime, timezone
 
@@ -82,6 +83,7 @@ def test_a_row_from_before_the_column_reads_blank_and_still_delivers(
 
     row = DeliveryRecord.objects.get(receiver_key="testapp.durable_receiver")
     assert row.target == ""
+    assert row.target_digest == hashlib.sha256(b"").hexdigest()
     assert deliver_pending() == {DeliveryStatus.SUCCEEDED: 1}
 
     # And the constraint that replaced the old one still refuses a second blank

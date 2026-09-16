@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
+import secrets
 from collections.abc import Iterator
 from unittest import mock
 
 import pytest
-from django.db import transaction
+from django.db import connection, transaction
+from django.test.utils import CaptureQueriesContext
 
 from django_domain_events.declaration.receiver import receiver
 from django_domain_events.declaration.registry import registry
@@ -286,3 +289,51 @@ def test_a_plain_receiver_replay_never_rebuilds_the_event(
     EventRecord.objects.filter(pk=event_id).update(payload={})
 
     assert replay_events([event_id]) == {"reopened": 2, "added": 0}
+
+
+def test_a_row_replay_adds_carries_the_digest_of_its_target(owed_targets: list[str]) -> None:
+    with transaction.atomic():
+        event_id = fire(Unheard(value=1))
+    owed_targets[:] = ["a", "b", "c" * 3000]
+
+    assert replay_events([event_id]) == {"reopened": 0, "added": 1}
+    added = DeliveryRecord.objects.get(receiver_key="probe.fan", target="c" * 3000)
+    assert added.target_digest == hashlib.sha256(("c" * 3000).encode()).hexdigest()
+
+
+def test_a_long_target_already_delivered_is_reopened_not_duplicated(
+    owed_targets: list[str],
+) -> None:
+    """Matched by digest, so ten thousand characters are found as one row."""
+    long_target = secrets.token_urlsafe(7500)[:10_000]
+    owed_targets[:] = [long_target]
+    with transaction.atomic():
+        event_id = fire(Unheard(value=1))
+    drain_outbox()
+
+    assert replay_events([event_id]) == {"reopened": 1, "added": 0}
+    assert _fan_rows() == [(long_target, DeliveryStatus.PENDING, 0)]
+
+
+def test_replay_finds_existing_rows_by_the_indexed_digest_not_the_text(
+    owed_targets: list[str],
+) -> None:
+    """The digest is what the unique index covers; the text is in no index, so
+    a lookup by it scans every delivery of the event."""
+    with transaction.atomic():
+        event_id = fire(Unheard(value=1))
+    drain_outbox()
+
+    with CaptureQueriesContext(connection) as queries:
+        replay_events([event_id], receiver_keys=["probe.fan"])
+
+    lookups = [
+        q["sql"]
+        for q in queries.captured_queries
+        if q["sql"].startswith("SELECT") and "django_domain_events_deliveryrecord" in q["sql"]
+    ]
+    assert lookups, "replay read the existing rows"
+    for sql in lookups:
+        where = sql.split(" WHERE ", 1)[1]
+        assert '"target_digest" IN' in where
+        assert '"target" IN' not in where

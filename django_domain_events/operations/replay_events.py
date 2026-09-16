@@ -13,7 +13,7 @@ from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
-from django_domain_events.utils import decode_payload, resolve_targets
+from django_domain_events.utils import decode_payload, resolve_targets, target_digest
 
 
 def replay_events(
@@ -74,13 +74,19 @@ def replay_events(
                 key=lambda r: r.key,
             )
             for receiver in durable:
-                targets = _targets_now(receiver, record, entry.event_class)
+                # Keyed by digest, because the digest is what the unique index
+                # covers. The text is in no index, so looking rows up by it
+                # would scan every delivery of the event.
+                targets = {
+                    target_digest(target): target
+                    for target in _targets_now(receiver, record, entry.event_class)
+                }
                 existing = dict(
                     DeliveryRecord.objects.filter(
-                        event=record, receiver_key=receiver.key, target__in=targets
-                    ).values_list("target", "status")
+                        event=record, receiver_key=receiver.key, target_digest__in=targets
+                    ).values_list("target_digest", "status")
                 )
-                reopen = [t for t, status in existing.items() if status in _TERMINAL]
+                reopen = [d for d, status in existing.items() if status in _TERMINAL]
                 # The status predicate is what keeps this from wiping a live
                 # lease. Between reading the statuses above and this update, a
                 # relay can claim a row - and clearing claimed_by on it would
@@ -89,7 +95,7 @@ def replay_events(
                 counts["reopened"] += DeliveryRecord.objects.filter(
                     event=record,
                     receiver_key=receiver.key,
-                    target__in=reopen,
+                    target_digest__in=reopen,
                     status__in=_TERMINAL,
                 ).update(
                     status=DeliveryStatus.PENDING,
@@ -101,22 +107,22 @@ def replay_events(
                     completed_at=None,
                     last_error="",
                 )
-                missing = [t for t in targets if t not in existing]
+                missing = [digest for digest in targets if digest not in existing]
                 if missing:
                     # ignore_conflicts, because a concurrent replay of the same
                     # event races the unique constraint on (event, receiver_key,
-                    # target) - and losing that race means the row exists,
+                    # target_digest) - and losing that race means the row exists,
                     # which is what was wanted.
                     DeliveryRecord.objects.bulk_create(
                         [
                             DeliveryRecord(
                                 event=record,
                                 receiver_key=receiver.key,
-                                target=target,
+                                target=targets[digest],
                                 max_attempts=receiver.max_attempts,
                                 available_at=now,
                             )
-                            for target in missing
+                            for digest in missing
                         ],
                         ignore_conflicts=True,
                     )
@@ -126,7 +132,7 @@ def replay_events(
                     # created is owed either way, which is what the operator
                     # asked for.
                     counts["added"] += DeliveryRecord.objects.filter(
-                        event=record, receiver_key=receiver.key, target__in=missing
+                        event=record, receiver_key=receiver.key, target_digest__in=missing
                     ).count()
     if counts["reopened"] or counts["added"]:
         # The operations make rows owed just as fire() does, so they wake a

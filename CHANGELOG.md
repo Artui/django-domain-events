@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it costs its query on every event it is owed.
 - `DeliveryRecord.target`, `DeliveryContext.target` and `DeliveryFailure.target`
   carry which target a delivery is for, blank for a receiver without `targets=`.
+  The column is text, and nothing in the package limits its length.
   The catalogue publishes where a fan-out receiver's targets come from.
 - The example shop forwards every event to the partners a table says want it,
   through one `AnyEvent` receiver with `targets=`, and checks that each partner
@@ -56,12 +57,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `replay_events` calls a fan-out receiver's `targets` again, so a replay goes to
   the targets that exist at replay time. A target no longer returned is left as
   it was and not counted.
-- The delivery table's unique constraint is now `(event, receiver_key, target)`,
-  replacing `(event, receiver_key)`. **Migration `0005` adds the column and
-  rebuilds that index**: every existing row gets the blank target, which is what
-  a receiver without `targets=` writes, so nothing is backfilled - but building
-  a unique index takes a lock proportional to the table on some backends, so
-  prune before migrating a large one.
+- The delivery table's unique constraint is now
+  `(event, receiver_key, target_digest)`, replacing `(event, receiver_key)`.
+  `target_digest` is the SHA-256 of the target, derived whenever a row is
+  written, so the index entry is 64 characters however long the target is and
+  the target text itself sits in no index. **Migration `0005` adds both columns
+  and rebuilds that index**: every existing row gets the blank target and its
+  digest, which is what a receiver without `targets=` writes, so nothing is
+  backfilled - but building a unique index takes a lock proportional to the
+  table on some backends, so prune before migrating a large one.
 - `check_receivers_have_events` (`E001`) no longer reports a wildcard receiver,
   whose `AnyEvent` is a marker rather than a declared event.
 - The delivery admin shows and searches by target.
