@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-09-16
+
 ### Added
 - `PermanentFailure`: a durable receiver raising it dead-letters its delivery on
   the attempt that raised it, rather than spending the rest of the attempt budget
@@ -530,7 +532,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/Artui/django-domain-events/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Artui/django-domain-events/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Artui/django-domain-events/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Artui/django-domain-events/compare/v0.5.1...v0.6.0
