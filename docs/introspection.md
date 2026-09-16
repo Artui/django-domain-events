@@ -218,7 +218,10 @@ Add `django.contrib.admin` and both models appear, read-only, with actions.
 - **Event records** - filter by name and date, see how many deliveries are still
   owed per event, and **Replay selected events**.
 - **Delivery records** - the dead-letter queue, filterable by status and
-  receiver, with **Requeue selected dead deliveries**.
+  receiver, with **Requeue selected dead deliveries**. Each row shows its
+  target, and the search covers the receiver key, the target and the last error,
+  since the target is what an operator is holding when one destination of a
+  fan-out says it never received something.
 
 Both are read-only, and that is deliberate: the one guarantee this package sells
 is that a row exists if and only if the change committed, and a form that can
@@ -236,7 +239,8 @@ It reports what it skipped: a mixed selection requeues only the dead rows.
 !!! warning "Both actions need the model's **change** permission"
     Django offers an action with no declared permission to anyone who can reach
     the changelist, and `has_change_permission` gates the form alone. Replay
-    re-runs every durable receiver - re-sent emails, re-called webhooks - so a
+    re-runs every durable receiver - re-sent emails, re-called webhooks, and a
+    fan-out receiver's targets asked for again - so a
     view-only grant must not carry it. Give `change_eventrecord` /
     `change_deliveryrecord` to whoever may run them; the edit form stays refused
     either way.

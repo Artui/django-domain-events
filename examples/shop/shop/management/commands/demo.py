@@ -16,13 +16,21 @@ from django_domain_events import (
     attributed,
     deliver_pending,
     outbox_health,
+    replay_events,
     requeue_dead,
     suppressed,
 )
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from shop.events import OrderCancelled, OrderPlaced, ParcelDispatched
-from shop.models import Order, Reservation, SentEmail, StockLevel
+from shop.models import (
+    Order,
+    PartnerNotice,
+    PartnerSubscription,
+    Reservation,
+    SentEmail,
+    StockLevel,
+)
 
 
 def head(title: str) -> None:
@@ -86,6 +94,8 @@ class Command(BaseCommand):
         EventRecord.objects.all().delete()
         Order.objects.all().delete()
         SentEmail.objects.all().delete()
+        PartnerSubscription.objects.all().delete()
+        PartnerNotice.objects.all().delete()
         StockLevel.objects.update_or_create(sku="WIDGET", defaults={"available": 10})
         user, _ = User.objects.get_or_create(username="ana", defaults={"email": "ana@example.com"})
 
@@ -234,5 +244,54 @@ class Command(BaseCommand):
             "and the clamp is logged",
             [m for m in warnings.messages if "MAX_RECEIVER_RETRY_DELAY_SECONDS" in m] != [],
             True,
+        )
+
+        head("11. One receiver for every event, one delivery per partner that wants it")
+        forward = "shop.forward_to_partners"
+        PartnerSubscription.objects.create(partner="acme-analytics", event_name="shop.OrderPlaced")
+        PartnerSubscription.objects.create(partner="globex-crm", event_name="shop.OrderPlaced")
+        second = place_order(user, "WIDGET", 1, 999)
+        placed = EventRecord.objects.filter(name="shop.OrderPlaced").latest("pk")
+        rows = DeliveryRecord.objects.filter(event=placed, receiver_key=forward).order_by("target")
+        print(f"   order {second.pk}: delivery rows for {forward}: {[r.target for r in rows]}")
+        check(
+            "an AnyEvent receiver gets one row per target",
+            [r.target for r in rows],
+            ["acme-analytics", "globex-crm"],
+        )
+        deliver_pending(worker_id="demo")
+        reserved = EventRecord.objects.filter(name="shop.StockReserved").latest("pk")
+        unwanted = DeliveryRecord.objects.filter(event=reserved, receiver_key=forward).count()
+        print(f"   {reserved.name} (no partner wants it): {unwanted} rows")
+        notices = sorted(PartnerNotice.objects.values_list("partner", flat=True))
+        print(f"   partners sent it: {notices}")
+        check("an event whose targets are empty writes no row", unwanted, 0)
+        check("each partner is sent it once", notices, ["acme-analytics", "globex-crm"])
+
+        head("12. A replay asks for the targets again")
+        PartnerSubscription.objects.filter(partner="globex-crm").delete()
+        PartnerSubscription.objects.create(partner="initech-erp", event_name="shop.OrderPlaced")
+        counts = replay_events([placed.pk], receiver_keys=[forward])
+        print("   globex-crm unsubscribed, initech-erp subscribed, then replayed:")
+        print(f"   {counts}")
+        check(
+            "acme still wants it and is reopened, initech is added",
+            counts,
+            {"reopened": 1, "added": 1},
+        )
+        globex = DeliveryRecord.objects.get(event=placed, receiver_key=forward, target="globex-crm")
+        print(f"   globex-crm's delivery: {globex.status} after {globex.attempts} attempt")
+        check(
+            "a target no longer returned is left as it was",
+            (globex.status, globex.attempts),
+            ("succeeded", 1),
+        )
+        deliver_pending(worker_id="demo")
+        notices = sorted(PartnerNotice.objects.values_list("partner", flat=True))
+        print(f"   partners sent it, all told: {notices}")
+        check(
+            "the replay reaches the partners subscribed now",
+            notices,
+            ["acme-analytics", "acme-analytics", "globex-crm", "initech-erp"],
         )
         print("\nEvery claim above was checked.")

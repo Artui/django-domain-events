@@ -28,3 +28,29 @@ class SentEmail(models.Model):
     to = models.CharField(max_length=254)
     subject = models.CharField(max_length=200)
     sent_at = models.DateTimeField(auto_now_add=True)
+
+
+class PartnerSubscription(models.Model):
+    """A partner system that wants one event. Rows an operator edits, not code.
+
+    Which is the whole reason the forwarding receiver names its destinations
+    with `targets=` rather than being declared once per partner: the set lives
+    in data and changes without a deploy.
+    """
+
+    partner = models.CharField(max_length=64)
+    event_name = models.CharField(max_length=255, db_index=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["partner", "event_name"], name="one_subscription_each")
+        ]
+
+
+class PartnerNotice(models.Model):
+    """Stands in for the request a partner would be sent."""
+
+    partner = models.CharField(max_length=64)
+    event_name = models.CharField(max_length=255)
+    event_id = models.BigIntegerField()
+    sent_at = models.DateTimeField(auto_now_add=True)

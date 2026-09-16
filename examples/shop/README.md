@@ -43,6 +43,8 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
 | The marketplace answers `410 Gone` | `PermanentFailure` dead-lettering on the attempt that raised it, one of five spent |
 | The carrier asks for two minutes | `RetryAfter` scheduling the next attempt when it asked, and counting the attempt |
 | The customs broker asks for two days | the request clamped to `MAX_RECEIVER_RETRY_DELAY_SECONDS`, with a warning naming both numbers |
+| Two partners subscribe to orders | an `AnyEvent` receiver with `targets=`: one delivery row per partner, and none for an event nobody subscribed to |
+| The partners change, then a replay | `replay_events` asking for the targets again: a partner still subscribed is reopened, a new one added, one that left untouched |
 
 ## The declarations
 
@@ -76,6 +78,10 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
 10. **`book_customs_clearance`** - `RetryAfter` past the ceiling. A delivery
     parked in the future is still owed and keeps its event past retention, so
     the relay caps the wait and says so.
+11. **`forward_to_partners`** - declared for `AnyEvent` with
+    `targets=partners_subscribed`, because it is a transport: it forwards every
+    event, to whichever partners a table says want it, with a delivery row per
+    partner. Nothing subscribed means no row at all.
 
 ## Other things to try
 
@@ -94,6 +100,6 @@ SQLite it refuses to start rather than pretend:
 DDE_EXAMPLE_DATABASE=postgres python manage.py deliver_events
 ```
 
-Not shown here, and worth reading about instead: `replay_events`,
+Not shown here, and worth reading about instead:
 `prune_events`, `propagate_scope`, `drain_outbox`, the `task` execution site
 and the `dacite` codec.

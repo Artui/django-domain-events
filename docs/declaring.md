@@ -48,7 +48,7 @@ def reserve_stock(evt: OrderPlaced) -> None: ...
 | `site` | `"relay"` | Where the code runs. `"task"` hands it to a task backend. |
 | `lease_seconds` | `None` | Override `LEASE_SECONDS` for a receiver that runs long. |
 | `takes_context` | `False` | Receive a second `DeliveryContext` argument. |
-| `on_failure` | `None` | Called after a failed attempt is recorded. See [delivery](delivery.md#failure). |
+| `on_failure` | `None` | Called after a failed attempt is recorded. See [delivery](delivery.md#recording-a-failed-attempt). |
 | `targets` | `None` | One delivery per target this returns. See [fan-out](#fan-out-one-delivery-per-target). |
 
 `takes_context` is the spelling `django.tasks.task` uses for the same idea. The

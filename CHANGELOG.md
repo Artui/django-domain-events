@@ -47,6 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `DeliveryRecord.target`, `DeliveryContext.target` and `DeliveryFailure.target`
   carry which target a delivery is for, blank for a receiver without `targets=`.
   The catalogue publishes where a fan-out receiver's targets come from.
+- The example shop forwards every event to the partners a table says want it,
+  through one `AnyEvent` receiver with `targets=`, and checks that each partner
+  gets a row, that an event nobody wants gets none, and that a replay after the
+  subscriptions change reopens, adds and leaves alone exactly what it should.
 
 ### Changed
 - `replay_events` calls a fan-out receiver's `targets` again, so a replay goes to

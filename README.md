@@ -75,8 +75,9 @@ with transaction.atomic():
     fire(OrderPlaced(order_id=order.id, total_cents=order.total_cents))
 ```
 
-The event row and one delivery row per durable receiver are written in that same
-transaction. Run the relay to deliver what is owed:
+The event row and one delivery row per durable receiver - one per target, for a
+receiver declared with `targets=` - are written in that same transaction. Run the
+relay to deliver what is owed:
 
 ```bash
 python manage.py deliver_events          # claim and deliver continuously
@@ -131,14 +132,16 @@ python manage.py quiet_receivers --days 30
 ```
 
 ```python
-what_listens_to(OrderPlaced)  # every receiver, sorted, across all modes
+what_listens_to(OrderPlaced)  # every receiver declared for it, sorted, across all modes
+what_listens_to(AnyEvent)  # the wildcards, which receive every event
 listens_for("orders.reserve_stock")  # the inverse: what a dead row was owed
 quiet_receivers(within=timedelta(days=30))
 ```
 
 The catalogue is every declared event, its payload schema and its receivers, as
 Markdown for a person or JSON for a pipeline that fails a pull request when a
-field other teams consume disappears.
+field other teams consume disappears. Wildcard receivers are listed once, in a
+section of their own, rather than under every event.
 
 `quiet_receivers()` answers *"this receiver has not received anything in ninety
 days"* as a query rather than a guess - including the receivers that have never

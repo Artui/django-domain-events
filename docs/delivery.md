@@ -24,7 +24,9 @@ commit and callback loses the delivery, with no row to say so.
 
 `DURABLE` writes a row per receiver. One failing receiver must not replay or
 block the other four, which is why the debt is per-receiver rather than one
-outbox row per event.
+outbox row per event. A receiver declared with
+[`targets=`](declaring.md#fan-out-one-delivery-per-target) takes that one step
+further and writes a row per target, for the same reason.
 
 !!! tip "Effectively once, for database-only receivers"
     For a receiver that touches only this database, the work and the
@@ -138,9 +140,10 @@ def notify_partner(evt: OrderPlaced) -> None: ...
 
 It is called for `failed` and for `dead`, because "it failed again" and "it will
 not be tried again" are different things to record. `DeliveryFailure` carries the
-delivery's identity - `delivery_id`, `event_id`, `event_name`, `receiver_key` -
-with the `attempt`, the `status` and the stored `error`, rather than the row
-itself, since another worker may own the row by the time the hook runs.
+delivery's identity - `delivery_id`, `event_id`, `event_name`, `receiver_key`,
+and the `target` for a fan-out receiver - with the `attempt`, the `status` and
+the stored `error`, rather than the row itself, since another worker may own the
+row by the time the hook runs.
 
 A worker whose lease lapsed does not call it: whoever holds the row now will
 report its own outcome. A hook that raises is logged and swallowed, because a
