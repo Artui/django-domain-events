@@ -37,3 +37,11 @@ def test_partial_configuration_keeps_the_other_defaults(settings) -> None:
         "CODEC": "django_domain_events.codecs.dacite_codec.DaciteCodec"
     }
     assert setting("WARN_OUTSIDE_ATOMIC") is True
+
+
+def test_a_receivers_requested_retry_is_capped_at_a_day_by_default() -> None:
+    """Its own ceiling rather than BACKOFF_CAP_SECONDS, which bounds a curve:
+    an hour-long Retry-After clamped to a backoff cap would hammer a destination
+    that asked to be left alone."""
+    assert setting("MAX_RECEIVER_RETRY_DELAY_SECONDS") == 86400.0
+    assert setting("MAX_RECEIVER_RETRY_DELAY_SECONDS") != setting("BACKOFF_CAP_SECONDS")

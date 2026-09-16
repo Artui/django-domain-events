@@ -111,6 +111,54 @@ Dead is where a delivery stops **on its own**, not where it stops for good - see
 `failed` is distinct from `pending` so that "has this ever failed" is answerable
 without reading the attempt count.
 
+## When the receiver knows better
+
+The backoff curve is a guess, and the attempt budget is the only thing that ends
+a delivery on its own. Two exceptions let a durable receiver replace either with
+what it actually knows.
+
+```python
+from django_domain_events import PermanentFailure, RetryAfter, receiver
+
+
+@receiver(OrderPlaced)
+def notify_partner(evt: OrderPlaced) -> None:
+    response = post_to_partner(evt)
+    if response.status_code == 410:
+        raise PermanentFailure("410 Gone: the partner retired this endpoint")
+    if response.status_code == 429:
+        seconds = float(response.headers["Retry-After"])
+        raise RetryAfter(seconds=seconds, reason=f"rate limited for {seconds:g}s")
+    response.raise_for_status()
+```
+
+`PermanentFailure` dead-letters the row **on the attempt that raised it**. A
+destination that has said it will never accept another request is not asked four
+more times across the next hour. The row is `dead`, and `on_failure` is called
+with `DEAD`, exactly as it is when the budget runs out.
+
+`RetryAfter` schedules the next attempt `seconds` from now **instead of drawing
+from the curve**. A rate limiter that says "in two minutes" is answering the
+question the curve is guessing at, and arriving early only earns another refusal.
+
+!!! warning "A requested retry consumes an attempt"
+    Otherwise a destination answering `429` to every request would keep a row
+    alive forever and nothing would ever declare it dead. Every delivery stays
+    bounded by the budget it was fired with. A receiver expecting to be rate
+    limited should declare a wider `max_attempts`.
+
+The request is capped at `MAX_RECEIVER_RETRY_DELAY_SECONDS`, a day by default,
+and a longer one is clamped with a warning naming both numbers. The cap is its
+own setting rather than `BACKOFF_CAP_SECONDS`, which bounds a curve: clamping an
+hour-long `Retry-After` to a backoff ceiling would hammer a destination that asked
+to be left alone.
+
+Both are read by the relay and by nothing else. An `INLINE` receiver raising
+either fails the caller's transaction like any other exception, and an
+`ON_COMMIT` one has it logged: neither has a row to schedule or dead-letter. The
+type is the signal, never the message - a `RuntimeError` saying "410 Gone" is an
+ordinary failure.
+
 ## In tests
 
 ```python

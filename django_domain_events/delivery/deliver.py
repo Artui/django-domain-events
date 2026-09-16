@@ -12,6 +12,8 @@ from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.fire import call_receiver
+from django_domain_events.delivery.permanent_failure import PermanentFailure
+from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.scope.causation import caused_by
 from django_domain_events.settings import get_task_backend, setting
@@ -131,7 +133,17 @@ def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliverySt
                 transaction.set_rollback(True, using=write_alias())
             return outcome
     except Exception as exc:
-        return _fail(fence, delivery, f"{type(exc).__name__}: {exc}", attempt=attempt)
+        # The receiver's verdict is read here, at the one boundary every
+        # execution site shares, and nowhere else. Both are ordinary failures
+        # in every other respect: the attempt counts and the message is kept.
+        return _fail(
+            fence,
+            delivery,
+            f"{type(exc).__name__}: {exc}",
+            attempt=attempt,
+            terminal=isinstance(exc, PermanentFailure),
+            requested_delay=exc.seconds if isinstance(exc, RetryAfter) else None,
+        )
 
 
 class _Fence:
@@ -221,30 +233,79 @@ def dispatch_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryS
 
 
 def _fail(
-    fence: _Fence, row: Any, message: str, attempt: int | None = None
+    fence: _Fence,
+    row: Any,
+    message: str,
+    attempt: int | None = None,
+    *,
+    terminal: bool = False,
+    requested_delay: float | None = None,
 ) -> DeliveryStatus | None:
-    """Record a failed attempt, dead-lettering once the budget is spent."""
+    """Record a failed attempt, dead-lettering once the budget is spent.
+
+    ``terminal`` dead-letters now, whatever is left of the budget: the receiver
+    raised ``PermanentFailure``. ``requested_delay`` replaces the backoff curve
+    with the receiver's own schedule: it raised ``RetryAfter``. Neither changes
+    how the attempt is counted, so neither can keep a row alive past the budget
+    it was fired with.
+    """
     now = datetime.now(timezone.utc)
     attempts = attempt if attempt is not None else row.attempts + 1
-    exhausted = attempts >= row.max_attempts
+    exhausted = terminal or attempts >= row.max_attempts
     status = DeliveryStatus.DEAD if exhausted else DeliveryStatus.FAILED
     truncated = message[:2000]
+    wait = (
+        backoff(
+            attempts,
+            base=setting("BACKOFF_BASE_SECONDS"),
+            cap=setting("BACKOFF_CAP_SECONDS"),
+            jitter=random.random(),
+        )
+        if requested_delay is None
+        else _capped(row, requested_delay)
+    )
     outcome = fence.write(
         status=status,
         attempts=attempts,
         last_error=truncated,
         completed_at=now if exhausted else None,
-        available_at=now
-        + backoff(
-            attempts,
-            base=setting("BACKOFF_BASE_SECONDS"),
-            cap=setting("BACKOFF_CAP_SECONDS"),
-            jitter=random.random(),
-        ),
+        available_at=now + wait,
     )
     if outcome is not None:
         _notify_failure(row, status=status, attempt=attempts, error=truncated)
     return outcome
+
+
+def _capped(row: Any, seconds: float) -> timedelta:
+    """A receiver's requested delay, clamped to ``MAX_RECEIVER_RETRY_DELAY_SECONDS``.
+
+    Its own ceiling rather than ``BACKOFF_CAP_SECONDS``, which bounds a curve.
+    Clamping a legitimate one-hour ``Retry-After`` to a backoff cap would hammer
+    a destination that asked to be left alone.
+
+    The ceiling exists at all because a row parked in the future is still owed.
+    ``prune_events`` deletes only settled events, so a delivery told to wait a
+    month holds its event past the retention window for that month, and a
+    destination answering with an absurd value would hold it indefinitely.
+
+    Clamped with a warning rather than refused: the destination's number is
+    advice about its own readiness, and the delivery is still worth attempting
+    at the ceiling. The warning names both numbers so an operator can tell
+    whether the ceiling or the destination is the one to question.
+    """
+    ceiling = setting("MAX_RECEIVER_RETRY_DELAY_SECONDS")
+    if seconds > ceiling:
+        logger.warning(
+            "receiver %s asked for delivery %s to be retried in %ss, past "
+            "MAX_RECEIVER_RETRY_DELAY_SECONDS of %ss; retrying in %ss instead",
+            row.receiver_key,
+            row.pk,
+            seconds,
+            ceiling,
+            ceiling,
+        )
+        seconds = ceiling
+    return timedelta(seconds=seconds)
 
 
 def _notify_failure(row: Any, *, status: DeliveryStatus, attempt: int, error: str) -> None:

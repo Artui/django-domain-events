@@ -10,6 +10,8 @@ from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.deliver import deliver_one, deliver_pending
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.permanent_failure import PermanentFailure
+from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.run_relay import run_relay
 from django_domain_events.delivery.wake import notify_relay
 from django_domain_events.introspection.catalogue import catalogue
@@ -63,11 +65,13 @@ __all__ = [
     "OutboxHealth",
     "PayloadCodec",
     "PayloadUpgradeFailed",
+    "PermanentFailure",
     "QuietReceiver",
     "ReceiverBacklog",
     "RegisteredEvent",
     "RegisteredReceiver",
     "Registry",
+    "RetryAfter",
     "Scope",
     "TaskBackend",
     "UnsupportedPayloadType",
