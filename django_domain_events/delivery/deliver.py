@@ -463,8 +463,13 @@ def _defer(
     ``attempts`` is never written here, whatever the outcome, and that is the
     invariant the whole feature is: an attempt is counted by the outcome of an
     attempt - a success, an ordinary failure, a counting ``RetryAfter`` - and
-    the claim never touches it. ``on_failure`` is told the attempt number the
-    receiver's context carried, which the next run is given again.
+    the claim never touches it. Both halves are held by
+    ``test_a_deferral_that_does_not_count_leaves_the_attempts_and_the_budget_alone``,
+    which runs the deferral twice on a budget of one, so an increment in
+    either the claim or this function dead-letters the row; the give-up half
+    by ``test_a_deferral_past_give_up_after_dead_letters_the_row``.
+    ``on_failure`` is told the attempt number the receiver's context carried,
+    which the next run is given again.
 
     With no ``give_up_after`` nothing would end the delivery, so the deferral
     is counted after all, with a warning once per receiver per process
@@ -486,7 +491,10 @@ def _defer(
     not the jittered one, because a pause longer than asked holds back rows
     the destination is ready for - and only once the deferral is recorded,
     since a worker that lost the row has no say over its lane
-    (``test_a_deferral_this_worker_could_not_record_pauses_nothing``).
+    (``test_a_deferral_this_worker_could_not_record_pauses_nothing``). A
+    caller with no callback - a direct ``deliver_one``, the eager attempt, a
+    task - pauses nothing
+    (``test_a_deferral_run_directly_is_recorded_and_pauses_nothing``).
     """
     message = f"{type(exc).__name__}: {exc}"
     if receiver.give_up_after is None:

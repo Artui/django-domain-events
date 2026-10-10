@@ -212,6 +212,21 @@ def test_a_deferral_that_does_not_count_leaves_the_attempts_and_the_budget_alone
     assert seen == [1, 1]
 
 
+@pytest.mark.django_db(transaction=True)
+def test_an_eager_deferral_is_recorded_unspent_and_pauses_nothing() -> None:
+    """The eager attempt runs in the firing process, which serves no lane and
+    so has nothing to pause: each fire calls the destination once more."""
+    seen = _deferring(
+        "probe.eager_throttled", eager=True, max_attempts=1, give_up_after=timedelta(days=1)
+    )
+    _fire()
+    _fire()
+
+    rows = DeliveryRecord.objects.filter(receiver_key="probe.eager_throttled")
+    assert [(row.status, row.attempts) for row in rows] == [(DeliveryStatus.FAILED, 0)] * 2
+    assert seen == [1, 1]
+
+
 def test_a_counting_retry_after_still_spends_its_attempt() -> None:
     """The same budget of one, counted: the row dead-letters on the first
     request. Holds the ``counts`` half of the deferral's guard."""

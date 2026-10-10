@@ -345,13 +345,17 @@ Neither the pause nor the hand-back reaches a row already given to a
 [task backend](operations.md#handing-delivery-to-a-task-queue), and a receiver
 running in a task defers there, in a process that holds no batch to pause; its
 deferral is recorded all the same. A direct `deliver_one()` likewise records
-and pauses nothing.
+and pauses nothing, and so does an `eager=True` receiver's attempt at commit:
+the firing process serves no lane, so in a burst every fire calls the
+throttled destination once before the relay's pause can apply.
 
 !!! note "For an endpoint's `429`"
     [django-outbound-webhooks](https://github.com/Artui/django-outbound-webhooks)
     raises `RetryAfter` for an endpoint answering `429`. That is the case this
     exists for, and it can adopt `counts=False` with a `give_up_after` on its
     receiver, so a rate-limited endpoint stops costing deliveries their budget.
+    A receiver declared with `site="task"` keeps the unspent attempt and
+    loses the pause, for the reason above.
 
 ## In tests
 
