@@ -4,6 +4,7 @@ import logging
 import random
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import uuid4
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
@@ -20,13 +21,19 @@ from django_domain_events.settings import get_task_backend, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_status import DeliveryStatus
-from django_domain_events.utils import decode_payload
+from django_domain_events.utils import TERMINAL, decode_payload, parse_datetime
 
 logger = logging.getLogger(__name__)
 
 
-def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryStatus | None:
-    """Run one delivery and record its outcome. ``None`` means it was lost.
+def deliver_one(
+    delivery_id: int,
+    *,
+    worker_id: str | None = None,
+    claimed_by: str | None = None,
+    claimed_at: str | None = None,
+) -> DeliveryStatus | None:
+    """Run one delivery and record its outcome. ``None`` means this call recorded none.
 
     The receiver's work and the acknowledgement commit together, so a receiver
     touching only this database is effectively once: the duplicate at-least-once
@@ -39,12 +46,46 @@ def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliverySt
     alive, and a worker that has lost its row must not go on to write a verdict
     over whoever legitimately took it. Losing the row returns ``None`` rather
     than raising - it is an ordinary outcome of a lease expiring, not a fault.
+
+    A row that is not owed is refused the same way, whoever asks: one already
+    settled (succeeded, dead or orphaned), or one that failed and is waiting out
+    its backoff. Running either would repeat committed work, resurrect a dead
+    letter past its budget, or ignore a ``RetryAfter`` the destination sent.
+
+    ``claimed_by`` and ``claimed_at`` are the claim a task message carries, as
+    the relay passed them to ``TaskBackend.enqueue``. Given them, this call
+    first *takes* the row: one conditional update, committed before anything
+    else runs, that succeeds only while the row is still CLAIMED under exactly
+    that claim, and moves it to ``worker_id`` - or to an id minted for this one
+    take. A second copy of the message, a copy the queue held past its lease,
+    and a copy for a row that has since settled all fail the take and return
+    ``None`` without running the receiver.
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
 
+    if claimed_by is not None or claimed_at is not None:
+        worker_id = worker_id if worker_id is not None else f"task-{uuid4().hex}"
+        if not _take(delivery_id, claimed_by, claimed_at, worker_id):
+            logger.warning(
+                "a task for delivery %s carried a claim the row no longer holds "
+                "(%s at %s); it was not run. Another copy of the message took it, "
+                "the queue held it past its lease, or the row has settled",
+                delivery_id,
+                claimed_by,
+                claimed_at,
+            )
+            return None
+
     delivery = DeliveryRecord.objects.select_related("event").get(pk=delivery_id)
-    fence = _Fence(delivery, worker_id)
     now = datetime.now(timezone.utc)
+    if not _owed(delivery, now):
+        logger.info(
+            "delivery %s is %s and not owed now, so it was not run",
+            delivery_id,
+            delivery.status,
+        )
+        return None
+    fence = _Fence(delivery, worker_id)
 
     # The receiver is resolved before the lease is extended, because it is what
     # says how long the lease should be. A registry lookup touches no rows, so
@@ -147,6 +188,59 @@ def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliverySt
         )
 
 
+def _owed(delivery: Any, now: datetime) -> bool:
+    """Whether this row is still owed a run at this moment.
+
+    The status set and the backoff are separate tests, because each guard here
+    is one branch arc and coverage cannot see a deleted member:
+    ``test_a_settled_row_delivered_again_does_not_run_its_receiver_twice``,
+    ``test_a_dead_row_is_not_run_or_resurrected`` and
+    ``test_an_orphaned_row_is_not_run`` hold one terminal status each;
+    ``test_a_failed_row_not_yet_due_is_not_run`` holds the backoff;
+    ``test_a_failed_row_that_is_due_still_runs`` holds its ``available_at``
+    half against a check that refuses every FAILED row, and
+    ``test_a_failed_row_claimed_early_on_purpose_still_runs`` its status half
+    against one that reads ``available_at`` alone.
+
+    PENDING is owed whatever its ``available_at``, and a CLAIMED row is the
+    claimer's to run: ``deliver_pending(ignore_backoff=True)`` claims a FAILED
+    row early on purpose, and the claim is what makes that row CLAIMED.
+    """
+    if delivery.status in TERMINAL:
+        return False
+    return not (delivery.status == DeliveryStatus.FAILED and delivery.available_at > now)
+
+
+def _take(delivery_id: int, claimed_by: str | None, claimed_at: str | None, worker_id: str) -> bool:
+    """Move a row from the claim a task message carries to this worker.
+
+    One conditional ``UPDATE``, never a read followed by a save: two copies of
+    one message dequeued at once each read a row that matches, and only a write
+    the database serialises can tell them apart. The loser's ``WHERE`` is
+    re-evaluated after the winner commits and matches nothing
+    (``test_two_copies_at_once_run_the_receiver_once``, on Postgres).
+
+    Outside any transaction of ours, so it commits on its own before the
+    receiver's transaction opens. A take that rolled back with the receiver
+    would leave the row under the old claim, takeable by the next copy.
+
+    Every condition is one arc, so each has a test that fails without it:
+    ``status`` - ``test_a_message_for_a_released_row_does_not_take_it``;
+    ``claimed_by`` - ``test_a_message_naming_another_worker_does_not_take_the_row``;
+    ``claimed_at`` -
+    ``test_a_message_from_an_earlier_claim_by_the_same_worker_does_not_take_the_row``.
+    """
+    from django_domain_events.models.delivery_record import DeliveryRecord
+
+    taken = DeliveryRecord.objects.filter(
+        pk=delivery_id,
+        status=DeliveryStatus.CLAIMED,
+        claimed_by=claimed_by,
+        claimed_at=None if claimed_at is None else parse_datetime(claimed_at),
+    ).update(claimed_by=worker_id, claimed_at=datetime.now(timezone.utc))
+    return bool(taken)
+
+
 class _Fence:
     """Optimistic ownership check for one delivery's writes.
 
@@ -200,6 +294,11 @@ def dispatch_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryS
     lapses and the relay reclaims it, which is what makes handing work to a
     lossy queue safe.
 
+    The message carries the claim the row was handed off under, and the task
+    must take the row under that claim before it runs anything. That is what
+    makes a queue that redelivers safe as well as one that loses: a second copy,
+    or a copy that outlived its lease, finds the claim gone and does nothing.
+
     The lease is extended here for the same reason ``deliver_one`` extends it,
     and it matters more: the row now has to survive the queue's backlog as well
     as the receiver's own runtime, and this is the last moment before the relay
@@ -223,13 +322,25 @@ def dispatch_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryS
             f"is configured, so there is nothing to hand it to."
         )
     delivery = DeliveryRecord.objects.get(pk=delivery_id)
-    if delivery.status == DeliveryStatus.CLAIMED and not _Fence(delivery, worker_id).extend_lease(
+    fence = _Fence(delivery, worker_id)
+    # The message carries the claim, so only a row this worker holds can be
+    # handed off: an unclaimed row has no claim to carry, and the task taking it
+    # would be refused. Each half has its own test, since the two are one arc:
+    # test_an_unclaimed_row_is_not_enqueued and test_a_lost_row_is_not_enqueued.
+    if delivery.status != DeliveryStatus.CLAIMED or not fence.extend_lease(
         datetime.now(timezone.utc), receiver.lease_seconds
     ):
-        logger.warning("worker %s lost delivery %s before enqueueing it", worker_id, delivery_id)
+        logger.warning(
+            "worker %s does not hold delivery %s, so it was not enqueued", worker_id, delivery_id
+        )
         return None
 
-    backend.enqueue(delivery_id)
+    # As an ISO string because it has to survive whatever the queue serialises
+    # with: django.tasks refuses arguments that are not JSON, and a Celery
+    # message under the default serializer is JSON too.
+    backend.enqueue(
+        delivery_id, claimed_by=fence.claimed_by, claimed_at=fence.claimed_at.isoformat()
+    )
     return None
 
 

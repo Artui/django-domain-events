@@ -133,6 +133,18 @@ only a subclass could use it.
 }
 ```
 
+or, with the `celery` extra installed:
+
+```python
+"TASK_BACKEND": {
+    "BACKEND": "django_domain_events.delivery.celery_backend.CeleryBackend",
+    "queue": "events",
+}
+```
+
+The Celery worker also needs the task module in its `imports`; see
+[Celery](operations.md#celery).
+
 ## Routing to another database
 
 Everything that opens a transaction asks the router for the alias, rather than

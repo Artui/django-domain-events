@@ -41,8 +41,10 @@ Meaningful only for `DURABLE`, because it is the only mode with a row to hand
 somewhere else.
 
 - `site="relay"` (default) - the relay process runs the receiver.
-- `site="task"` - the relay enqueues the delivery id to the configured
-  [task backend](operations.md#handing-delivery-to-a-task-queue) and moves on.
+- `site="task"` - the relay enqueues the delivery id, with the claim it holds,
+  to the configured [task backend](operations.md#handing-delivery-to-a-task-queue)
+  and moves on. The task takes the row under that claim before running it, so a
+  queue that delivers a message twice or late runs the receiver once.
 
 A queue is only ever an answer to *where*. It is not a timing mode, and adopting
 one does not change what the event promised.
