@@ -4,7 +4,9 @@ import dataclasses
 import json
 
 from django_domain_events.types.catalogue import Catalogue
+from django_domain_events.types.catalogue_event import CatalogueEvent
 from django_domain_events.types.catalogue_receiver import CatalogueReceiver
+from django_domain_events.types.retention import Retention
 
 
 def render_catalogue(catalogue: Catalogue, *, format: str = "markdown") -> str:
@@ -51,6 +53,9 @@ def _markdown(catalogue: Catalogue) -> str:
                 "are migrated before they are decoded.",
                 "",
             ]
+        retention = _retention(event)
+        if retention:
+            lines += [retention, ""]
         lines += ["| Field | Type | Required | Default |", "| --- | --- | --- | --- |"]
         for field in event.fields:
             required = "yes" if field.required else "no"
@@ -108,6 +113,41 @@ def _receiver_table(receivers: tuple[CatalogueReceiver, ...]) -> list[str]:
                 "",
             ]
     return lines
+
+
+_POLICIES = {
+    Retention.SUCCEEDED.value: (
+        "Deleted once every delivery has succeeded. A dead letter keeps it for "
+        "`RETENTION_DAYS`, so it can still be requeued."
+    ),
+    Retention.SETTLED.value: (
+        "Deleted once every delivery is terminal, dead letters included, rather "
+        "than after `RETENTION_DAYS`."
+    ),
+}
+
+
+def _retention(event: CatalogueEvent) -> str:
+    """A sentence for an event kept other than for ``RETENTION_DAYS``, or blank.
+
+    Said in prose, as the upgrade hook is, because it changes what an operator
+    will find in the table: an event deleted on consumption is not there to
+    replay an hour later.
+    """
+    if event.retention_seconds is not None:
+        return f"Kept for {_duration(event.retention_seconds)} rather than `RETENTION_DAYS`."
+    return _POLICIES.get(event.delete_when, "")
+
+
+def _duration(seconds: int) -> str:
+    """The largest whole unit, since a window is declared as a timedelta and
+    ``604800 seconds`` is not how anyone wrote ``timedelta(days=7)``."""
+    unit, count = "second", seconds
+    for name, size in (("day", 86400), ("hour", 3600)):
+        if seconds % size == 0:
+            unit, count = name, seconds // size
+            break
+    return f"{count} {unit}{'' if count == 1 else 's'}"
 
 
 def _cell(value: str) -> str:

@@ -15,6 +15,8 @@ from django_domain_events.delivery.fire import fire
 from django_domain_events.introspection.quiet_receivers import quiet_receivers
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.models.receiver_last_success import ReceiverLastSuccess
+from django_domain_events.operations.prune_events import prune_events
 from django_domain_events.operations.replay_events import replay_events
 from django_domain_events.operations.requeue_dead import requeue_dead
 from django_domain_events.types.delivery_mode import DeliveryMode
@@ -36,6 +38,63 @@ def test_a_receiver_that_has_never_run_is_reported_as_never() -> None:
     quiet = {q.key: q for q in quiet_receivers()}
     assert quiet["testapp.durable_receiver"].last_succeeded_at is None
     assert quiet["testapp.durable_receiver"].event_name == "testapp.OrderPlaced"
+
+
+def _pruned_after_running(order: OrderPlaced, *, skip: str | None = None) -> None:
+    """Fire, deliver, and prune the event and its delivery rows away.
+
+    ``skip`` deletes one receiver's row before delivery, so that receiver has
+    never run when the prune does."""
+    with transaction.atomic():
+        fire(order)
+    if skip is not None:
+        DeliveryRecord.objects.filter(receiver_key=skip).delete()
+    drain_outbox()
+    EventRecord.objects.update(recorded_at=datetime.now(timezone.utc) - timedelta(days=365))
+    assert prune_events() == 1
+    assert not DeliveryRecord.objects.exists()
+
+
+def test_a_receiver_whose_deliveries_were_pruned_still_reports_its_last_success(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """An event deleted on consumption takes its delivery rows within a sweep,
+    so a receiver that ran a minute ago would otherwise read as never having
+    run at all."""
+    _pruned_after_running(order)
+
+    assert "testapp.durable_receiver" not in _keys()
+    assert "testapp.with_context" not in _keys()
+
+
+def test_a_receiver_that_never_ran_is_still_quiet_after_a_prune(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    _pruned_after_running(order, skip="testapp.durable_receiver")
+
+    quiet = {q.key: q for q in quiet_receivers()}
+    assert quiet["testapp.durable_receiver"].last_succeeded_at is None
+    assert "testapp.with_context" not in quiet
+
+
+@pytest.mark.parametrize("pruned_is_later", [True, False])
+def test_the_later_of_the_pruned_record_and_the_live_rows_is_reported(
+    pruned_is_later: bool,
+) -> None:
+    now = datetime.now(timezone.utc)
+    live, pruned = now - timedelta(days=3), now - timedelta(days=2)
+    if not pruned_is_later:
+        live, pruned = pruned, live
+    event = EventRecord.objects.create(name="testapp.OrderPlaced", payload={}, occurred_at=now)
+    DeliveryRecord.objects.create(
+        event=event, receiver_key="testapp.durable_receiver", available_at=now, succeeded_at=live
+    )
+    ReceiverLastSuccess.objects.create(
+        receiver_key="testapp.durable_receiver", last_succeeded_at=pruned
+    )
+
+    quiet = {q.key: q for q in quiet_receivers(within=timedelta(days=1))}
+    assert quiet["testapp.durable_receiver"].last_succeeded_at == max(live, pruned)
 
 
 def test_only_durable_receivers_are_considered() -> None:
@@ -268,6 +327,11 @@ def test_each_receiver_costs_one_probe_of_the_last_success_index(
         cursor.execute(f"ANALYZE {DeliveryRecord._meta.db_table}")
     plans = plans_without_seqscan(quiet_receivers)
     durable = [r for r in registry.receivers() if r.mode is DeliveryMode.DURABLE]
+    # One read of the pruned receivers' record, for every receiver at once: it
+    # holds a row per receiver key, so it is as small as the registry.
+    [pruned] = [p for p in plans if ReceiverLastSuccess._meta.db_table in p]
+    assert DeliveryRecord._meta.db_table not in pruned, pruned
+    plans.remove(pruned)
     assert len(plans) == len(durable)
     for plan in plans:
         assert delivery_table_access(plan) == {"dde_last_success"}, plan

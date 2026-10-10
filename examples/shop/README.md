@@ -45,6 +45,7 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
 | The customs broker asks for two days | the request clamped to `MAX_RECEIVER_RETRY_DELAY_SECONDS`, with a warning naming both numbers |
 | Two partners subscribe to orders | an `AnyEvent` receiver with `targets=`: one delivery row per partner, and none for an event nobody subscribed to |
 | The partners change, then a replay | `replay_events` asking for the targets again: a partner still subscribed is reopened, a new one added, one that left untouched |
+| A consumed event, then a prune | `Retention.SUCCEEDED` deleting `StockReserved` once delivered while the orders stay for `RETENTION_DAYS`, and `quiet_receivers` still knowing its receiver ran |
 
 ## The declarations
 
@@ -82,6 +83,10 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
     `targets=partners_subscribed`, because it is a transport: it forwards every
     event, to whichever partners a table says want it, with a delivery row per
     partner. Nothing subscribed means no row at all.
+12. **`StockReserved`** - `retention=Retention.SUCCEEDED`, because it is
+    bookkeeping between two of our own steps and worth nothing once delivered.
+    The next prune deletes it with its delivery rows; a dead letter would keep it
+    for `RETENTION_DAYS` so it could still be requeued.
 
 ## Other things to try
 
@@ -101,5 +106,5 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py deliver_events
 ```
 
 Not shown here, and worth reading about instead:
-`prune_events`, `propagate_scope`, `drain_outbox`, the `task` execution site
+`propagate_scope`, `drain_outbox`, the `task` execution site
 and the `dacite` codec.

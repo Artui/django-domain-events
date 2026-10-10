@@ -220,3 +220,46 @@ def test_json_carries_the_wildcards_and_the_targets() -> None:
     assert [r["key"] for r in parsed["wildcard_receivers"]] == ["hooks.deliver"]
     assert parsed["wildcard_receivers"][0]["targets"] == "hooks.targets.owed"
     assert parsed["events"][0]["receivers"][0]["targets"] is None
+
+
+def _kept(retention_seconds: int | None = None, delete_when: str = "") -> CatalogueEvent:
+    return CatalogueEvent(
+        name="tests.kept",
+        version=1,
+        class_path="tests.Kept",
+        doc="",
+        fields=(),
+        receivers=(),
+        retention_seconds=retention_seconds,
+        delete_when=delete_when,
+    )
+
+
+@pytest.mark.parametrize(
+    ("event", "prose"),
+    [
+        (_kept(retention_seconds=7 * 86400), "Kept for 7 days rather"),
+        (_kept(retention_seconds=86400), "Kept for 1 day rather"),
+        (_kept(retention_seconds=2 * 3600), "Kept for 2 hours rather"),
+        (_kept(retention_seconds=90), "Kept for 90 seconds rather"),
+        (_kept(delete_when="succeeded"), "Deleted once every delivery has succeeded"),
+        (_kept(delete_when="settled"), "Deleted once every delivery is terminal"),
+    ],
+    ids=["days", "one-day", "hours", "seconds", "succeeded", "settled"],
+)
+def test_a_retention_of_its_own_is_called_out_in_prose(event: CatalogueEvent, prose: str) -> None:
+    assert prose in render_catalogue(Catalogue(events=(event,)))
+
+
+def test_the_ordinary_window_is_not_mentioned() -> None:
+    """Every event has it unless it says otherwise, and a line saying so under
+    each would bury the ones that do."""
+    document = render_catalogue(Catalogue(events=(_kept(),)))
+    assert "Kept for" not in document
+    assert "Deleted once" not in document
+
+
+def test_json_carries_the_retention() -> None:
+    document = render_catalogue(Catalogue(events=(_kept(delete_when="settled"),)), format="json")
+    [event] = json.loads(document)["events"]
+    assert (event["retention_seconds"], event["delete_when"]) == (None, "settled")

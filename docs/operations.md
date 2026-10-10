@@ -77,20 +77,35 @@ a direct or session-pooled connection to have `NOTIFY` wake it, or set `WAKE` to
 python manage.py prune_events                # uses RETENTION_DAYS
 python manage.py prune_events --days 30
 python manage.py prune_events --limit 5000
+python manage.py prune_events --batch-size 1000
 ```
 
 An outbox without a prune story becomes the largest table in the database, and
-it becomes it quietly.
+it becomes it quietly. **Nothing else deletes**: an event declared to be deleted
+on consumption is deleted by the next prune, and without a schedule, never.
+
+An event is due when its [retention](retention.md) says so: consumed, for one
+declared with a `Retention` policy; past its own window, for one declared with a
+`timedelta`; past `RETENTION_DAYS` (or `--days`) for every other. `--days`
+replaces only that default window.
 
 Only **settled** events are removed: one with a delivery still pending, failed or
 claimed is still owed, and deleting it would drop work nothing recorded as lost.
 An event with no delivery rows at all - suppressed, or fired with no durable
 receivers - is settled by definition.
 
-Deletes run in batches. A single statement over a year of rows holds a lock for
-as long as it runs, on the table the relay is trying to claim from. Settledness
-is re-checked at the delete itself, so a replay landing mid-prune does not have
-its freshly reopened work cascaded away.
+Deletes run in batches of [`PRUNE_BATCH_ROWS`](settings.md#prune_batch_rows) rows
+(`--batch-size` for one run), counting delivery rows and event rows alike. A
+single statement over a year of rows holds a lock for as long as it runs, on the
+table the relay is trying to claim from, and one fan-out event can hold tens of
+thousands of rows; an event larger than a batch has its delivery rows deleted a
+batch at a time and goes with the last of them. Settledness is re-checked at the
+delete itself, so a replay landing mid-prune does not have its freshly reopened
+work cascaded away.
+
+Each batch records the newest success of every receiver among the rows it
+deletes, so [`quiet_receivers()`](introspection.md#quiet-receivers) still knows a
+receiver ran after its events are gone.
 
 ## Replay
 
@@ -112,6 +127,10 @@ Two things happen, counted separately because they are different decisions:
 A delivery still in flight is left alone. Reopening a claimed row would hand the
 same work to two receivers, which is the one thing the lease exists to prevent.
 
+Replay needs the row. An event the prune has deleted - including one
+[deleted on consumption](retention.md), minutes after it was delivered - cannot
+be replayed.
+
 A [fan-out receiver](declaring.md#fan-out-one-delivery-per-target) has its
 `targets` callable **called again**, so a replay goes to the targets that exist
 now. A target it still returns is reopened or added like any receiver; one it no
@@ -128,6 +147,10 @@ python manage.py requeue_dead
 python manage.py requeue_dead --receiver orders.reserve_stock
 python manage.py requeue_dead --limit 100
 ```
+
+A dead letter of an event declared with `Retention.SETTLED` is deleted with its
+event at the next prune, so it is never here to requeue; `Retention.SUCCEEDED`
+keeps it for `RETENTION_DAYS`. See [retention](retention.md).
 
 Attempts reset to zero rather than staying spent: a row requeued at its limit
 dead-letters again on the first failure, and the operator learns nothing they did
@@ -267,4 +290,8 @@ names the receiver and suggests `lease_seconds=`, because that is the fix.
 0    4 * * *  manage.py prune_events
 ```
 
-With a long-running relay instead, only the prune needs a schedule.
+With a long-running relay instead, only the prune needs a schedule. Once any
+event is declared with a [`Retention` policy](retention.md), run the prune every
+minute rather than every night: its schedule is how long a consumed event
+outlives its consumption, and a prune with nothing to delete is three index
+lookups.
