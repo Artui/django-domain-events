@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-10-11
+
 ### Added
 - `CeleryBackend` (`django_domain_events.delivery.celery_backend.CeleryBackend`),
   a task backend for projects that run Celery, behind a new `celery` extra. Its
@@ -631,7 +633,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/Artui/django-domain-events/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/Artui/django-domain-events/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Artui/django-domain-events/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Artui/django-domain-events/compare/v0.6.0...v0.7.0
