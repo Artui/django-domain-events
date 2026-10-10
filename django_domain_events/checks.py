@@ -171,6 +171,11 @@ def _wake_setting_problems() -> list[Any]:
     elapsed time, so it would silence every notification after the first.
     ``bool`` is refused because ``True`` is an ``int`` and would read as a
     one-second interval.
+
+    The interval guard is one branch arc of three disjuncts, each held by one case
+    of ``test_a_coalesce_interval_that_is_not_a_duration_is_an_error``: the bool
+    test by ``True``, the type test by ``"0.5"`` and ``None``, and the sign test
+    by ``nan`` (a ``-1`` passes under either form of it).
     """
     problems: list[Any] = []
     wake = setting("WAKE")

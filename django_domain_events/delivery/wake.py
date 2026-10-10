@@ -79,6 +79,10 @@ def _resolve(supported: bool | None, connection: Any) -> bool:
     backend. Otherwise it takes both a Postgres connection and ``WAKE =
     "notify"``; ``WAKE = "poll"`` is the switch for a deployment that would
     rather not pay a serialized commit per ``fire()`` (see the operations page).
+
+    The ``WAKE`` conjunct is invisible to the coverage gate (one arc) and is held
+    by ``test_polling_sends_no_notification`` and
+    ``test_polling_does_not_listen_either``.
     """
     if supported is not None:
         return supported

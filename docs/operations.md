@@ -24,7 +24,8 @@ fired a moment ago is delivered in milliseconds instead of on the next tick.
 notification costs latency and never a delivery.
 
 `notify_relay()` is public, for the case where you moved rows into `pending`
-yourself.
+yourself. It follows the same settings as `fire()`: under `WAKE = "poll"` it
+sends nothing, and it is coalesced.
 
 #### Coalescing
 
@@ -50,15 +51,16 @@ database-wide lock while it commits, so commits that send one queue behind each
 other. This package keeps the notification out of your business transaction and
 sends one per `fire()` rather than one per row, but a `fire()` with a durable
 receiver still ends in one such commit. Reports of this limiting throughput on
-busy databases exist, but whether the lock wait is the cause or a symptom is disputed upstream,
-and a change in Postgres itself may have removed it, so measure before you give
-up the latency.
+busy databases exist, but whether the lock wait is the cause or a symptom is
+disputed upstream. A change in Postgres itself may have removed the bottleneck;
+which release carries it is not established here, so do not assume yours does.
+Measure before you give up the latency.
 
 What makes polling cheap enough to lower `POLL_SECONDS`: the claim reads
 indexes that hold only rows still owed, so it does not slow down as history
 grows. It took 0.15 ms at 1.6 million delivery rows on Postgres 16 (a single
-warm run on synthetic data on a laptop, so directional). A relay polling every
-100 ms is a reasonable trade for dropping `NOTIFY`.
+warm run on synthetic data on a laptop, so directional). A poll that cheap can
+run often, so `POLL_SECONDS` is yours to lower.
 
 #### Behind pgbouncer
 
