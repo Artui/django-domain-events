@@ -516,8 +516,17 @@ def deliver_pending(
     and what ``drain_outbox`` promises. ``deliver_events --once`` passes the
     default lane unless told otherwise, as the relay does.
 
-    ``batch_size`` sizes each claim in place of ``BATCH_SIZE``.
+    ``batch_size`` sizes each claim in place of ``BATCH_SIZE``. It cannot be
+    combined with ``limit``, which is one claim of exactly that many rows under
+    one lease: accepting both would silently ignore the batch, and claiming a
+    hundred rows at once is what a small batch is asked for to prevent
+    (``test_a_limit_and_a_batch_size_together_are_refused``).
     """
+    if limit is not None and batch_size is not None:
+        raise ValueError(
+            f"limit={limit} is one claim of that many rows, so batch_size={batch_size} "
+            f"would be ignored. Pass one or the other."
+        )
     registry.require_lane(lane)
     lease = timedelta(seconds=setting("LEASE_SECONDS"))
     batch_size = claim_size(batch_size)

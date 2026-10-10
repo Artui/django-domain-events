@@ -26,7 +26,7 @@ behind it for that second, and a burst of twenty thousand of them holds the
 rest of the outbox for hours. A lane gives it relays of its own:
 
 ```python
-@receiver(MailOrderQueued, lane="mail", targets=recipients, max_attempts=10)
+@receiver(MailOrderQueued, lane="mail", takes_context=True, targets=recipients)
 def send_mail(evt: MailOrderQueued, ctx: DeliveryContext) -> None: ...
 ```
 
@@ -47,14 +47,17 @@ python manage.py deliver_events --lane mail --batch-size 5
 - **A lane nobody declared is refused at start.** A relay for a misspelt lane
   would otherwise claim nothing, forever, and look healthy doing it.
 - **`--once` follows the same rule**, so a cron running `deliver_events --once`
-  beside a mail relay stays out of the mail lane. `deliver_pending()` and
-  `drain_outbox()` called from code deliver every lane unless given one;
-  `run_relay(lane=None)` does the same for a single relay in development.
+  beside a mail relay stays out of the mail lane. Called from code,
+  `deliver_pending()` delivers every lane unless given one, and
+  `drain_outbox()` always delivers every lane; `run_relay(lane=None)` serves
+  every lane from a single relay, for development.
 - **`--batch-size` sizes this process's claims** in place of `BATCH_SIZE`, which
   also sizes prune batches and requeue chunks. Every row of a batch is claimed
   under one lease, and a row still waiting its turn when the lease lapses is
   taken by another relay, so a slow lane wants a batch it can send inside
-  `LEASE_SECONDS`.
+  `LEASE_SECONDS`. With `--once` it cannot be combined with `--limit`, which is
+  one claim of exactly that many rows; the pair is refused rather than the
+  batch silently ignored.
 - **An `eager=True` attempt still runs in the firing process**, whatever the
   lane: the lane decides which relay picks up what eager delivery did not
   finish.
@@ -63,7 +66,7 @@ python manage.py deliver_events --lane mail --batch-size 5
 relay, so a lane that has to go faster runs more relays with the same `--lane`,
 and they share its rows through the same skipped locks as any other relays. At
 0.1 to 1 second per send, one process delivers 1 to 10 a second; a provider
-allowing 18 a second takes somewhere between two and ten mail relays. The
+allowing 18 a second takes somewhere between two and eighteen mail relays. The
 package does not limit the rate across them - it is not a distributed rate
 limiter - so the number of processes is the limit, and a destination that
 throttles still answers with errors that cost attempts.

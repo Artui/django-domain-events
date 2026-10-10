@@ -890,6 +890,20 @@ def test_deliver_pending_claims_in_batches_of_the_size_it_is_given(
     assert limits == [1, 1, 1]
 
 
+def test_a_limit_and_a_batch_size_together_are_refused(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """A limit is one claim of that many rows, so the batch would be ignored -
+    and claiming a hundred rows under one lease is what a small batch is asked
+    for to prevent. Each alone is accepted, which holds both conjuncts."""
+    _fire(order)
+
+    with pytest.raises(ValueError, match="limit=100 is one claim of that many rows"):
+        deliver_pending(limit=100, batch_size=5)
+    assert deliver_pending(limit=1) == {DeliveryStatus.SUCCEEDED: 1}
+    assert deliver_pending(batch_size=5) == {DeliveryStatus.SUCCEEDED: 1}
+
+
 @pytest.mark.parametrize("size", [0, -1])
 def test_deliver_pending_refuses_a_batch_that_claims_nothing(size: int) -> None:
     """A batch of zero claims nothing on every pass, so the loop it sizes ends

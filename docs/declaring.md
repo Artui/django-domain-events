@@ -54,9 +54,10 @@ def reserve_stock(evt: OrderPlaced) -> None: ...
 | `backoff_cap_seconds` | `None` | Override `BACKOFF_CAP_SECONDS` for this receiver's retries. |
 | `lane` | `"default"` | Which relay processes claim its rows. See [lanes](operations.md#lanes-a-relay-per-kind-of-work). |
 
-Everything from `max_attempts` down describes a delivery row, so a receiver
-declaring any of it with `mode=INLINE` or `ON_COMMIT` is refused at the
-decorator: it has no row to retry, lease, fan out or claim.
+`max_attempts`, `eager`, `site="task"`, `lease_seconds`, `targets`, the two
+backoff knobs and `lane` each describe a delivery row, so a receiver declaring
+any of them with `mode=INLINE` or `ON_COMMIT` is refused at the decorator: it
+has no row to retry, lease, fan out or claim.
 
 `takes_context` is the spelling `django.tasks.task` uses for the same idea. The
 overloads make a type checker enforce the arity it implies, so declaring one and

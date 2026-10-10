@@ -146,9 +146,9 @@ ceiling. So the span a retry budget covers is a distribution, not a number:
 The curve above, with ten attempts, has nine waits with ceilings of 120, 240,
 480, 960 and then 1800 seconds five times: at most three hours, an hour and a
 half on average. It is the curve the [example shop](https://github.com/Artui/django-domain-events/tree/main/examples/shop)
-gives its receipt mailer, and the demo there checks both numbers. The same
-eight attempts on the default two-second base wait at most 254 seconds in all,
-so a mail provider down for an hour dead-letters every one of them.
+gives its receipt mailer, and the demo there checks both numbers. Eight
+attempts on the default two-second base wait at most 254 seconds in all, so a
+mail provider down for an hour dead-letters every delivery sent into it.
 
 A list of delays or a callable schedule is not offered, because the
 [catalogue](introspection.md#the-catalogue) publishes the curve and could not
