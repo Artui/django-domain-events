@@ -98,8 +98,9 @@ def run_relay(
     relay sweeps whatever its lane. Nothing is lost or deleted twice, because
     the prune re-checks at the delete that an event is still due; the interval
     is what keeps N relays at N cheap queries per interval. ``RELAY_PRUNE`` set
-    false turns it off for a project that schedules the prune itself. The sweep
-    is not interrupted by ``stop``: a stop request is read after it returns.
+    false turns it off for a project that schedules the prune itself. ``stop``
+    is read between the sweep's batches, so a stop request waits for at most
+    one batch of ``PRUNE_BATCH_ROWS`` rather than for a whole backlog.
 
     ``monotonic`` is the sweep's clock, apart from ``now`` because that one is a
     wall-clock reading a test sets to any value it likes for the claim, and a
@@ -167,7 +168,7 @@ def run_relay(
             # test_a_sweep_that_fails_does_not_kill_the_relay_or_retry_early.
             if sweep and monotonic() - swept_at >= sweep_every:
                 swept_at = monotonic()
-                _sweep_or_survive(worker_id, connection)
+                _sweep_or_survive(worker_id, connection, stop)
             # Waits on a notification where the backend has one and sleeps where
             # it does not, so an event fired a moment ago is delivered in
             # milliseconds rather than at the next poll. The poll is still the
@@ -202,7 +203,7 @@ def _wait_or_survive(
         _close_after(exc, connection, worker_id)
 
 
-def _sweep_or_survive(worker_id: str, connection: Any) -> None:
+def _sweep_or_survive(worker_id: str, connection: Any, stop: Callable[[], bool]) -> None:
     """Prune, and keep the daemon alive if the database refuses.
 
     The caller has already moved the throttle's clock, so a sweep that fails is
@@ -213,7 +214,7 @@ def _sweep_or_survive(worker_id: str, connection: Any) -> None:
     batches it finished deleted and the rest due for the next sweep.
     """
     try:
-        deleted = prune_events()
+        deleted = prune_events(stop=stop)
     except Exception as exc:
         logger.exception("relay %s could not prune", worker_id)
         _close_after(exc, connection, worker_id)

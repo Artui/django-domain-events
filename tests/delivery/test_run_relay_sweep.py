@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 
@@ -109,7 +110,7 @@ class _Sweeps:
         self.at: list[float] = []
         self.raises: list[Exception] = []
 
-    def __call__(self) -> int:
+    def __call__(self, *, stop: Callable[[], bool] | None = None) -> int:
         self.at.append(self.clock.t)
         if self.raises:
             raise self.raises.pop(0)
@@ -376,26 +377,37 @@ def test_two_relays_sweeping_the_same_batches_neither_fail_nor_delete_twice(
 @pytest.mark.parametrize(
     "sizes", [(5, 13), (13, 5), (9, 50), (500, 7), (3, 5)], ids=lambda s: "x".join(map(str, s))
 )
-def test_two_relays_with_different_batches_lose_at_worst_a_sweep_to_a_deadlock(
+def test_two_relays_with_different_batches_never_deadlock(
     sizes: tuple[int, int],
 ) -> None:
-    """Sweeps whose batches differ take the receivers' last-success rows in
-    different orders, because ``_record_last_successes`` walks an unordered
-    GROUP BY, and two transactions taking the same rows in opposite orders
-    deadlock: about one run in two on the ``9x50`` case, on the insert of a
-    receiver's first row and on the update of a later one alike. Postgres kills
-    one transaction, which the relay survives (``could not prune``, retried an
-    interval later), so this asserts the failure is bounded: the only error is a
-    detected deadlock, nothing is deleted twice, and one more sweep leaves the
-    table as a single sweep would (and where neither sweep died, nothing was
-    counted twice).
-
-    Walking the keys in sorted order in both of its loops removes the cause
-    (ten runs in a row of this file, with the case above, and none failed); it
-    is the prune's to change, and when it does this test's tolerance goes."""
+    """Sweeps whose batches differ finish the receivers' last-success rows in
+    different groupings, and two transactions taking the same rows in opposite
+    orders deadlock: about one run in two on the ``9x50`` case, on the insert of
+    a receiver's first row and on the update of a later one alike, while
+    ``_record_last_successes`` walked an unordered GROUP BY. It walks the keys
+    in sorted order in both of its loops now; without the sort in either loop
+    this fails with ``deadlock detected``."""
     newest, results, errors = _race(sizes)
 
-    assert all("deadlock detected" in str(e) for e in errors), errors
-    assert len(results) + len(errors) == 2, "a sweeping thread did not finish"
-    left = prune_events()
-    _assert_everything_went_once(newest, None if errors else sum(results) + left)
+    assert errors == []
+    assert len(results) == 2, "a sweeping thread did not finish"
+    _assert_everything_went_once(newest, sum(results))
+
+
+def test_a_stop_request_waits_for_one_batch_of_the_sweep_not_all_of_it(settings) -> None:
+    """The relay hands its ``stop`` to the prune, which reads it between
+    batches. A relay that did not would finish a whole backlog of due events
+    before it noticed it was asked to stop."""
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_PRUNE_SECONDS": 0.001, "PRUNE_BATCH_ROWS": 1}
+    for _ in range(5):
+        _consumed_event()
+
+    run_relay(
+        worker_id="w1",
+        passes=5,
+        stop=lambda: EventRecord.objects.count() < 5,
+        wait=lambda _: bool(time.sleep(0.01)),
+        **UNSAFE,
+    )
+
+    assert EventRecord.objects.count() == 4

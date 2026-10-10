@@ -568,3 +568,20 @@ def test_the_batch_size_defaults_to_a_setting_of_its_own(settings: Any) -> None:
     with connection.execute_wrapper(log):
         assert prune_events() == 2
     assert [rows for table, rows in log.statements if table == "event"] == [1, 1]
+
+
+def test_a_stop_ends_the_prune_between_batches() -> None:
+    """``stop`` is read before each batch: a relay asked to shut down waits for
+    one batch, not for a backlog. Without the check the whole backlog goes."""
+    for _ in range(5):
+        EventRecord.objects.create(
+            name="testapp.OrderPlaced",
+            payload={},
+            occurred_at=datetime.now(timezone.utc),
+            delete_when="settled",
+        )
+
+    deleted = prune_events(batch_size=1, stop=lambda: EventRecord.objects.count() < 5)
+
+    assert deleted == 1
+    assert EventRecord.objects.count() == 4

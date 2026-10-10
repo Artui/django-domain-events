@@ -100,13 +100,15 @@ last delivery, with nothing to schedule:
 - **`deliver_events --once` never sweeps.** It is a schedule's job, and the
   schedule can carry the prune.
 - **A sweep that fails is logged and the relay carries on**, without trying
-  again before the next interval. Two relays sweeping at the same moment with
-  different batches can deadlock over a receiver's last-success row; Postgres
-  ends one of them, it logs `could not prune`, and the next sweep finishes the
-  job.
-- A sweep is not interrupted by a stop request: the relay reads the stop after
-  it returns, so the first sweep over a large backlog of already-due events is
-  better run by hand (`prune_events`) than by the first relay to start.
+  again before the next interval. Relays sweeping at the same moment are safe:
+  each batch re-checks at the delete that its events are still due, and a
+  receiver's last-success row is taken in key order, so two sweeps cannot
+  deadlock over it.
+- A stop request waits for at most one batch, not for the sweep: the prune reads
+  the relay's stop between batches. A relay still spends its idle time on that
+  backlog and delivers nothing meanwhile, so the first sweep over a large
+  backlog of already-due events is better run by hand (`prune_events`) before
+  deploying, or with `RELAY_PRUNE` set to `False` until it has been.
 
 Set [`RELAY_PRUNE`](settings.md#relay_prune) to `False` to turn it off when
 `prune_events` runs from a schedule of its own, and

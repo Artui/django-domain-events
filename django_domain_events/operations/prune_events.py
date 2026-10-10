@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -26,6 +27,7 @@ def prune_events(
     now: datetime | None = None,
     batch_size: int | None = None,
     limit: int | None = None,
+    stop: Callable[[], bool] | None = None,
 ) -> int:
     """Delete the events that are due, and return how many went.
 
@@ -132,7 +134,7 @@ def prune_events(
 
     deleted = 0
     for due in arms:
-        deleted += _prune(due, size, None if limit is None else limit - deleted)
+        deleted += _prune(due, size, None if limit is None else limit - deleted, stop)
     return deleted
 
 
@@ -163,13 +165,17 @@ def _deliveries_of_each() -> models.QuerySet[Any]:
     return DeliveryRecord.objects.filter(event=models.OuterRef("pk"))
 
 
-def _prune(due: models.QuerySet[Any], size: int, limit: int | None) -> int:
+def _prune(
+    due: models.QuerySet[Any], size: int, limit: int | None, stop: Callable[[], bool] | None
+) -> int:
     """Delete the events ``due`` selects, a batch of at most ``size`` rows at a
-    time, until none is left or ``limit`` events have gone."""
+    time, until none is left, ``limit`` events have gone or ``stop`` says so.
+    ``stop`` is read before each batch, so a request to stop waits for at most
+    one batch (test_a_stop_ends_the_prune_between_batches)."""
     from django_domain_events.models.delivery_record import DeliveryRecord
 
     deleted = 0
-    while limit is None or deleted < limit:
+    while (limit is None or deleted < limit) and not (stop is not None and stop()):
         take = min(size, _EVENTS_PER_BATCH)
         if limit is not None:
             take = min(take, limit - deleted)
@@ -312,11 +318,16 @@ def _record_last_successes(rows: models.QuerySet[Any]) -> None:
         .annotate(last=models.Max("succeeded_at"))
         .values_list("receiver_key", "last")
     )
+    # In key order in both loops: two prunes whose batches differ take these
+    # rows in whatever order each GROUP BY returned them, and two transactions
+    # taking the same rows in opposite orders deadlock (held by
+    # test_two_relays_with_different_batches_never_deadlock).
+    ordered = sorted(newest.items())
     ReceiverLastSuccess.objects.bulk_create(
-        [ReceiverLastSuccess(receiver_key=key, last_succeeded_at=at) for key, at in newest.items()],
+        [ReceiverLastSuccess(receiver_key=key, last_succeeded_at=at) for key, at in ordered],
         ignore_conflicts=True,
     )
-    for key, at in newest.items():
+    for key, at in ordered:
         ReceiverLastSuccess.objects.filter(receiver_key=key, last_succeeded_at__lt=at).update(
             last_succeeded_at=at
         )
