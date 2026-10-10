@@ -104,6 +104,11 @@ def test_a_failing_receiver_is_retried_then_dead_lettered(
         assert (first.attempts, first.completed_at) == (1, None)
         assert "downstream is down" in first.last_error
 
+        # Due now: a FAILED row waiting out its backoff is not owed, and
+        # deliver_one refuses it for every caller.
+        DeliveryRecord.objects.filter(pk=first.pk).update(
+            available_at=datetime.now(timezone.utc) - timedelta(seconds=1)
+        )
         assert deliver_one(_delivery_id("testapp.durable_receiver")) is DeliveryStatus.DEAD
         second = _delivery("testapp.durable_receiver")
         assert second.attempts == 2
@@ -583,3 +588,162 @@ def test_a_receivers_own_write_is_invisible_to_another_worker_until_it_commits(
     assert DeliveryRecord.objects.get(pk=row.pk).lease_expires_at > started + timedelta(
         minutes=30
     ), "and yet it did land, once the receiver had already finished"
+
+
+def _set(key: str, **fields: object) -> int:
+    """Hand-write a row into a state, the way a stale or repeated message finds it."""
+    delivery_id = _delivery_id(key)
+    DeliveryRecord.objects.filter(pk=delivery_id).update(**fields)
+    return delivery_id
+
+
+def test_a_settled_row_delivered_again_does_not_run_its_receiver_twice(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """A queue that redelivers - ``acks_late`` and a broker's visibility timeout
+    both do - hands ``deliver_one`` a row that already succeeded. Running it
+    again repeats the receiver's work and the acknowledgement it committed with,
+    which breaks the one promise that makes a database-only receiver effectively
+    once."""
+    _fire(order)
+    delivery_id = _delivery_id("testapp.durable_receiver")
+    assert deliver_one(delivery_id) is DeliveryStatus.SUCCEEDED
+    record.clear()
+
+    assert deliver_one(delivery_id) is None
+
+    assert record == []
+    assert _delivery("testapp.durable_receiver").attempts == 1
+
+
+def test_a_dead_row_is_not_run_or_resurrected(order: OrderPlaced, record: list[str]) -> None:
+    """A dead letter is final. Running it again spends a sixth attempt of five
+    and writes SUCCEEDED over a row whose dead-letter notice has already gone
+    out, so the two records of one delivery disagree."""
+    _fire(order)
+    delivery_id = _set(
+        "testapp.durable_receiver",
+        status=DeliveryStatus.DEAD,
+        attempts=5,
+        max_attempts=5,
+        completed_at=datetime.now(timezone.utc),
+    )
+    record.clear()
+
+    assert deliver_one(delivery_id) is None
+
+    assert record == []
+    row = _delivery("testapp.durable_receiver")
+    assert (row.status, row.attempts) == (DeliveryStatus.DEAD, 5)
+
+
+def test_an_orphaned_row_is_not_run(order: OrderPlaced, record: list[str]) -> None:
+    """The third terminal status, held by its own test: the refusal reads a set,
+    and dropping one member from it leaves the other two tests green."""
+    _fire(order)
+    delivery_id = _set(
+        "testapp.durable_receiver",
+        status=DeliveryStatus.ORPHANED,
+        completed_at=datetime.now(timezone.utc),
+    )
+    record.clear()
+
+    assert deliver_one(delivery_id) is None
+
+    assert record == []
+    assert _delivery("testapp.durable_receiver").status == DeliveryStatus.ORPHANED
+
+
+def test_a_failed_row_not_yet_due_is_not_run(order: OrderPlaced, record: list[str]) -> None:
+    """``available_at`` is the backoff, and a ``RetryAfter`` the receiver raised
+    writes it too. Running the row early ignores both - and for a destination
+    that answered 429 with an hour, that is the call it asked not to get."""
+    _fire(order)
+    delivery_id = _set(
+        "testapp.durable_receiver",
+        status=DeliveryStatus.FAILED,
+        attempts=1,
+        available_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    record.clear()
+
+    assert deliver_one(delivery_id) is None
+
+    assert record == []
+    row = _delivery("testapp.durable_receiver")
+    assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 1)
+
+
+def test_a_failed_row_that_is_due_still_runs(order: OrderPlaced, record: list[str]) -> None:
+    """The other half of the backoff check: refusing every FAILED row would pass
+    the test above and strand every retry."""
+    _fire(order)
+    delivery_id = _set(
+        "testapp.durable_receiver",
+        status=DeliveryStatus.FAILED,
+        attempts=1,
+        available_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+    )
+    record.clear()
+
+    assert deliver_one(delivery_id) is DeliveryStatus.SUCCEEDED
+    assert record == ["durable:7"]
+
+
+def test_half_a_claim_takes_nothing(order: OrderPlaced, record: list[str]) -> None:
+    """Either half of a claim on its own still triggers the take, and the take
+    cannot match a row with a missing half. Without that, a backend that dropped
+    one argument would fall through to running the row unconditionally - the
+    redelivery bug, reintroduced by a typo."""
+    with transaction.atomic():
+        fire(order)
+    claim_batch(worker_id="w1", now=datetime.now(timezone.utc), lease=timedelta(hours=1), limit=10)
+    row = _delivery("testapp.durable_receiver")
+    record.clear()
+
+    assert deliver_one(row.pk, claimed_by="w1") is None
+    assert deliver_one(row.pk, claimed_at=row.claimed_at.isoformat()) is None
+
+    assert record == []
+    assert _delivery("testapp.durable_receiver").claimed_by == "w1"
+
+
+def test_a_take_moves_the_row_to_the_named_worker(order: OrderPlaced, record: list[str]) -> None:
+    """``worker_id`` names who takes the row, so a task worker can log under a
+    name of its own; the claim it was handed is what it takes the row from."""
+    with transaction.atomic():
+        fire(order)
+    claim_batch(worker_id="w1", now=datetime.now(timezone.utc), lease=timedelta(hours=1), limit=10)
+    row = _delivery("testapp.durable_receiver")
+    record.clear()
+
+    outcome = deliver_one(
+        row.pk, worker_id="celery-7", claimed_by="w1", claimed_at=row.claimed_at.isoformat()
+    )
+
+    assert outcome is DeliveryStatus.SUCCEEDED
+    after = _delivery("testapp.durable_receiver")
+    assert after.claimed_by == "celery-7"
+    assert after.claimed_at > row.claimed_at
+
+
+def test_a_failed_row_claimed_early_on_purpose_still_runs(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """``ignore_backoff=True`` claims a row before its ``available_at`` because
+    an operator asked for exactly that. The claim makes it CLAIMED, and a
+    CLAIMED row is its claimer's to run whatever its backoff said - which is
+    why the backoff check reads the FAILED status and not ``available_at``
+    alone."""
+    _fire(order)
+    _set(
+        "testapp.durable_receiver",
+        status=DeliveryStatus.FAILED,
+        attempts=1,
+        available_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    _set("testapp.with_context", status=DeliveryStatus.SUCCEEDED)
+    record.clear()
+
+    assert deliver_pending(ignore_backoff=True) == {DeliveryStatus.SUCCEEDED: 1}
+    assert record == ["durable:7"]

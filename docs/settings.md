@@ -20,6 +20,8 @@ are changing.
 | `BATCH_SIZE` | `50` | Rows per claim, per prune batch and per requeue chunk. |
 | `LEASE_SECONDS` | `300` | How long a claim is held before another worker may steal it. |
 | `POLL_SECONDS` | `1.0` | Relay poll interval, and the floor under `LISTEN`/`NOTIFY`. |
+| `WAKE` | `"notify"` | `"notify"` or `"poll"`. `"poll"` sends no `NOTIFY` and the relay does not `LISTEN`; latency is then `POLL_SECONDS`. |
+| `NOTIFY_COALESCE_SECONDS` | `0.5` | A process sends at most one `NOTIFY` per this long, per database. `0` sends every one. |
 | `BACKOFF_BASE_SECONDS` | `2.0` | First retry ceiling; doubles per attempt. |
 | `BACKOFF_CAP_SECONDS` | `3600.0` | Ceiling the doubling stops at. |
 | `MAX_RECEIVER_RETRY_DELAY_SECONDS` | `86400.0` | Longest delay a `RetryAfter` may ask for. |
@@ -81,6 +83,33 @@ It is a ceiling at all because a delivery waiting in the future is still owed.
 event past `RETENTION_DAYS` for that month, and a destination answering with an
 absurd number would keep it indefinitely.
 
+### `WAKE`
+
+`"notify"` (the default) sends a `NOTIFY` after the commit of a `fire()` that
+wrote a delivery row, and the relay waits on it. It only has an effect on
+Postgres; elsewhere both settings are inert and the relay polls. `"poll"` turns
+it off on Postgres too, which trades latency of up to `POLL_SECONDS` for a commit
+that does not take Postgres's notification lock. The poll is the floor in both
+modes, so neither can lose a delivery.
+
+Read [Turning NOTIFY off](operations.md#turning-notify-off) before choosing: the
+cost is real on some workloads and disputed on others, and polling is cheap
+enough that lowering `POLL_SECONDS` is the usual companion to it. A relay behind
+pgbouncer in transaction-pooling mode never hears a notification whatever this
+says; see [Behind pgbouncer](operations.md#behind-pgbouncer).
+
+A value other than `"notify"` or `"poll"` fails the system check `E006`, rather
+than quietly meaning "poll".
+
+### `NOTIFY_COALESCE_SECONDS`
+
+A process sends at most one `NOTIFY` per this interval, per database. Skipping
+one is safe for the reason losing one is: a single wake makes the relay claim
+everything due, and the poll picks up the rest. The price is that an event
+committed just after a notification, but after the relay had claimed, waits for
+the next poll. `0` disables coalescing. A negative, non-numeric or NaN value
+fails the system check `E007`.
+
 ### `BATCH_SIZE`
 
 Three jobs, deliberately one number: it is "how many rows this package touches in
@@ -103,6 +132,18 @@ only a subclass could use it.
     "queue_name": "events",
 }
 ```
+
+or, with the `celery` extra installed:
+
+```python
+"TASK_BACKEND": {
+    "BACKEND": "django_domain_events.delivery.celery_backend.CeleryBackend",
+    "queue": "events",
+}
+```
+
+The Celery worker also needs the task module in its `imports`; see
+[Celery](operations.md#celery).
 
 ## Routing to another database
 

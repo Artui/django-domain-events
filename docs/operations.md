@@ -24,7 +24,52 @@ fired a moment ago is delivered in milliseconds instead of on the next tick.
 notification costs latency and never a delivery.
 
 `notify_relay()` is public, for the case where you moved rows into `pending`
-yourself.
+yourself. It follows the same settings as `fire()`: under `WAKE = "poll"` it
+sends nothing, and it is coalesced.
+
+#### Coalescing
+
+A process sends at most one notification per `NOTIFY_COALESCE_SECONDS` (half a
+second by default) per database, however many events it fires in that time.
+That loses nothing: one wake makes the relay claim everything that is due, and
+the poll picks up whatever a skipped notification would have announced. The cost
+is that an event fired just after a notification, and committed after the relay
+had already claimed, waits for the next poll instead of being delivered at once.
+Set it to `0` to send every notification.
+
+`replay_events` and `requeue_dead` notify through the same function, so they are
+coalesced the same way.
+
+#### Turning NOTIFY off
+
+Set `WAKE` to `"poll"` and neither side uses it: `fire()` sends nothing, and the
+relay sleeps for `POLL_SECONDS` between passes instead of listening. Latency then
+is `POLL_SECONDS`, up to a second at the default.
+
+Why you might: in Postgres, a transaction that sends a `NOTIFY` takes a
+database-wide lock while it commits, so commits that send one queue behind each
+other. This package keeps the notification out of your business transaction and
+sends one per `fire()` rather than one per row, but a `fire()` with a durable
+receiver still ends in one such commit. Reports of this limiting throughput on
+busy databases exist, but whether the lock wait is the cause or a symptom is
+disputed upstream. A change in Postgres itself may have removed the bottleneck;
+which release carries it is not established here, so do not assume yours does.
+Measure before you give up the latency.
+
+What makes polling cheap enough to lower `POLL_SECONDS`: the claim reads
+indexes that hold only rows still owed, so it does not slow down as history
+grows. It took 0.15 ms at 1.6 million delivery rows on Postgres 16 (a single
+warm run on synthetic data on a laptop, so directional). A poll that cheap can
+run often, so `POLL_SECONDS` is yours to lower.
+
+#### Behind pgbouncer
+
+`LISTEN` is state on a database session. Through pgbouncer in transaction-pooling
+mode a relay's session is not its own between statements, so it never receives a
+notification, and it polls instead without saying so. Nothing is lost, because
+the poll is the floor, but the relay gets none of the benefit. Point the relay at
+a direct or session-pooled connection to have `NOTIFY` wake it, or set `WAKE` to
+`"poll"` and lower `POLL_SECONDS` to say what is happening.
 
 ## Pruning
 
@@ -124,14 +169,77 @@ Then declare the receiver's execution site:
 def call_the_slow_api(evt: OrderPlaced) -> None: ...
 ```
 
-The relay claims the row and enqueues its id; the task runs the receiver and
-acknowledges. The row is still the debt, so a lost task is still owed.
+The relay claims the row and enqueues its id with the claim it holds; the task
+takes the row under that claim, runs the receiver and acknowledges. The row is
+still the debt, so a lost task is still owed.
 
 `DjangoTasksBackend` targets `django.tasks` on Django 6.0+ and falls back to the
 `django_tasks` backport on 4.2-5.2.
 
-`TaskBackend` is a `Protocol` with a single `enqueue(delivery_id)` method -
-anything satisfying it works, including Celery.
+### Celery
+
+```bash
+pip install "django-domain-events[celery]"
+```
+
+```python
+DJANGO_DOMAIN_EVENTS = {
+    "TASK_BACKEND": {
+        "BACKEND": "django_domain_events.delivery.celery_backend.CeleryBackend",
+        "queue": "events",  # optional; without it Celery's own routing decides
+    },
+}
+```
+
+The worker has to import the task, because a Celery worker runs a message by
+finding its name in its own registry and `autodiscover_tasks()` only looks for a
+`tasks` module in each app. Add the module to Celery's `imports`:
+
+```python
+app.conf.imports = ["django_domain_events.delivery.celery_backend"]
+# or, with app.config_from_object("django.conf:settings", namespace="CELERY"):
+CELERY_IMPORTS = ["django_domain_events.delivery.celery_backend"]
+```
+
+A worker without it logs the message as an unregistered task and drops it. The
+row stays owed and the relay hands it off again when the lease lapses, so nothing
+is lost, but nothing is delivered either.
+
+The task is registered as `django_domain_events.deliver_delivery`, a name that
+does not follow the module, so a message already on the broker still finds it
+after an upgrade moves the code.
+
+### What a task message carries
+
+`TaskBackend` is a `Protocol` with one method,
+`enqueue(delivery_id, claimed_by, claimed_at)`. The relay passes the claim by
+keyword. Anything satisfying it works; the worker side has to call
+
+```python
+deliver_one(delivery_id, claimed_by=claimed_by, claimed_at=claimed_at)
+```
+
+with the three values exactly as it was given them. `claimed_at` is an ISO 8601
+string, so all three are JSON and any queue can carry them unchanged.
+
+The claim is what makes a queue that delivers more than once safe. `acks_late`
+and a broker's visibility timeout both hand a worker a message whose task has
+already run, and a queue can hold a message until its lease has lapsed and the
+relay has handed the row to someone else. Before it runs anything, the task
+*takes* the row: one conditional update, committed on its own, that succeeds only
+while the row is still claimed under exactly the claim the message carries, and
+moves the claim to the task's worker. A second copy, a late copy, and a copy for
+a row that has since succeeded, failed or died all fail the take and do nothing.
+
+A task worker that dies mid-delivery is recovered by the row's lease, not by the
+queue redelivering: the redelivered copy finds the row taken by the worker that
+died, and the relay reclaims it once the lease lapses. Size `lease_seconds=` to
+cover the queue's backlog as well as the receiver's own run.
+
+`deliver_one` refuses a row that is not owed for every caller, with or without a
+claim: one that already succeeded, died or was orphaned, and one that failed and
+is still waiting out its backoff. It returns `None` for those without running the
+receiver.
 
 !!! warning "`site="task"` needs `mode=DURABLE` and a backend"
     A non-`DURABLE` mode is refused **at the decorator** - it has no row to hand
