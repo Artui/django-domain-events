@@ -17,7 +17,7 @@ from django_domain_events.settings import (
     get_codec,
     setting,
 )
-from django_domain_events.utils import TERMINAL, has_table
+from django_domain_events.utils import has_table, owed
 
 # The names a reader reaches for instead: the app label, and the prose everyone
 # writes. Neither is read, and neither fails.
@@ -208,10 +208,14 @@ def check_no_orphaned_deliveries(
     """No delivery still owed names a receiver the registry no longer has.
 
     Owed means "not terminal", the same definition the relay claims by and the
-    prune settles by. Listing the owed statuses instead is how this check came
-    to omit CLAIMED: a worker that died between claiming a row and the deploy
-    that deleted its receiver leaves the row claimed with a lapsed lease, and it
-    read as settled until a relay happened to reclaim it.
+    prune settles by, phrased as the owed partial indexes' own conditions
+    (``owed``) so this reads the owed rows rather than every delivery ever
+    made - it runs on every ``migrate`` and ``check``. A hand-written list of
+    owed statuses is how this check once came to omit CLAIMED: a worker that
+    died between claiming a row and the deploy that deleted its receiver leaves
+    the row claimed with a lapsed lease, and it read as settled until a relay
+    happened to reclaim it. That is now held by a test with a row in every
+    status (test_the_orphan_warning_counts_every_owed_status_and_no_other).
 
     Two guards, and both are load-bearing. Without the first this runs under
     ``check``, ``showmigrations`` and ``makemigrations``, which pass no
@@ -231,7 +235,7 @@ def check_no_orphaned_deliveries(
             continue
         keys |= set(
             DeliveryRecord.objects.using(alias)
-            .exclude(status__in=TERMINAL)
+            .filter(owed())
             .values_list("receiver_key", flat=True)
             .distinct()
         )
@@ -271,7 +275,10 @@ def check_recorded_events_are_declared(
         return []
 
     table = EventRecord._meta.db_table
-    owed = DeliveryRecord.objects.filter(event=models.OuterRef("pk")).exclude(status__in=TERMINAL)
+    # Phrased as the owed partial indexes' conditions, like the orphan check,
+    # so Postgres can find the owed rows through those indexes and join out to
+    # their events rather than probe every event's deliveries.
+    owed_deliveries = DeliveryRecord.objects.filter(owed(), event=models.OuterRef("pk"))
     names: set[str] = set()
     for alias in databases:
         # One table answers for both: they are created by the same
@@ -280,7 +287,7 @@ def check_recorded_events_are_declared(
             continue
         names |= set(
             EventRecord.objects.using(alias)
-            .filter(models.Exists(owed))
+            .filter(models.Exists(owed_deliveries))
             .values_list("name", flat=True)
             .distinct()
         )

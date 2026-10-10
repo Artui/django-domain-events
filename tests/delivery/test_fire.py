@@ -346,7 +346,7 @@ def test_every_row_fire_writes_carries_the_digest_of_its_target() -> None:
     assert len(stored) == 3
     assert {"", "a", "b" * 3000} == {target for target, _ in stored}
     for target, digest in stored:
-        assert digest == hashlib.sha256(target.encode()).hexdigest()
+        assert digest == hashlib.sha256(target.encode()).digest()
 
 
 def test_a_raising_callable_fails_the_callers_transaction() -> None:

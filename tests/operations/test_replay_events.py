@@ -298,7 +298,7 @@ def test_a_row_replay_adds_carries_the_digest_of_its_target(owed_targets: list[s
 
     assert replay_events([event_id]) == {"reopened": 0, "added": 1}
     added = DeliveryRecord.objects.get(receiver_key="probe.fan", target="c" * 3000)
-    assert added.target_digest == hashlib.sha256(("c" * 3000).encode()).hexdigest()
+    assert added.target_digest == hashlib.sha256(("c" * 3000).encode()).digest()
 
 
 def test_a_long_target_already_delivered_is_reopened_not_duplicated(

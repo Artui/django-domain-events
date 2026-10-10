@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from django.db import transaction
+from django.db import connection, transaction
 
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
@@ -14,6 +14,8 @@ from django_domain_events.introspection.outbox_health import outbox_health
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.utils import TERMINAL
+from tests.conftest import Plans, delivery_table_access
 from tests.testapp.events import OrderPlaced
 
 pytestmark = pytest.mark.django_db
@@ -175,3 +177,50 @@ def test_a_receiver_backlog_carries_its_own_oldest(order: OrderPlaced, record: l
     )
     by_key = {r.key: r for r in outbox_health().receivers}
     assert by_key["testapp.durable_receiver"].oldest_owed_at == stuck
+
+
+def test_every_status_is_counted_owed_or_settled_exactly_once() -> None:
+    """Owed is phrased as the partial indexes' own predicates, which lists the
+    owed statuses where ``exclude(status__in=TERMINAL)`` could not miss one.
+    So this is what goes red if a status is added and the phrasing is not: one
+    row in every status there is, and the owed count must be every status that
+    is not terminal."""
+    event = EventRecord.objects.create(
+        name="testapp.OrderPlaced",
+        version=1,
+        payload={},
+        occurred_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+    for status in DeliveryStatus:
+        DeliveryRecord.objects.create(
+            event=event,
+            receiver_key=f"probe.{status.value}",
+            status=status,
+            available_at=event.recorded_at,
+        )
+    health = outbox_health()
+    owed = {s.value for s in DeliveryStatus if s not in TERMINAL}
+    assert health.owed == len(owed) == 3
+    assert health.dead == 1
+    assert {b.key for b in health.receivers if b.owed} == {f"probe.{s}" for s in owed}
+    assert {b.key for b in health.receivers if b.dead} == {"probe.dead"}
+
+
+postgres_only = pytest.mark.skipif(
+    connection.vendor != "postgresql",
+    reason="asserts Postgres query plans; SQLite's planner is not the one a scrape runs on",
+)
+
+
+@postgres_only
+def test_no_query_outbox_health_sends_scans_the_delivery_table(
+    plans_without_seqscan: Plans,
+) -> None:
+    """Each predicate is the partial indexes' own, so each query reads only
+    the owed and dead rows however much delivered history the table holds.
+    ``status NOT IN (terminal)`` matches no partial index, and reads the whole
+    table on every scrape."""
+    owed = {"dde_owed_by_available_at", "dde_claimed_by_lease"}
+    dead = {"dde_dead_by_receiver"}
+    plans = plans_without_seqscan(outbox_health)
+    assert [delivery_table_access(plan) for plan in plans] == [owed, dead, owed | dead], plans
