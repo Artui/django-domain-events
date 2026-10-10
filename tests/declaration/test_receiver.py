@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 
 from django_domain_events.declaration.any_event import AnyEvent
@@ -227,3 +229,43 @@ def test_the_curve_and_the_lane_are_refused_without_a_row(kwargs, needle) -> Non
     row is claimed by a relay serving a lane."""
     with pytest.raises(ValueError, match=needle):
         receiver(OrderPlaced, mode=DeliveryMode.ON_COMMIT, key="tests.bad_curve", **kwargs)
+
+
+# --- give_up_after ------------------------------------------------------------
+
+
+def test_give_up_after_is_recorded_and_defaults_to_none() -> None:
+    @receiver(OrderPlaced, key="tests.bounded", give_up_after=timedelta(hours=6))
+    def handler(evt: OrderPlaced) -> None: ...
+
+    try:
+        assert registry.receiver_for_key("tests.bounded").give_up_after == timedelta(hours=6)
+        assert registry.receiver_for_key("testapp.durable_receiver").give_up_after is None
+    finally:
+        registry._receivers.pop("tests.bounded", None)
+
+
+@pytest.mark.parametrize("value", [timedelta(0), timedelta(seconds=-1)])
+def test_a_give_up_after_that_is_not_in_the_future_is_refused(value: timedelta) -> None:
+    """Zero would dead-letter every deferral on arrival, which is a receiver
+    that cannot be deferred at all, declared in a way that reads as patience."""
+    with pytest.raises(ValueError, match="give_up_after must be a positive timedelta"):
+        receiver(OrderPlaced, key="tests.no_patience", give_up_after=value)
+
+
+@pytest.mark.parametrize("value", [3600, 3600.0, "1h"])
+def test_a_give_up_after_that_is_not_a_timedelta_is_refused(value: object) -> None:
+    """A bare number has no unit, and reading it as seconds or as days would
+    each be the wrong guess for somebody."""
+    with pytest.raises(ValueError, match="give_up_after must be a positive timedelta"):
+        receiver(OrderPlaced, key="tests.no_unit", give_up_after=value)
+
+
+def test_give_up_after_is_refused_without_a_row() -> None:
+    with pytest.raises(ValueError, match="give_up_after=.* needs mode=DURABLE"):
+        receiver(
+            OrderPlaced,
+            mode=DeliveryMode.ON_COMMIT,
+            key="tests.bad_bound",
+            give_up_after=timedelta(hours=1),
+        )

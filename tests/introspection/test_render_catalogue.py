@@ -303,3 +303,20 @@ def test_json_carries_the_curve_and_the_lane() -> None:
         published["backoff_cap_seconds"],
         published["lane"],
     ) == (60.0, 1200.0, "mail")
+
+
+def test_give_up_after_is_said_in_prose_under_the_table() -> None:
+    assert "`shop.mail` dead-letters a deferral once its delivery has been owed for 21600s." in (
+        _with(give_up_after_seconds=21600.0)
+    )
+    assert "dead-letters a deferral" not in _with()
+
+
+def test_json_carries_give_up_after_in_seconds() -> None:
+    """Seconds, as the curve is published, so the JSON stays plain numbers."""
+    receiver = dataclasses.replace(_receiver("shop.mail"), give_up_after_seconds=21600.0)
+    parsed = json.loads(
+        render_catalogue(Catalogue(events=(_event("shop.Sent", receiver),)), format="json")
+    )
+    [published] = parsed["events"][0]["receivers"]
+    assert published["give_up_after_seconds"] == 21600.0

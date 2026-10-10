@@ -162,8 +162,8 @@ Dead is where a delivery stops **on its own**, not where it stops for good - see
 | `pending` | owed, waiting for `available_at` |
 | `claimed` | leased by a worker |
 | `succeeded` | ran, acknowledged |
-| `failed` | raised, attempts remaining |
-| `dead` | out of attempts |
+| `failed` | raised with attempts remaining, or deferred |
+| `dead` | out of attempts, or deferred past `give_up_after` |
 | `orphaned` | addressed to a receiver key the registry no longer has |
 
 `failed` is distinct from `pending` so that "has this ever failed" is answerable
@@ -235,11 +235,13 @@ with `DEAD`, exactly as it is when the budget runs out.
 from the curve**. A rate limiter that says "in two minutes" is answering the
 question the curve is guessing at, and arriving early only earns another refusal.
 
-!!! warning "A requested retry consumes an attempt"
+!!! warning "By default, a requested retry consumes an attempt"
     Otherwise a destination answering `429` to every request would keep a row
     alive forever and nothing would ever declare it dead. Every delivery stays
     bounded by the budget it was fired with. A receiver expecting to be rate
-    limited should declare a wider `max_attempts`.
+    limited should declare a wider `max_attempts` - or
+    [defer without counting](#a-deferral-that-spends-no-attempt), bounded by
+    time instead.
 
 The request is capped at `MAX_RECEIVER_RETRY_DELAY_SECONDS`, a day by default,
 and a longer one is clamped with a warning naming both numbers. The cap is its
@@ -252,6 +254,104 @@ either fails the caller's transaction like any other exception, and an
 `ON_COMMIT` one has it logged: neither has a row to schedule or dead-letter. The
 type is the signal, never the message - a `RuntimeError` saying "410 Gone" is an
 ordinary failure.
+
+## A deferral that spends no attempt
+
+A throttle or a quota is a limit on the destination, not a failure of the row.
+Counting it against `max_attempts` dead-letters good deliveries for being sent
+at a busy moment, and widening the budget to survive a burst also widens it for
+the failures it exists to end. `RetryAfter(seconds, counts=False)` says so:
+
+```python
+from datetime import timedelta
+
+from django_domain_events import RetryAfter, receiver
+
+
+@receiver(ReceiptQueued, lane="mail", give_up_after=timedelta(days=2))
+def send_receipt(evt: ReceiptQueued) -> None:
+    try:
+        provider.send(render_receipt(evt))
+    except provider.Throttled as exc:
+        raise RetryAfter(exc.retry_after, reason="sending rate exceeded", counts=False)
+    except provider.DailyQuotaExceeded:
+        raise RetryAfter(seconds_until_quota_resets(), reason="daily quota", counts=False)
+```
+
+Three things happen, and each answers a way a plain retry goes wrong in a burst
+of twenty thousand rows:
+
+- **The attempt is not counted.** `attempts` is unchanged and `max_attempts` is
+  not spent, so the row is still owed its whole budget for real failures. It is
+  recorded as `failed`, with the message as `last_error`, and `on_failure` is
+  called with `FAILED` and the attempt number the receiver's context carried -
+  which the next run is given again, because nothing was spent.
+- **The next attempt is jittered upwards**: between `seconds` and twice that
+  from now, clamped to `MAX_RECEIVER_RETRY_DELAY_SECONDS`. Never earlier than
+  the destination asked, and spread, so rows deferred together do not all come
+  back in the same second and get throttled together again.
+- **The relay pauses the receiver's lane** for `seconds`, and hands back the
+  rest of the batch it had claimed rather than attempting it. Without that,
+  learning that a daily quota is gone would cost one call per row: twenty
+  thousand calls to hear the same answer twenty thousand times. With it, the
+  relay that heard it spends no more calls on the lane until the delay has
+  passed; the rows it gave back keep their place at the head of the queue and
+  are attempted when the pause ends, one at a time, so if the quota is still
+  gone it costs one call per pause, not one per row.
+
+### `give_up_after` keeps every delivery ending
+
+A deferral that does not count cannot be ended by `max_attempts`, and a
+destination that throttles forever would keep its rows owed forever - holding
+their events past [retention](retention.md), since a prune waits for every
+delivery of an event. So it is bounded by **time**: the receiver declares
+`give_up_after`, and a deferral arriving once the row has been owed that long
+dead-letters it, exactly as a spent budget does - `dead`, `completed_at`,
+`on_failure` with `DEAD`, and a `last_error` naming the bound.
+
+"Owed" is measured from when the row became owed: when it was written, or when
+[replay](operations.md#replay) or [requeue](operations.md#requeue-from-the-dead-letter-queue)
+last reopened it. Both reset that moment, so a month-old event replayed into a
+throttled destination is not dead-lettered on its first deferral for being a
+month old. Backoff never moves it, so deferring cannot keep resetting the clock.
+At exactly `give_up_after` the bound is reached.
+
+The bound applies to deferrals alone. A receiver declaring it still has
+ordinary failures and counting `RetryAfter`s ended by `max_attempts`, however
+long the row has been owed.
+
+!!! warning "`counts=False` without `give_up_after` counts"
+    A receiver raising `counts=False` that declares no `give_up_after` has
+    nothing that would ever end its deliveries. The deferral is then treated
+    as an ordinary `RetryAfter` - counted, no jitter, no pause - and a warning
+    naming the receiver is logged once per process. Declare the bound to get
+    the deferral.
+
+### The pause is per process
+
+Nothing is shared between relays: each process pauses a lane when a deferral it
+ran says to, measured on its own clock, and every relay serving the lane learns
+of the throttle from its own first deferral - one call each. That is the price
+of having no shared state to keep consistent, and it is small next to one call
+per row. A relay serving the lane claims nothing while the pause lasts, and
+resumes at its first pass after it ends, so within `POLL_SECONDS`.
+
+A relay serving every lane - `run_relay(lane=None)`, or `deliver_pending()` and
+`drain_outbox()` from code - pauses only the deferring lane: its unstarted rows
+in the batch go back, the other lanes' rows in the same batch are still
+delivered, and later claims leave the paused lane out. `deliver_pending()`
+has no clock to wait on, so it sets the lane aside for the rest of the call.
+Neither the pause nor the hand-back reaches a row already given to a
+[task backend](operations.md#handing-delivery-to-a-task-queue), and a receiver
+running in a task defers there, in a process that holds no batch to pause; its
+deferral is recorded all the same. A direct `deliver_one()` likewise records
+and pauses nothing.
+
+!!! note "For an endpoint's `429`"
+    [django-outbound-webhooks](https://github.com/Artui/django-outbound-webhooks)
+    raises `RetryAfter` for an endpoint answering `429`. That is the case this
+    exists for, and it can adopt `counts=False` with a `give_up_after` on its
+    receiver, so a rate-limited endpoint stops costing deliveries their budget.
 
 ## In tests
 

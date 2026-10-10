@@ -12,7 +12,12 @@ from django.db import Error, connections
 from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
-from django_domain_events.delivery.deliver import claim_size, dispatch_one
+from django_domain_events.delivery.deliver import (
+    OnDeferral,
+    claim_size,
+    dispatch_one,
+    partition_by_lane,
+)
 from django_domain_events.delivery.hand_back import hand_back
 from django_domain_events.delivery.wake import wait_for_work
 from django_domain_events.delivery.write_alias import write_alias
@@ -86,6 +91,18 @@ def run_relay(
     claimed under one lease, and a row still waiting its turn when that lease
     lapses is taken by another relay, so a slow lane wants a batch it can work
     through inside ``LEASE_SECONDS``.
+
+    A receiver deferring with ``RetryAfter(seconds, counts=False)`` pauses its
+    lane in this process for ``seconds``, measured on ``now``: the lane's
+    unstarted rows in the batch are handed back rather than attempted - each
+    would cost a call to learn what the first already said - and are claimable
+    by any worker at once. While the pause lasts, a relay serving that lane
+    claims nothing and idles, and one serving every lane leaves it out of its
+    claims and goes on delivering the others, the rest of a mixed batch
+    included. The pause is per process and shares nothing: every relay in the
+    lane learns of the throttle from its own first deferral, at the cost of one
+    call each. It ends at the first pass after ``seconds``, so within
+    ``POLL_SECONDS`` of it.
     """
     connection = connections[write_alias()]
     if not (allow_unsafe_concurrency or connection.features.has_select_for_update_skip_locked):
@@ -102,6 +119,11 @@ def run_relay(
 
     counts: dict[DeliveryStatus, int] = {}
     failed_claims = 0
+    # Lane -> the moment its pause ends, on this process's clock. Nothing is
+    # shared between relays: a pause is what this process learned from a
+    # deferral it ran.
+    paused: dict[str, datetime] = {}
+    deferred: list[tuple[str, float]] = []
     for _ in itertools.count() if passes is None else range(passes):
         if stop():
             break
@@ -109,9 +131,30 @@ def run_relay(
         # the claim's ``claimed_at``, which is half of the token a hand-back is
         # conditioned on.
         claimed_at = now()
+        # A pause ends at its moment exactly, which
+        # test_the_pause_ends_when_the_requested_delay_has_passed_on_the_injected_clock
+        # holds from both sides.
+        paused = {name: until for name, until in paused.items() if until > claimed_at}
         try:
-            ids = claim_batch(
-                worker_id=worker_id, now=claimed_at, lease=lease, limit=batch_size, lane=lane
+            # The lane this relay serves, paused, is not even asked for and
+            # falls through to the idle wait below
+            # (test_a_relay_whose_lane_is_paused_does_not_query_it): the
+            # exclusion would make the claim come back empty, but only after
+            # walking past every row the lane is owed. ``lane in paused`` is
+            # never true for None, so a relay serving every lane claims,
+            # leaving the paused lanes out
+            # (test_a_relay_serving_every_lane_keeps_claiming_the_other_lanes_while_one_is_paused).
+            ids = (
+                []
+                if lane in paused
+                else claim_batch(
+                    worker_id=worker_id,
+                    now=claimed_at,
+                    lease=lease,
+                    limit=batch_size,
+                    lane=lane,
+                    exclude_lanes=paused.keys(),
+                )
             )
         except Exception as exc:
             failed_claims += 1
@@ -124,13 +167,27 @@ def run_relay(
             )
             continue
         failed_claims = 0
-        for position, delivery_id in enumerate(ids):
+        unstarted = list(ids)
+        while unstarted:
             if stop():
-                _hand_back_or_survive(ids[position:], worker_id, claimed_at, connection)
+                _hand_back_or_survive(unstarted, worker_id, claimed_at, connection)
                 return counts
-            outcome = _deliver_or_survive(delivery_id, worker_id, connection)
+            outcome = _deliver_or_survive(
+                unstarted.pop(0),
+                worker_id,
+                connection,
+                on_deferral=lambda deferred_lane, seconds: deferred.append(
+                    (deferred_lane, seconds)
+                ),
+            )
             if outcome is not None:
                 counts[outcome] = counts.get(outcome, 0) + 1
+            while deferred:
+                deferred_lane, seconds = deferred.pop()
+                paused[deferred_lane] = now() + timedelta(seconds=seconds)
+                unstarted = _set_aside_or_survive(
+                    unstarted, deferred_lane, worker_id, claimed_at, connection
+                )
         if not ids:
             # Waits on a notification where the backend has one and sleeps where
             # it does not, so an event fired a moment ago is delivered in
@@ -166,7 +223,9 @@ def _wait_or_survive(
         _close_after(exc, connection, worker_id)
 
 
-def _deliver_or_survive(delivery_id: int, worker_id: str, connection: Any) -> DeliveryStatus | None:
+def _deliver_or_survive(
+    delivery_id: int, worker_id: str, connection: Any, on_deferral: OnDeferral | None = None
+) -> DeliveryStatus | None:
     """Deliver one row, and keep the daemon alive if it fails unexpectedly.
 
     ``dispatch_one`` handles a receiver raising and a payload that will not
@@ -175,11 +234,48 @@ def _deliver_or_survive(delivery_id: int, worker_id: str, connection: Any) -> De
     every row it had already claimed until their leases lapsed.
     """
     try:
-        return dispatch_one(delivery_id, worker_id=worker_id)
+        return dispatch_one(delivery_id, worker_id=worker_id, on_deferral=on_deferral)
     except Exception as exc:
         logger.exception("relay %s could not deliver %s", worker_id, delivery_id)
         _close_after(exc, connection, worker_id)
         return None
+
+
+def _set_aside_or_survive(
+    unstarted: list[int], lane: str, worker_id: str, claimed_at: datetime, connection: Any
+) -> list[int]:
+    """Hand back the unstarted rows of a lane that just paused; return the rest.
+
+    The rest is what the relay goes on delivering: the other lanes' rows of a
+    batch claimed for every lane, or nothing, for a batch claimed for the
+    paused lane alone.
+
+    A failure abandons the whole rest of the batch rather than raising. Which
+    rows were in the lane is then unknown, and attempting them could spend a
+    call per throttled row, which is what the pause exists to avoid. What is
+    abandoned is reclaimed when its lease lapses, exactly as a crashed
+    worker's is (``test_a_set_aside_that_fails_abandons_the_batch``).
+    """
+    try:
+        to_give_back, rest = partition_by_lane(unstarted, lane)
+        given = hand_back(to_give_back, worker_id=worker_id, claimed_at=claimed_at)
+    except Exception as exc:
+        logger.exception(
+            "relay %s could not hand back the rows of paused lane %s; abandoning the "
+            "%d unstarted rows of its batch to their lease",
+            worker_id,
+            lane,
+            len(unstarted),
+        )
+        _close_after(exc, connection, worker_id)
+        return []
+    logger.info(
+        "relay %s paused lane %s after a deferral; handed back %d unstarted rows",
+        worker_id,
+        lane,
+        given,
+    )
+    return rest
 
 
 def _hand_back_or_survive(

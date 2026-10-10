@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from django_domain_events.types.delivery_context import DeliveryContext
@@ -63,3 +64,13 @@ class RegisteredReceiver:
 
     Read from here at claim time, never copied onto the row, so moving a
     receiver to another lane moves the deliveries it is still owed with it."""
+
+    give_up_after: timedelta | None = None
+    """How long a delivery may stay owed while deferring, or None.
+
+    What ends a delivery whose receiver defers with ``RetryAfter(counts=False)``,
+    which spends no attempt: once the row has been owed this long - measured
+    from ``due_at``, or the event's ``recorded_at`` where that is NULL - the
+    next deferral dead-letters it. None means a deferral that does not count is
+    counted after all, because nothing else would end the delivery. Read live,
+    like the curve."""

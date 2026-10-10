@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -10,6 +11,7 @@ from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery import run_relay as run_relay_module
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.run_relay import run_relay
 from django_domain_events.delivery.wake import wait_for_work
 from django_domain_events.delivery.write_alias import write_alias
@@ -218,7 +220,7 @@ def test_a_database_error_in_a_delivery_closes_the_connection(
     with transaction.atomic():
         fire(order)
 
-    def gone(delivery_id: int, *, worker_id: str) -> None:
+    def gone(delivery_id: int, *, worker_id: str, **_: object) -> None:
         raise OperationalError("terminating connection due to administrator command")
 
     monkeypatch.setattr(run_relay_module, "dispatch_one", gone)
@@ -565,3 +567,240 @@ def test_a_relay_refuses_a_batch_that_claims_nothing(size: int) -> None:
     with work owed."""
     with pytest.raises(ValueError, match="batch_size must be positive"):
         run_relay(worker_id="w1", passes=1, batch_size=size, **UNSAFE)
+
+
+# --- A deferral pauses its lane ----------------------------------------------
+
+
+def _throttled(seen: list[int]) -> RegisteredReceiver:
+    """A mail-lane receiver whose destination is throttling: every call defers
+    thirty seconds without counting. Past ten calls it raises a BaseException,
+    so a relay that kept attempting the lane fails rather than hangs."""
+
+    def throttled(evt: OrderPlaced) -> None:
+        seen.append(evt.order_id)
+        if len(seen) > 10:
+            raise _Runaway("the paused lane kept being attempted")
+        raise RetryAfter(30, reason="throttled", counts=False)
+
+    return RegisteredReceiver(
+        key="tests.throttled",
+        event_class=OrderPlaced,
+        func=throttled,
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=5,
+        eager=False,
+        site="relay",
+        lane="mail",
+        give_up_after=timedelta(days=1),
+    )
+
+
+class _Clock:
+    """An injected clock that idling moves on, ten seconds per wait."""
+
+    def __init__(self) -> None:
+        self.at = datetime.now(timezone.utc)
+
+    def __call__(self) -> datetime:
+        return self.at
+
+    def wait(self, timeout: float) -> bool:
+        self.at += timedelta(seconds=10)
+        return False
+
+
+def _given_back(key: str) -> list[int]:
+    return sorted(
+        DeliveryRecord.objects.filter(
+            receiver_key=key,
+            status=DeliveryStatus.CLAIMED,
+            lease_expires_at__lt=datetime.now(timezone.utc),
+        ).values_list("pk", flat=True)
+    )
+
+
+def _fire_three(order: OrderPlaced) -> None:
+    for _ in range(3):
+        with transaction.atomic():
+            fire(order)
+
+
+def test_a_deferral_pauses_the_lane_and_hands_back_the_rest_of_the_batch(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The rest of the batch is not attempted - every one would cost a call to
+    learn what the first already said - and it is claimable by any worker at
+    once. Two more passes inside the pause claim nothing: without the pause the
+    second would take a handed-back row straight back and defer it again."""
+    seen: list[int] = []
+    with receiver_registered(_throttled(seen)):
+        _fire_three(order)
+        clock = _Clock()
+
+        counts = run_relay(
+            worker_id="w1", passes=3, lane="mail", now=clock, wait=clock.wait, **UNSAFE
+        )
+
+        assert counts == {DeliveryStatus.FAILED: 1}
+        assert len(seen) == 1
+        handed_back = _given_back("tests.throttled")
+        assert len(handed_back) == 2
+        taken = claim_batch(
+            worker_id="w2",
+            now=datetime.now(timezone.utc),
+            lease=timedelta(minutes=5),
+            limit=10,
+            lane="mail",
+        )
+        assert sorted(taken) == handed_back
+
+
+@pytest.mark.parametrize(("passes", "attempted"), [(4, 1), (5, 2)])
+def test_the_pause_ends_when_the_requested_delay_has_passed_on_the_injected_clock(
+    order: OrderPlaced, record: list[str], passes: int, attempted: int
+) -> None:
+    """Thirty seconds asked for, ten per idle wait: passes two to four fall
+    inside the pause, and the fifth, at exactly thirty seconds, is past it."""
+    seen: list[int] = []
+    with receiver_registered(_throttled(seen)):
+        _fire_three(order)
+        clock = _Clock()
+
+        run_relay(worker_id="w1", passes=passes, lane="mail", now=clock, wait=clock.wait, **UNSAFE)
+
+    assert len(seen) == attempted
+
+
+def test_a_relay_serving_every_lane_delivers_the_rest_of_a_mixed_batch(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Only the deferring lane's unstarted rows go back; the default lane's
+    rows after the deferral are delivered in the same pass."""
+    seen: list[int] = []
+    with receiver_registered(_throttled(seen)):
+        _fire_three(order)
+        clock = _Clock()
+
+        counts = run_relay(
+            worker_id="w1", passes=1, lane=None, now=clock, wait=clock.wait, **UNSAFE
+        )
+
+        assert counts == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 6}
+        assert len(seen) == 1
+        assert len(_given_back("tests.throttled")) == 2
+
+
+def test_a_relay_serving_every_lane_keeps_claiming_the_other_lanes_while_one_is_paused(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Batches of three put the later events' rows in later claims. Those
+    claims leave the paused lane out and still take the default lane's rows;
+    without the exclusion the second claim would take a throttled row and
+    attempt it."""
+    seen: list[int] = []
+    with receiver_registered(_throttled(seen)):
+        _fire_three(order)
+        clock = _Clock()
+
+        counts = run_relay(
+            worker_id="w1",
+            passes=4,
+            lane=None,
+            batch_size=3,
+            now=clock,
+            wait=clock.wait,
+            **UNSAFE,
+        )
+
+        assert counts == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 6}
+        assert len(seen) == 1
+        assert (
+            DeliveryRecord.objects.filter(
+                receiver_key="tests.throttled", status=DeliveryStatus.PENDING
+            ).count()
+            == 2
+        ), "the paused lane's unclaimed rows were touched"
+
+
+def test_a_stop_after_a_deferral_hands_back_only_what_is_still_held(
+    order: OrderPlaced, record: list[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """The deferral already gave the throttled rows back. The stop gives back
+    the three default rows left unstarted, and counts those alone."""
+    seen: list[int] = []
+    with receiver_registered(_throttled(seen)):
+        _fire_three(order)
+        record.clear()
+        clock = _Clock()
+
+        with caplog.at_level(logging.INFO, logger="django_domain_events.delivery.run_relay"):
+            run_relay(
+                worker_id="w1",
+                lane=None,
+                stop=lambda: len(record) >= 3,
+                now=clock,
+                wait=clock.wait,
+                **UNSAFE,
+            )
+
+    assert "handed back 3 unstarted rows" in caplog.text
+
+
+def test_a_relay_whose_lane_is_paused_does_not_query_it(
+    order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The claim would come back empty anyway, since the paused lane is also
+    excluded from it. Skipping it spares a query per poll that would walk past
+    every row the lane is owed to find nothing."""
+    claims: list[dict[str, object]] = []
+    real = run_relay_module.claim_batch
+
+    def spy(**kwargs: object) -> list[int]:
+        claims.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(run_relay_module, "claim_batch", spy)
+    with receiver_registered(_throttled([])):
+        _fire_three(order)
+        clock = _Clock()
+
+        run_relay(worker_id="w1", passes=3, lane="mail", now=clock, wait=clock.wait, **UNSAFE)
+
+    assert len(claims) == 1, "a relay claimed from the lane it had paused"
+
+
+def test_a_set_aside_that_fails_abandons_the_batch(
+    order: OrderPlaced,
+    record: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    closes: list[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Which rows were in the paused lane is unknown after the failure, so none
+    of the rest is attempted - each could be another call to a throttled
+    destination - and the rows wait out their lease, as a crashed worker's do.
+    The relay itself goes on, and the lane is still paused."""
+    seen: list[int] = []
+
+    def broken(*args: object, **kwargs: object) -> int:
+        raise OperationalError("the connection is lost")
+
+    with receiver_registered(_throttled(seen)):
+        _fire_three(order)
+        monkeypatch.setattr(run_relay_module, "hand_back", broken)
+        clock = _Clock()
+
+        counts = run_relay(
+            worker_id="w1", passes=3, lane=None, now=clock, wait=clock.wait, **UNSAFE
+        )
+
+        assert counts == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 2}
+        assert len(seen) == 1
+        abandoned = DeliveryRecord.objects.filter(
+            status=DeliveryStatus.CLAIMED, lease_expires_at__gt=datetime.now(timezone.utc)
+        )
+        assert abandoned.count() == 6, "the rest of the batch was not left to its lease"
+    assert "could not hand back the rows of paused lane mail" in caplog.text
+    assert closes == [write_alias()]

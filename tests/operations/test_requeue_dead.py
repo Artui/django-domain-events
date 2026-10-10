@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import pytest
@@ -8,6 +9,7 @@ from django.db import transaction
 
 from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
+from django_domain_events.models.event_record import EventRecord
 from django_domain_events.operations.requeue_dead import requeue_dead
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.testapp.events import OrderPlaced
@@ -198,3 +200,19 @@ def test_the_limit_stops_the_chunked_scan_early(
 
     assert requeue_dead(delivery_ids=ids, limit=1) == 1
     assert DeliveryRecord.objects.filter(status=DeliveryStatus.DEAD).count() == 1
+
+
+def test_a_requeued_row_is_owed_from_the_requeue(order: OrderPlaced, record: list[str]) -> None:
+    """A bound measured in time reads ``due_at``, and a dead letter requeued a
+    month after its event was recorded must not be past that bound already."""
+    with transaction.atomic():
+        fire(order)
+    EventRecord.objects.update(recorded_at=datetime.now(timezone.utc) - timedelta(days=30))
+    DeliveryRecord.objects.update(status=DeliveryStatus.DEAD)
+
+    before = datetime.now(timezone.utc)
+    requeue_dead()
+
+    due = list(DeliveryRecord.objects.values_list("due_at", flat=True))
+    assert len(due) == 2
+    assert all(due_at is not None and due_at >= before for due_at in due)

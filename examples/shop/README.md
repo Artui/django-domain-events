@@ -43,6 +43,7 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
 | The marketplace answers `410 Gone` | `PermanentFailure` dead-lettering on the attempt that raised it, one of five spent |
 | The carrier asks for two minutes | `RetryAfter` scheduling the next attempt when it asked, and counting the attempt |
 | The customs broker asks for two days | the request clamped to `MAX_RECEIVER_RETRY_DELAY_SECONDS`, with a warning naming both numbers |
+| The mail quota is spent for the day | `RetryAfter(counts=False)` spending no attempt and coming back between the hour asked and twice that, bounded by `give_up_after` |
 | Two partners subscribe to orders | an `AnyEvent` receiver with `targets=`: one delivery row per partner, and none for an event nobody subscribed to |
 | The partners change, then a replay | `replay_events` asking for the targets again: a partner still subscribed is reopened, a new one added, one that left untouched |
 | A consumed event, then a prune | `Retention.SUCCEEDED` deleting `StockReserved` once delivered while the orders stay for `RETENTION_DAYS`, and `quiet_receivers` still knowing its receiver ran |
@@ -87,11 +88,16 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
 10. **`book_customs_clearance`** - `RetryAfter` past the ceiling. A delivery
     parked in the future is still owed and keeps its event past retention, so
     the relay caps the wait and says so.
-11. **`forward_to_partners`** - declared for `AnyEvent` with
+11. **`email_dispatch_notice`** - `RetryAfter(counts=False)`, because a spent
+    daily quota is a limit on the mail provider, not a failure of the email. It
+    spends no attempt, comes back between the hour asked and twice that, and
+    pauses the mail lane in the relay that heard it; `give_up_after=timedelta(days=2)`
+    is what still ends it.
+12. **`forward_to_partners`** - declared for `AnyEvent` with
     `targets=partners_subscribed`, because it is a transport: it forwards every
     event, to whichever partners a table says want it, with a delivery row per
     partner. Nothing subscribed means no row at all.
-12. **`StockReserved`** - `retention=Retention.SUCCEEDED`, because it is
+13. **`StockReserved`** - `retention=Retention.SUCCEEDED`, because it is
     bookkeeping between two of our own steps and worth nothing once delivered.
     The next prune deletes it with its delivery rows; a dead letter would keep it
     for `RETENTION_DAYS` so it could still be requeued.

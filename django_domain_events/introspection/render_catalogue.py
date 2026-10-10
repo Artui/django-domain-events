@@ -131,6 +131,12 @@ def _receiver_table(receivers: tuple[CatalogueReceiver, ...]) -> list[str]:
                 f"`--lane {_cell(receiver.lane)}`.",
                 "",
             ]
+        if receiver.give_up_after_seconds is not None:
+            lines += [
+                f"`{_cell(receiver.key)}` dead-letters a deferral once its delivery has "
+                f"been owed for {receiver.give_up_after_seconds:g}s.",
+                "",
+            ]
     return lines
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import random
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -13,6 +14,7 @@ from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.fire import call_receiver
+from django_domain_events.delivery.hand_back import hand_back
 from django_domain_events.delivery.permanent_failure import PermanentFailure
 from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.write_alias import write_alias
@@ -21,10 +23,19 @@ from django_domain_events.settings import get_task_backend, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_status import DeliveryStatus
-from django_domain_events.types.registered_receiver import RegisteredReceiver
+from django_domain_events.types.registered_receiver import DEFAULT_LANE, RegisteredReceiver
 from django_domain_events.utils import TERMINAL, decode_payload, parse_datetime
 
 logger = logging.getLogger(__name__)
+
+OnDeferral = Callable[[str, float], None]
+"""Told the lane and the requested delay, in seconds, of a deferral that did
+not count and was recorded. The relay pauses that lane on hearing it."""
+
+# The receivers already warned about raising ``RetryAfter(counts=False)`` with
+# no ``give_up_after``. Per process, because the warning is about a declaration
+# and a twenty-thousand row burst should say so once, not twenty thousand times.
+_WARNED_UNBOUNDED: set[str] = set()
 
 
 def deliver_one(
@@ -61,7 +72,29 @@ def deliver_one(
     take. A second copy of the message, a copy the queue held past its lease,
     and a copy for a row that has since settled all fail the take and return
     ``None`` without running the receiver.
+
+    A receiver deferring with ``RetryAfter(counts=False)`` is recorded here as
+    anywhere, but pauses nothing: a pause belongs to the relay process that
+    claimed the row's batch, and a call made directly holds no batch.
     """
+    return _deliver_one(
+        delivery_id,
+        worker_id=worker_id,
+        claimed_by=claimed_by,
+        claimed_at=claimed_at,
+        on_deferral=None,
+    )
+
+
+def _deliver_one(
+    delivery_id: int,
+    *,
+    worker_id: str | None,
+    claimed_by: str | None,
+    claimed_at: str | None,
+    on_deferral: OnDeferral | None,
+) -> DeliveryStatus | None:
+    """``deliver_one``, telling ``on_deferral`` of a deferral that did not count."""
     from django_domain_events.models.delivery_record import DeliveryRecord
 
     if claimed_by is not None or claimed_at is not None:
@@ -181,6 +214,13 @@ def deliver_one(
         # The receiver's verdict is read here, at the one boundary every
         # execution site shares, and nowhere else. Both are ordinary failures
         # in every other respect: the attempt counts and the message is kept.
+        # A deferral that does not count is the exception, and the guard is one
+        # arc of two conjuncts: the type is held by
+        # test_an_ordinary_exception_is_not_read_as_a_deferral (an exception
+        # with no ``counts`` would raise AttributeError here), ``counts`` by
+        # test_a_counting_retry_after_still_spends_its_attempt.
+        if isinstance(exc, RetryAfter) and not exc.counts:
+            return _defer(fence, delivery, receiver, exc, attempt, on_deferral)
         return _fail(
             fence,
             delivery,
@@ -290,8 +330,15 @@ class _Fence:
         return fields["status"]
 
 
-def dispatch_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryStatus | None:
+def dispatch_one(
+    delivery_id: int, *, worker_id: str | None = None, on_deferral: OnDeferral | None = None
+) -> DeliveryStatus | None:
     """Deliver this row, or hand it to the task backend if that is its site.
+
+    ``on_deferral`` is told when the receiver deferred without counting and
+    the deferral was recorded, so the caller can pause that lane. Only for a
+    row run here: one handed to a task backend defers inside the task, in a
+    process holding no batch to pause.
 
     An enqueued row stays CLAIMED under its lease and is not counted as an
     outcome: nothing has happened to it yet. If the enqueue is lost the lease
@@ -315,7 +362,13 @@ def dispatch_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryS
     )
     receiver = registry.receiver_for_key(receiver_key) if receiver_key else None
     if receiver is None or receiver.site != "task":
-        return deliver_one(delivery_id, worker_id=worker_id)
+        return _deliver_one(
+            delivery_id,
+            worker_id=worker_id,
+            claimed_by=None,
+            claimed_at=None,
+            on_deferral=on_deferral,
+        )
 
     # Looked up only for a receiver that asked for it, so a misconfigured
     # TASK_BACKEND cannot break receivers that never wanted one.
@@ -395,6 +448,130 @@ def _fail(
     if outcome is not None:
         _notify_failure(row, status=status, attempt=attempts, error=truncated)
     return outcome
+
+
+def _defer(
+    fence: _Fence,
+    row: Any,
+    receiver: RegisteredReceiver,
+    exc: RetryAfter,
+    attempt: int,
+    on_deferral: OnDeferral | None,
+) -> DeliveryStatus | None:
+    """Record a deferral that does not count, or the give-up that ends it.
+
+    ``attempts`` is never written here, whatever the outcome, and that is the
+    invariant the whole feature is: an attempt is counted by the outcome of an
+    attempt - a success, an ordinary failure, a counting ``RetryAfter`` - and
+    the claim never touches it. ``on_failure`` is told the attempt number the
+    receiver's context carried, which the next run is given again.
+
+    With no ``give_up_after`` nothing would end the delivery, so the deferral
+    is counted after all, with a warning once per receiver per process
+    (``test_a_deferral_with_no_give_up_after_counts_and_says_so_once``).
+
+    The bound is measured from ``due_at``, or the event's ``recorded_at`` where
+    that is NULL, which is when a row nobody has reopened became owed. Each arm
+    has a test that fails without it: NULL -
+    ``test_a_deferral_past_give_up_after_dead_letters_the_row``; ``due_at`` -
+    ``test_due_at_is_read_before_the_event_timestamp`` and the replay test
+    ``test_a_replayed_old_event_is_not_dead_lettered_on_its_first_deferral``.
+    Past the bound the row is dead-lettered as a spent budget is: ``DEAD``,
+    ``completed_at``, ``on_failure``, and a ``last_error`` naming the bound.
+
+    Otherwise the next attempt is scheduled between the requested delay and
+    twice that, clamped to ``MAX_RECEIVER_RETRY_DELAY_SECONDS``: never earlier
+    than the destination asked, and spread so that rows deferred together do
+    not return together. The caller is told the lane and the delay asked for,
+    not the jittered one, because a pause longer than asked holds back rows
+    the destination is ready for - and only once the deferral is recorded,
+    since a worker that lost the row has no say over its lane
+    (``test_a_deferral_this_worker_could_not_record_pauses_nothing``).
+    """
+    message = f"{type(exc).__name__}: {exc}"
+    if receiver.give_up_after is None:
+        _warn_unbounded(receiver.key)
+        return _fail(fence, row, receiver, message, attempt=attempt, requested_delay=exc.seconds)
+
+    now = datetime.now(timezone.utc)
+    owed_since = row.due_at if row.due_at is not None else row.event.recorded_at
+    if _given_up(owed_since, now, receiver.give_up_after):
+        truncated = (
+            f"Gave up: owed since {owed_since.isoformat()}, past "
+            f"give_up_after={receiver.give_up_after}, and still deferred. {message}"
+        )[:2000]
+        outcome = fence.write(status=DeliveryStatus.DEAD, last_error=truncated, completed_at=now)
+        if outcome is not None:
+            _notify_failure(row, status=DeliveryStatus.DEAD, attempt=attempt, error=truncated)
+        return outcome
+
+    requested = _capped(row, exc.seconds)
+    ceiling = timedelta(seconds=setting("MAX_RECEIVER_RETRY_DELAY_SECONDS"))
+    truncated = message[:2000]
+    outcome = fence.write(
+        status=DeliveryStatus.FAILED,
+        last_error=truncated,
+        completed_at=None,
+        available_at=now + min(requested * (1 + random.random()), ceiling),
+    )
+    if outcome is not None:
+        _notify_failure(row, status=DeliveryStatus.FAILED, attempt=attempt, error=truncated)
+        if on_deferral is not None:
+            on_deferral(receiver.lane, requested.total_seconds())
+    return outcome
+
+
+def _given_up(owed_since: datetime, now: datetime, bound: timedelta) -> bool:
+    """Whether a row owed since ``owed_since`` has reached ``bound`` at ``now``.
+
+    At exactly the bound it has: ``give_up_after=timedelta(days=1)`` means a
+    day and no longer. Its own function so both sides of the comparison can be
+    pinned, which a real clock cannot do
+    (``test_the_bound_is_reached_at_exactly_give_up_after``).
+    """
+    return now - owed_since >= bound
+
+
+def _warn_unbounded(receiver_key: str) -> None:
+    """Say once per process that a receiver defers with nothing to end it."""
+    if receiver_key in _WARNED_UNBOUNDED:
+        return
+    _WARNED_UNBOUNDED.add(receiver_key)
+    logger.warning(
+        "receiver %s raised RetryAfter(counts=False) but declares no give_up_after, "
+        "so nothing would ever end its deliveries; the deferral was counted against "
+        "max_attempts instead. Declare give_up_after= on the receiver. Said once per "
+        "process.",
+        receiver_key,
+    )
+
+
+def partition_by_lane(delivery_ids: list[int], lane: str) -> tuple[list[int], list[int]]:
+    """Split ids into those whose receiver is in ``lane`` and the rest, in order.
+
+    What a worker uses on a deferral to find which of its unstarted rows to
+    hand back. Shared by ``run_relay`` and ``deliver_pending`` as
+    ``claim_size`` is. Membership is the registry's, as the claim reads it: a
+    row whose receiver no longer exists is in the default lane, which is where
+    it drains (``test_a_deleted_receivers_row_is_in_the_default_lane``).
+
+    One query, run only on a deferral. A batch claimed for one lane needs no
+    split - every row is in it - but asking is what lets a relay serving every
+    lane hand back the throttled lane's rows and go on delivering the others.
+    """
+    from django_domain_events.models.delivery_record import DeliveryRecord
+
+    keys = dict(
+        DeliveryRecord.objects.filter(pk__in=delivery_ids).values_list("pk", "receiver_key")
+    )
+    inside = [pk for pk in delivery_ids if _lane_of(keys.get(pk, "")) == lane]
+    return inside, [pk for pk in delivery_ids if pk not in inside]
+
+
+def _lane_of(receiver_key: str) -> str:
+    """The lane a row is claimed in: its receiver's, or the default for none."""
+    receiver = registry.receiver_for_key(receiver_key)
+    return DEFAULT_LANE if receiver is None else receiver.lane
 
 
 def claim_size(batch_size: int | None) -> int:
@@ -521,6 +698,12 @@ def deliver_pending(
     one lease: accepting both would silently ignore the batch, and claiming a
     hundred rows at once is what a small batch is asked for to prevent
     (``test_a_limit_and_a_batch_size_together_are_refused``).
+
+    A receiver deferring with ``RetryAfter(counts=False)`` sets its lane aside
+    for the rest of the call: the lane's unstarted rows in the batch are
+    handed back rather than attempted, and later claims leave the lane out,
+    while every other lane goes on being delivered
+    (``test_a_deferral_sets_its_lane_aside_and_the_pass_delivers_the_rest``).
     """
     if limit is not None and batch_size is not None:
         raise ValueError(
@@ -532,18 +715,36 @@ def deliver_pending(
     batch_size = claim_size(batch_size)
 
     counts: dict[DeliveryStatus, int] = {}
+    # Lanes set aside for the rest of this call by a deferral that did not
+    # count. For the rest of the call rather than for the requested delay: a
+    # pass has no clock to wait on, and with the backoff ignored - as
+    # drain_outbox ignores it - nothing else would stop it claiming the
+    # deferred row again, forever (test_a_drain_meeting_a_deferral_ends).
+    paused: set[str] = set()
+    deferred: list[str] = []
     while True:
+        claimed_at = datetime.now(timezone.utc)
         ids = claim_batch(
             worker_id=worker_id,
-            now=datetime.now(timezone.utc),
+            now=claimed_at,
             lease=lease,
             limit=limit if limit is not None else batch_size,
             ignore_backoff=ignore_backoff,
             lane=lane,
+            exclude_lanes=paused,
         )
-        for delivery_id in ids:
-            outcome = dispatch_one(delivery_id, worker_id=worker_id)
+        unstarted = list(ids)
+        while unstarted:
+            outcome = dispatch_one(
+                unstarted.pop(0),
+                worker_id=worker_id,
+                on_deferral=lambda deferred_lane, _seconds: deferred.append(deferred_lane),
+            )
             if outcome is not None:
                 counts[outcome] = counts.get(outcome, 0) + 1
+            while deferred:
+                paused.add(deferred[-1])
+                to_give_back, unstarted = partition_by_lane(unstarted, deferred.pop())
+                hand_back(to_give_back, worker_id=worker_id, claimed_at=claimed_at)
         if limit is not None or not ids:
             return counts

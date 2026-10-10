@@ -67,6 +67,9 @@ def _described(receivers: Iterable[RegisteredReceiver]) -> tuple[CatalogueReceiv
             backoff_base_seconds=r.backoff_base_seconds,
             backoff_cap_seconds=r.backoff_cap_seconds,
             lane=r.lane,
+            give_up_after_seconds=(
+                None if r.give_up_after is None else r.give_up_after.total_seconds()
+            ),
         )
         for r in sorted(receivers, key=lambda r: r.key)
     )

@@ -250,3 +250,59 @@ def test_without_named_lanes_the_default_lane_sends_the_unfiltered_claim() -> No
         return [q["sql"] for q in captured.captured_queries]
 
     assert sql(lane="default") == sql()
+    assert sql(exclude_lanes=()) == sql(), "a relay with nothing paused changed its claim"
+
+
+def test_a_paused_named_lane_is_left_out_of_a_claim_of_every_lane(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """What lets a relay serving every lane keep the others flowing while one
+    destination is throttling."""
+    with receiver_registered(_mail()):
+        with transaction.atomic():
+            fire(order)
+        ids = claim_batch(worker_id="w1", now=_now(), lease=LEASE, limit=10, exclude_lanes={"mail"})
+
+    assert _keys(ids) == DEFAULT_LANE_KEYS
+
+
+def test_a_paused_default_lane_leaves_only_the_named_lanes(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    with receiver_registered(_mail()):
+        with transaction.atomic():
+            fire(order)
+        ids = claim_batch(
+            worker_id="w1", now=_now(), lease=LEASE, limit=10, exclude_lanes={"default"}
+        )
+
+    assert _keys(ids) == {"tests.mail"}
+
+
+def test_a_paused_default_lane_with_no_named_lanes_claims_nothing(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The default lane is *not the named ones*, so excluding it negates a
+    negated ``__in`` over no values at all - which has to come out as nothing,
+    not everything, on every backend."""
+    with transaction.atomic():
+        fire(order)
+
+    assert (
+        claim_batch(worker_id="w1", now=_now(), lease=LEASE, limit=10, exclude_lanes={"default"})
+        == []
+    )
+
+
+def test_a_paused_lane_covers_its_lapsed_claims_too(order: OrderPlaced, record: list[str]) -> None:
+    """The rows a relay hands back on a deferral are lapsed claims, and those
+    are exactly the ones it must not take straight back."""
+    with receiver_registered(_mail()):
+        with transaction.atomic():
+            fire(order)
+        claim_batch(worker_id="dead", now=_now(), lease=timedelta(seconds=1), limit=10)
+        later = _now() + timedelta(seconds=30)
+
+        ids = claim_batch(worker_id="w1", now=later, lease=LEASE, limit=10, exclude_lanes={"mail"})
+
+    assert _keys(ids) == DEFAULT_LANE_KEYS

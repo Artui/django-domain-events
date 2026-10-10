@@ -248,6 +248,23 @@ class Command(BaseCommand):
             before + timedelta(days=1) <= closed.available_at <= after + timedelta(days=1),
             True,
         )
+        quota = DeliveryRecord.objects.get(receiver_key="shop.email_dispatch_notice")
+        deferred = quota.available_at - before
+        print(
+            f"   {quota.receiver_key}: {quota.status} after {quota.attempts} attempts, "
+            f"next in {deferred.total_seconds():.0f}s"
+        )
+        print(f"         {quota.last_error}")
+        check(
+            "RetryAfter(counts=False) spends no attempt",
+            (quota.status, quota.attempts),
+            ("failed", 0),
+        )
+        check(
+            "and comes back between the hour asked and twice that",
+            before + timedelta(hours=1) <= quota.available_at <= after + timedelta(hours=2),
+            True,
+        )
         check(
             "and the clamp is logged",
             [m for m in warnings.messages if "MAX_RECEIVER_RETRY_DELAY_SECONDS" in m] != [],
