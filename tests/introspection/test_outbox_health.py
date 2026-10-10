@@ -15,7 +15,7 @@ from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.utils import TERMINAL
-from tests.introspection.conftest import Plans, delivery_table_access
+from tests.conftest import Plans, delivery_table_access
 from tests.testapp.events import OrderPlaced
 
 pytestmark = pytest.mark.django_db

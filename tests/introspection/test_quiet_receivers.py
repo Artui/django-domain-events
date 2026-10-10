@@ -20,8 +20,7 @@ from django_domain_events.operations.requeue_dead import requeue_dead
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
-from tests.conftest import receiver_registered
-from tests.introspection.conftest import Plans, delivery_table_access
+from tests.conftest import Plans, delivery_table_access, receiver_registered
 from tests.testapp.events import OrderPlaced
 
 pytestmark = pytest.mark.django_db

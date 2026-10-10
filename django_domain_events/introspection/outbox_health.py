@@ -7,7 +7,7 @@ from django.db import models
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.outbox_health import OutboxHealth
 from django_domain_events.types.receiver_backlog import ReceiverBacklog
-from django_domain_events.utils import RETRYABLE
+from django_domain_events.utils import owed
 
 
 def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
@@ -29,19 +29,14 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
     moment = now or datetime.now(timezone.utc)
     # Every predicate below is a partial index's own condition, word for word,
     # because that is the only form Postgres matches a partial index to: "not
-    # terminal" means the same rows and implies neither condition, so it read
-    # the whole delivered history on every scrape. The OR of two conditions
-    # is answered by OR-ing the two indexes' bitmaps.
-    #
-    # Listing the owed statuses gives up the one thing "not terminal" had:
-    # it could not miss a status added later. That is held by a test instead
-    # (test_every_status_is_counted_owed_or_settled_exactly_once), which goes
-    # red the moment a status exists that is neither listed here nor terminal.
-    is_owed = models.Q(status__in=RETRYABLE) | models.Q(status=DeliveryStatus.CLAIMED)
+    # terminal" means the same rows and implies none of the conditions, so it
+    # read the whole delivered history on every scrape. See ``owed`` for what
+    # holds the list of owed statuses complete.
+    is_owed = owed()
     is_dead = models.Q(status=DeliveryStatus.DEAD)
-    owed = DeliveryRecord.objects.filter(is_owed)
+    owed_rows = DeliveryRecord.objects.filter(is_owed)
 
-    totals = owed.aggregate(
+    totals = owed_rows.aggregate(
         owed=models.Count("pk"),
         claimed=models.Count("pk", filter=models.Q(status=DeliveryStatus.CLAIMED)),
         oldest=models.Min("event__recorded_at"),

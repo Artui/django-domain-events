@@ -13,11 +13,13 @@ import hashlib
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from importlib import import_module
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from django.db import IntegrityError, connection, transaction
 from django.db.migrations.executor import MigrationExecutor
+from django.test.utils import CaptureQueriesContext
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -156,3 +158,67 @@ def test_the_conversion_reaches_every_row_across_batches(
 
     MigrationExecutor(connection).migrate(BEFORE)
     assert _stored(BEFORE) == {t: hashlib.sha256(t.encode()).hexdigest() for t in TARGETS}
+
+
+class _RecordingPostgresEditor:
+    """Stands in for a Postgres schema editor: records the SQL it is handed.
+
+    What lets the SQLite suite, which gates coverage, reach the Postgres
+    branch. The real statements run in the guarded test below and in every
+    round trip above when the suite runs on Postgres.
+    """
+
+    connection = SimpleNamespace(vendor="postgresql")
+
+    def __init__(self) -> None:
+        self.executed: list[str] = []
+
+    def quote_name(self, name: str) -> str:
+        return f'"{name}"'
+
+    def execute(self, sql: str) -> None:
+        self.executed.append(sql)
+
+
+def test_postgres_converts_the_column_in_place_in_both_directions() -> None:
+    state = MigrationExecutor(connection).loader.project_state(BEFORE)
+    editor = _RecordingPostgresEditor()
+    operation = migration.ConvertDigest()
+    # What ``migrate --plan`` and ``sqlmigrate`` print for it.
+    assert operation.describe() == "Store the delivery target digest as raw bytes"
+
+    operation.database_forwards(APP, editor, state, state)
+    operation.database_backwards(APP, editor, state, state)
+
+    table = '"django_domain_events_deliveryrecord"'
+    assert editor.executed == [
+        f'ALTER TABLE {table} ALTER COLUMN "target_digest" TYPE bytea '
+        "USING decode(\"target_digest\", 'hex')",
+        f'ALTER TABLE {table} ALTER COLUMN "target_digest" TYPE varchar(64) '
+        "USING encode(\"target_digest\", 'hex')",
+    ]
+
+
+@pytest.mark.skipif(
+    connection.vendor != "postgresql", reason="asserts the statement Postgres is sent"
+)
+def test_postgres_rewrites_the_table_once_instead_of_swapping_columns(
+    at_the_previous_schema: MigrationExecutor,
+) -> None:
+    """The swap updates every row and leaves a dead copy of each until a
+    ``VACUUM FULL``; the in-place ``ALTER`` is one compact rewrite. So on
+    Postgres no row is updated and no temporary column appears, in either
+    direction, and the round trip still restores every hex digest."""
+    _populate_the_old_schema()
+    before = _stored(BEFORE)
+
+    with CaptureQueriesContext(connection) as forwards:
+        MigrationExecutor(connection).migrate(AFTER)
+    with CaptureQueriesContext(connection) as backwards:
+        MigrationExecutor(connection).migrate(BEFORE)
+
+    for captured, using in ((forwards, "decode"), (backwards, "encode")):
+        sql = [q["sql"] for q in captured.captured_queries]
+        assert any("TYPE bytea" in s or "TYPE varchar(64)" in s for s in sql if using in s), sql
+        assert not any(s.startswith("UPDATE") or "target_digest_raw" in s for s in sql), sql
+    assert _stored(BEFORE) == before

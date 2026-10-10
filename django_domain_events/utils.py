@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any, cast
 
 from django.apps import apps
-from django.db import connections
+from django.db import connections, models
 
 from django_domain_events.declaration.registry import registry
 from django_domain_events.payload_upgrade_failed import PayloadUpgradeFailed
@@ -35,6 +35,24 @@ whose WHERE clause implies the index's own condition, so a query that phrased
 the whole table instead. CLAIMED is the other owed status, and has an index of
 its own.
 """
+
+
+def owed() -> models.Q:
+    """Not terminal, phrased as the two owed partial indexes' own conditions.
+
+    The rows ``exclude(status__in=TERMINAL)`` means, in the one form Postgres
+    matches to those indexes: each arm implies one index's condition, and the
+    OR is answered by OR-ing the two indexes' bitmaps, so a query filtering on
+    this reads the owed rows and nothing of the delivered history.
+
+    Listing the owed statuses gives up what "not terminal" had: it could not
+    miss a status added later, and a hand-written list once omitted CLAIMED.
+    Both are held by tests rather than by the phrasing - one row in every
+    status, owed exactly when not terminal
+    (test_every_status_is_counted_owed_or_settled_exactly_once, and
+    test_the_orphan_warning_counts_every_owed_status_and_no_other).
+    """
+    return models.Q(status__in=RETRYABLE) | models.Q(status=DeliveryStatus.CLAIMED)
 
 
 def label_for(module: str, fallback_name: str) -> str:

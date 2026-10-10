@@ -1,5 +1,6 @@
 import django.db.models.deletion
 from django.db import migrations, models
+from django.db.migrations.operations.base import Operation
 
 import django_domain_events.models.target_digest_field
 
@@ -12,13 +13,12 @@ BATCH = 2000
 def _copy(apps, schema_editor, source, dest, convert):
     """Fill ``dest`` from ``source`` on every delivery row, converted in Python.
 
-    In Python rather than SQL because no expression spells hex-to-bytes on
-    every backend: Postgres has ``decode(..., 'hex')``, SQLite has ``unhex()``
-    only from 3.41, and MySQL has ``UNHEX()``. A branch per vendor would also
-    leave all but one untested by the SQLite suite that gates coverage. The
-    parameters are bound by the driver, which is what makes the same bytes
-    land as a ``bytea``, a ``BLOB`` or a ``varbinary`` without this file
-    knowing which.
+    The path for every backend but Postgres, which converts in place (see
+    ConvertDigest). In Python rather than SQL because no expression spells
+    hex-to-bytes on the rest: SQLite has ``unhex()`` only from 3.41, and MySQL
+    spells it ``UNHEX()``. The parameters are bound by the driver, which is
+    what makes the same bytes land as a ``BLOB`` or a ``varbinary`` without
+    this file knowing which.
 
     Paged by primary key rather than by offset, so each page is an index range
     and a row is neither skipped nor read twice
@@ -46,6 +46,118 @@ def raw_to_hex(apps, schema_editor):
     _copy(apps, schema_editor, "target_digest_raw", "target_digest", lambda v: bytes(v).hex())
 
 
+# The portable swap: a new column filled from the old one, which then takes its
+# place. The old constraint is dropped before the fill so that in reverse it is
+# re-added only after the hex has been written back, and the old column is made
+# nullable before the fill for the same reason: undoing the RemoveField re-adds
+# it to a populated table before the hex is back, which a NOT NULL column
+# without a default refuses.
+_SWAP = [
+    migrations.RemoveConstraint(
+        model_name="deliveryrecord",
+        name="unique_delivery_per_event_receiver_and_target",
+    ),
+    migrations.AlterField(
+        model_name="deliveryrecord",
+        name="target_digest",
+        field=models.CharField(editable=False, max_length=64, null=True),
+    ),
+    migrations.AddField(
+        model_name="deliveryrecord",
+        name="target_digest_raw",
+        field=models.BinaryField(null=True),
+    ),
+    migrations.RunPython(hex_to_raw, raw_to_hex),
+    migrations.RemoveField(model_name="deliveryrecord", name="target_digest"),
+    migrations.RenameField(
+        model_name="deliveryrecord", old_name="target_digest_raw", new_name="target_digest"
+    ),
+    migrations.AlterField(
+        model_name="deliveryrecord",
+        name="target_digest",
+        field=django_domain_events.models.target_digest_field.TargetDigestField(),
+    ),
+    migrations.AddConstraint(
+        model_name="deliveryrecord",
+        constraint=models.UniqueConstraint(
+            fields=("event", "receiver_key", "target_digest"),
+            name="unique_delivery_per_event_receiver_and_target",
+        ),
+    ),
+]
+
+_POSTGRES = {
+    "forwards": "ALTER TABLE {table} ALTER COLUMN {column} TYPE bytea USING decode({column}, 'hex')",
+    "backwards": (
+        "ALTER TABLE {table} ALTER COLUMN {column} TYPE varchar(64) USING encode({column}, 'hex')"
+    ),
+}
+
+
+class ConvertDigest(Operation):
+    """The digest column, from 64 hex characters to the 32 bytes they spell.
+
+    Not an AlterField: Django would cast the hex text to the 64 bytes that
+    spell it on Postgres, and on SQLite copy the text into the rebuilt table
+    unchanged - both a digest no new row would ever match.
+
+    On Postgres, one ``ALTER COLUMN ... TYPE ... USING`` in each direction.
+    That rewrites the table once, compactly, and rebuilds the unique index
+    from the converted values, where the portable swap leaves a dead version
+    of every row and the dropped column's bytes in every live one until a
+    ``VACUUM FULL``. Every other backend runs the swap.
+
+    The state is the swap's, whichever ran, so both paths end at the same
+    model: the Postgres path is measured against it by the round-trip and
+    makemigrations tests on Postgres, and its SQL by
+    test_postgres_converts_the_column_in_place_in_both_directions.
+    """
+
+    reversible = True
+
+    def state_forwards(self, app_label, state):
+        for operation in _SWAP:
+            operation.state_forwards(app_label, state)
+
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        if schema_editor.connection.vendor == "postgresql":
+            schema_editor.execute(self._postgres("forwards", schema_editor, from_state))
+            return
+        for operation, before, after in self._steps(app_label, from_state):
+            operation.database_forwards(app_label, schema_editor, before, after)
+
+    def database_backwards(self, app_label, schema_editor, from_state, to_state):
+        # Django passes the state *after* this operation as from_state when
+        # unapplying, so the swap's states are rebuilt from to_state, the one
+        # before it, and walked in reverse.
+        if schema_editor.connection.vendor == "postgresql":
+            schema_editor.execute(self._postgres("backwards", schema_editor, to_state))
+            return
+        for operation, before, after in reversed(self._steps(app_label, to_state)):
+            operation.database_backwards(app_label, schema_editor, after, before)
+
+    def describe(self):
+        return "Store the delivery target digest as raw bytes"
+
+    @staticmethod
+    def _postgres(direction, schema_editor, state):
+        model = state.apps.get_model(APP, "DeliveryRecord")
+        return _POSTGRES[direction].format(
+            table=schema_editor.quote_name(model._meta.db_table),
+            column=schema_editor.quote_name("target_digest"),
+        )
+
+    @staticmethod
+    def _steps(app_label, state):
+        steps = []
+        for operation in _SWAP:
+            after = state.clone()
+            operation.state_forwards(app_label, after)
+            steps.append((operation, state, after))
+            state = after
+        return steps
+
+
 class Migration(migrations.Migration):
     dependencies = [
         ("django_domain_events", "0005_deliveryrecord_target"),
@@ -61,15 +173,9 @@ class Migration(migrations.Migration):
     #    that came with it - its equality lookups move to ``dde_last_success``,
     #    built at the end.
     #
-    # 2. The digest becomes 32 raw bytes. Not an AlterField: Django would cast
-    #    the 64 hex characters to the 64 bytes that spell them on Postgres, and
-    #    on SQLite copy the text into the rebuilt table unchanged - both a
-    #    digest no new row would ever match. Instead a new column is filled
-    #    from the old one and takes its place. The old constraint is dropped
-    #    before the fill, so that in reverse it is re-added only after the hex
-    #    has been written back; on Postgres and SQLite the migration is one
-    #    transaction, so no other connection sees the table without it. This
-    #    rewrites every delivery row.
+    # 2. The digest becomes 32 raw bytes (ConvertDigest). This rewrites every
+    #    delivery row. On Postgres and SQLite the migration is one transaction,
+    #    so no other connection sees the table mid-conversion.
     #
     # 3. The new columns and indexes. Each column is nullable or has a default
     #    that means "as before", so none needs a backfill.
@@ -93,47 +199,7 @@ class Migration(migrations.Migration):
             name="receiver_key",
             field=models.CharField(max_length=255),
         ),
-        migrations.RemoveConstraint(
-            model_name="deliveryrecord",
-            name="unique_delivery_per_event_receiver_and_target",
-        ),
-        # Nullable for the length of the swap, and only for the reverse: undoing
-        # the RemoveField below re-adds the hex column to a populated table
-        # before the hex has been written back, which a NOT NULL column without
-        # a default refuses. Placed before the fill so that in reverse NOT NULL
-        # returns only once every row has its value again.
-        migrations.AlterField(
-            model_name="deliveryrecord",
-            name="target_digest",
-            field=models.CharField(editable=False, max_length=64, null=True),
-        ),
-        migrations.AddField(
-            model_name="deliveryrecord",
-            name="target_digest_raw",
-            field=models.BinaryField(null=True),
-        ),
-        migrations.RunPython(hex_to_raw, raw_to_hex),
-        migrations.RemoveField(
-            model_name="deliveryrecord",
-            name="target_digest",
-        ),
-        migrations.RenameField(
-            model_name="deliveryrecord",
-            old_name="target_digest_raw",
-            new_name="target_digest",
-        ),
-        migrations.AlterField(
-            model_name="deliveryrecord",
-            name="target_digest",
-            field=django_domain_events.models.target_digest_field.TargetDigestField(),
-        ),
-        migrations.AddConstraint(
-            model_name="deliveryrecord",
-            constraint=models.UniqueConstraint(
-                fields=("event", "receiver_key", "target_digest"),
-                name="unique_delivery_per_event_receiver_and_target",
-            ),
-        ),
+        ConvertDigest(),
         migrations.AddField(
             model_name="deliveryrecord",
             name="due_at",
