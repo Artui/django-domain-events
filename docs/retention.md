@@ -92,17 +92,20 @@ last delivery, with nothing to schedule:
 
 - **Every long-running relay sweeps**, whatever its `--lane`, so a deployment
   of lane relays prunes too. Several relays each sweep once per interval; that is
-  safe because the prune re-checks at the delete that an event is still due, and
-  it is cheap for the reason below.
+  safe against loss and double deletion because the prune re-checks at the
+  delete that an event is still due, and it is cheap for the reason below.
 - **A relay with work does not sweep.** The sweep runs from an idle pass, so a
   saturated relay defers it until it catches up, and a fleet that is never idle
   never prunes. If that is your deployment, schedule `prune_events` as well.
 - **`deliver_events --once` never sweeps.** It is a schedule's job, and the
   schedule can carry the prune.
 - **A sweep that fails is logged and the relay carries on**, without trying
-  again before the next interval.
-- A sweep is not interrupted by a stop request: the relay stops when it
-  returns, so the first sweep over a large backlog of already-due events is
+  again before the next interval. Two relays sweeping at the same moment with
+  different batches can deadlock over a receiver's last-success row; Postgres
+  ends one of them, it logs `could not prune`, and the next sweep finishes the
+  job.
+- A sweep is not interrupted by a stop request: the relay reads the stop after
+  it returns, so the first sweep over a large backlog of already-due events is
   better run by hand (`prune_events`) than by the first relay to start.
 
 Set [`RELAY_PRUNE`](settings.md#relay_prune) to `False` to turn it off when
@@ -135,8 +138,7 @@ dead letters about 3 ms; the ordinary window nothing measurable.
 
 That is the price of an idle sweep, once per relay per interval: with three
 relays and the default 60 seconds, about 36 ms of database time a minute for
-that population, and a few milliseconds for one with few events of its own
-alive. It grows with the live events that carry a retention of their own, not
+that population. It grows with the live events that carry a retention of their own, not
 with history, so a long `timedelta` window on a frequent event is what to watch,
 and the interval is the lever: raise `RELAY_PRUNE_SECONDS` before turning the
 sweep off.

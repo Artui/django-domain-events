@@ -25,14 +25,30 @@ from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.models.receiver_last_success import ReceiverLastSuccess
 from django_domain_events.operations.prune_events import prune_events
+from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.types.registered_receiver import RegisteredReceiver
 from tests.conftest import receiver_registered
-from tests.delivery.test_run_relay import _mail
-from tests.testapp.events import OrderPlaced
+from tests.testapp.events import OrderPlaced, calls
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 UNSAFE = {"allow_unsafe_concurrency": True}
+
+
+def _mail() -> RegisteredReceiver:
+    """A receiver in a named lane, so a relay can serve that lane."""
+    return RegisteredReceiver(
+        key="tests.sweep_mail",
+        event_class=OrderPlaced,
+        func=lambda evt: calls.append("mail"),
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=5,
+        eager=False,
+        site="relay",
+        lane="mail",
+    )
 
 
 def _consumed_event() -> EventRecord:
@@ -345,8 +361,10 @@ def test_two_relays_sweeping_the_same_batches_neither_fail_nor_delete_twice(
     connections already open, each makes up to 200 transactions over the same
     200 events (a batch of five rows is one event; a batch of three is smaller
     than an event, so those sweeps delete in chunks), and the loser of each
-    event trails the winner by one. Same-sized batches take the receivers'
-    last-success rows in the same order, which is why this cannot deadlock."""
+    event trails the winner by one. Same-sized batches started together take the
+    receivers' last-success rows in the same order, so this lockstep case does
+    not deadlock; real relays are not in lockstep, and the test below is the
+    realistic one."""
     newest, results, errors = _race(sizes)
 
     assert errors == []

@@ -95,15 +95,16 @@ def run_relay(
     branch at most once per ``RELAY_PRUNE_SECONDS``, the first one an interval
     after the relay starts rather than at its first idle pass: a relay that is
     restarted often, or run for a few passes, then never sweeps at all. Every
-    relay sweeps whatever its lane, which is safe because the prune re-checks at
-    the delete that an event is still due, and the interval is what keeps N
-    relays at N cheap queries per interval. ``RELAY_PRUNE`` set false turns it
-    off for a project that schedules the prune itself. The sweep is not
-    interrupted by ``stop``: a stop request is read when it returns.
+    relay sweeps whatever its lane. Nothing is lost or deleted twice, because
+    the prune re-checks at the delete that an event is still due; the interval
+    is what keeps N relays at N cheap queries per interval. ``RELAY_PRUNE`` set
+    false turns it off for a project that schedules the prune itself. The sweep
+    is not interrupted by ``stop``: a stop request is read after it returns.
 
     ``monotonic`` is the sweep's clock, apart from ``now`` because that one is a
-    wall-clock reading a test sets to any value it likes for the claim, and it
-    would stop an NTP step from silencing or flooding the sweep. It advances
+    wall-clock reading a test sets to any value it likes for the claim, and a
+    monotonic clock is not moved by an NTP step, which would silence or flood
+    the sweep. It advances
     only when a sweep was attempted, and a failed one counts: it is not retried
     before the next interval.
     """
