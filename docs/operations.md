@@ -16,6 +16,90 @@ python manage.py deliver_events --passes 5               # stop after five
 
 Run as many as you like on Postgres. On SQLite, run exactly one.
 
+### Stopping it
+
+`SIGTERM`, or `SIGINT` from Ctrl-C, asks the relay to stop. It finishes the
+delivery it is running, gives back the rest of the batch it claimed, and exits.
+A row given back keeps its place at the head of the queue and any other relay
+can claim it at once, rather than when its lease lapses (`LEASE_SECONDS`, five
+minutes by default). Giving a row back is expiring its lease, so until another
+relay takes it, it is counted in `outbox_health().lapsed_leases`.
+
+A second signal exits at once, with status 128 plus the signal number. The
+receiver running at that moment is interrupted and its transaction rolls back.
+Its row is reclaimed when the lease lapses, as a crashed worker's would be.
+
+How long a stop takes:
+
+- the rest of the running receiver, if one is running;
+- up to `POLL_SECONDS`, if the relay is idle and waiting for work;
+- up to 15 seconds, if the database is down and the relay is waiting between
+  claims (see below);
+- however long a connection attempt in progress takes to fail. Against an
+  address that drops packets rather than refusing them, that is the operating
+  system's TCP timeout, often minutes, because libpq sets no `connect_timeout`
+  by default. Set one in `DATABASES[...]["OPTIONS"]`, for example
+  `{"connect_timeout": 5}`.
+
+The stop applies to the relay. `deliver_events --once` does not handle signals:
+it is one pass, and a signal ends it the way it ends any other command.
+
+**`terminationGracePeriodSeconds` has to cover the longest receiver you run**,
+and usually that is the one that decides. Kubernetes' default is 30 seconds. A
+pod killed before its receiver finishes loses no delivery: the work rolls back
+and the row is retried once its lease lapses. But a side effect outside the
+database, such as an email, may already have happened, and it will happen again.
+
+Python only installs signal handlers on the main thread. If the command is
+started from any other thread, it says so on stderr and runs until `--passes`
+is spent, and stopping it is up to whatever started the thread. An embedding
+process can pass its own callable as `run_relay(stop=...)`. The relay reads it
+before every claim and before every delivery.
+
+### When the database goes away
+
+The relay stays up when its database goes away. A failed claim, delivery or
+wait is logged. After a database error the relay also closes its connection, so
+the next query opens a fresh one. The close matters more than catching the
+error. Django reconnects only a connection that has been closed, and a
+long-running process never reaches the request boundary where Django checks for
+a dead one. The relay spends nearly all its time waiting for work, so that is
+where a failover usually finds it. Without the close, a connection that died
+there would fail every later claim for as long as the process lived, while the
+pod looked healthy.
+
+A failed claim is retried after a pause. The pause starts at `POLL_SECONDS`,
+doubles on each consecutive failure up to 15 seconds, and resets at the first
+claim that succeeds. So the relay is working again within about 15 seconds of
+the database coming back, plus however long a connection attempt takes to fail
+(the `connect_timeout` above bounds that). A relay that exited instead would
+wait out its supervisor's restart backoff, which reaches five minutes under
+Kubernetes' `CrashLoopBackOff`.
+
+### A receiver holds a transaction open
+
+A `DURABLE` receiver runs inside the transaction that records its
+acknowledgement, which is what makes a database-only receiver effectively once.
+So anything it does outside the database, such as an HTTP call or an SMTP or SES
+send, happens with that transaction open for as long as the call takes:
+
+- **Behind pgbouncer in transaction-pooling mode**, that transaction pins a
+  server connection for the whole call. A pool sized for millisecond
+  transactions runs dry when every relay process holds a connection through a
+  one-second send.
+- **`idle_in_transaction_session_timeout`** counts the receiver's wait on the
+  outside world as idle time. If a call outlasts the timeout, the server ends
+  the session and the outcome is lost with it, so the row is delivered again
+  even though the call may already have happened. Set the timeout above your
+  slowest receiver for the role the relay connects as, for example
+  `ALTER ROLE relay SET idle_in_transaction_session_timeout = '5min'`.
+
+For a mail receiver, that shape is usually what you want. Store the provider's
+message id in the same transaction, and it commits with the acknowledgement:
+every row recorded as delivered then carries the id of the message that
+delivered it. Pay for the open transaction by sizing the pool and the timeout,
+rather than by moving the send out of the transaction.
+
 ### `LISTEN` / `NOTIFY`
 
 On Postgres the relay waits on a notification rather than polling, so an event
