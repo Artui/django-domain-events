@@ -187,7 +187,10 @@ def _deliver_eagerly(delivery_ids: list[int]) -> Callable[[], None]:
             only_ids=delivery_ids,
         )
         for delivery_id in claimed:
-            dispatch_one(delivery_id)
+            # As the worker that claimed it. Left to read the owner off the row,
+            # the fence would agree with whoever took the row since, and a
+            # site="task" hand-off would carry that worker's claim instead.
+            dispatch_one(delivery_id, worker_id="eager")
 
     return run
 

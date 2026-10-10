@@ -124,14 +124,77 @@ Then declare the receiver's execution site:
 def call_the_slow_api(evt: OrderPlaced) -> None: ...
 ```
 
-The relay claims the row and enqueues its id; the task runs the receiver and
-acknowledges. The row is still the debt, so a lost task is still owed.
+The relay claims the row and enqueues its id with the claim it holds; the task
+takes the row under that claim, runs the receiver and acknowledges. The row is
+still the debt, so a lost task is still owed.
 
 `DjangoTasksBackend` targets `django.tasks` on Django 6.0+ and falls back to the
 `django_tasks` backport on 4.2-5.2.
 
-`TaskBackend` is a `Protocol` with a single `enqueue(delivery_id)` method -
-anything satisfying it works, including Celery.
+### Celery
+
+```bash
+pip install "django-domain-events[celery]"
+```
+
+```python
+DJANGO_DOMAIN_EVENTS = {
+    "TASK_BACKEND": {
+        "BACKEND": "django_domain_events.delivery.celery_backend.CeleryBackend",
+        "queue": "events",  # optional; without it Celery's own routing decides
+    },
+}
+```
+
+The worker has to import the task, because a Celery worker runs a message by
+finding its name in its own registry and `autodiscover_tasks()` only looks for a
+`tasks` module in each app. Add the module to Celery's `imports`:
+
+```python
+app.conf.imports = ["django_domain_events.delivery.celery_backend"]
+# or, with app.config_from_object("django.conf:settings", namespace="CELERY"):
+CELERY_IMPORTS = ["django_domain_events.delivery.celery_backend"]
+```
+
+A worker without it logs the message as an unregistered task and drops it. The
+row stays owed and the relay hands it off again when the lease lapses, so nothing
+is lost, but nothing is delivered either.
+
+The task is registered as `django_domain_events.deliver_delivery`, a name that
+does not follow the module, so a message already on the broker still finds it
+after an upgrade moves the code.
+
+### What a task message carries
+
+`TaskBackend` is a `Protocol` with one method,
+`enqueue(delivery_id, claimed_by, claimed_at)`. The relay passes the claim by
+keyword. Anything satisfying it works; the worker side has to call
+
+```python
+deliver_one(delivery_id, claimed_by=claimed_by, claimed_at=claimed_at)
+```
+
+with the three values exactly as it was given them. `claimed_at` is an ISO 8601
+string, so all three are JSON and any queue can carry them unchanged.
+
+The claim is what makes a queue that delivers more than once safe. `acks_late`
+and a broker's visibility timeout both hand a worker a message whose task has
+already run, and a queue can hold a message until its lease has lapsed and the
+relay has handed the row to someone else. Before it runs anything, the task
+*takes* the row: one conditional update, committed on its own, that succeeds only
+while the row is still claimed under exactly the claim the message carries, and
+moves the claim to the task's worker. A second copy, a late copy, and a copy for
+a row that has since succeeded, failed or died all fail the take and do nothing.
+
+A task worker that dies mid-delivery is recovered by the row's lease, not by the
+queue redelivering: the redelivered copy finds the row taken by the worker that
+died, and the relay reclaims it once the lease lapses. Size `lease_seconds=` to
+cover the queue's backlog as well as the receiver's own run.
+
+`deliver_one` refuses a row that is not owed for every caller, with or without a
+claim: one that already succeeded, died or was orphaned, and one that failed and
+is still waiting out its backoff. It returns `None` for those without running the
+receiver.
 
 !!! warning "`site="task"` needs `mode=DURABLE` and a backend"
     A non-`DURABLE` mode is refused **at the decorator** - it has no row to hand
