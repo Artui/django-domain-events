@@ -16,6 +16,7 @@ from django_domain_events.delivery.deliver import claim_size, dispatch_one
 from django_domain_events.delivery.hand_back import hand_back
 from django_domain_events.delivery.wake import wait_for_work
 from django_domain_events.delivery.write_alias import write_alias
+from django_domain_events.operations.prune_events import prune_events
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import DEFAULT_LANE
@@ -41,6 +42,7 @@ def run_relay(
     allow_unsafe_concurrency: bool = False,
     lane: str | None = DEFAULT_LANE,
     batch_size: int | None = None,
+    monotonic: Callable[[], float] = time_module.monotonic,
 ) -> dict[DeliveryStatus, int]:
     """Claim and deliver until ``passes`` is spent, ``stop`` says so, or forever.
 
@@ -86,6 +88,24 @@ def run_relay(
     claimed under one lease, and a row still waiting its turn when that lease
     lapses is taken by another relay, so a slow lane wants a batch it can work
     through inside ``LEASE_SECONDS``.
+
+    A relay that finds nothing to claim also prunes, so an event declared to be
+    deleted on consumption goes within minutes without a ``prune_events`` cron
+    line. The sweep is ``prune_events()`` with its defaults, run from the idle
+    branch at most once per ``RELAY_PRUNE_SECONDS``, the first one an interval
+    after the relay starts rather than at its first idle pass: a relay that is
+    restarted often, or run for a few passes, then never sweeps at all. Every
+    relay sweeps whatever its lane, which is safe because the prune re-checks at
+    the delete that an event is still due, and the interval is what keeps N
+    relays at N cheap queries per interval. ``RELAY_PRUNE`` set false turns it
+    off for a project that schedules the prune itself. The sweep is not
+    interrupted by ``stop``: a stop request is read when it returns.
+
+    ``monotonic`` is the sweep's clock, apart from ``now`` because that one is a
+    wall-clock reading a test sets to any value it likes for the claim, and it
+    would stop an NTP step from silencing or flooding the sweep. It advances
+    only when a sweep was attempted, and a failed one counts: it is not retried
+    before the next interval.
     """
     connection = connections[write_alias()]
     if not (allow_unsafe_concurrency or connection.features.has_select_for_update_skip_locked):
@@ -99,6 +119,9 @@ def run_relay(
     lease = timedelta(seconds=setting("LEASE_SECONDS"))
     batch_size = claim_size(batch_size)
     poll = setting("POLL_SECONDS")
+    sweep = setting("RELAY_PRUNE")
+    sweep_every = setting("RELAY_PRUNE_SECONDS")
+    swept_at = monotonic()
 
     counts: dict[DeliveryStatus, int] = {}
     failed_claims = 0
@@ -132,6 +155,18 @@ def run_relay(
             if outcome is not None:
                 counts[outcome] = counts.get(outcome, 0) + 1
         if not ids:
+            # The guard is one branch arc, so each condition names the test that
+            # fails without it. ``sweep``: test_a_relay_with_the_sweep_turned_
+            # off_never_prunes. The interval: test_an_idle_relay_sweeps_once_per_
+            # interval, which also holds ``>=`` against ``>`` and the stamp
+            # moving on a sweep alone, and test_the_interval_is_the_setting.
+            # That a pass which claimed work never sweeps is the enclosing
+            # ``if not ids`` (test_a_pass_that_claimed_work_does_not_sweep), and
+            # the stamp preceding the call rather than following a success is
+            # test_a_sweep_that_fails_does_not_kill_the_relay_or_retry_early.
+            if sweep and monotonic() - swept_at >= sweep_every:
+                swept_at = monotonic()
+                _sweep_or_survive(worker_id, connection)
             # Waits on a notification where the backend has one and sleeps where
             # it does not, so an event fired a moment ago is delivered in
             # milliseconds rather than at the next poll. The poll is still the
@@ -164,6 +199,26 @@ def _wait_or_survive(
     except Exception as exc:
         logger.exception("relay %s could not wait for work", worker_id)
         _close_after(exc, connection, worker_id)
+
+
+def _sweep_or_survive(worker_id: str, connection: Any) -> None:
+    """Prune, and keep the daemon alive if the database refuses.
+
+    The caller has already moved the throttle's clock, so a sweep that fails is
+    not retried before the next interval: a database that is down is already
+    being retried by the claim, at a backoff, and a second client hammering it
+    from the idle branch would be that much more load on the thing that needs
+    quiet. Prune deletes in transactions of its own, so a failure leaves the
+    batches it finished deleted and the rest due for the next sweep.
+    """
+    try:
+        deleted = prune_events()
+    except Exception as exc:
+        logger.exception("relay %s could not prune", worker_id)
+        _close_after(exc, connection, worker_id)
+        return
+    if deleted:
+        logger.info("relay %s pruned %d events", worker_id, deleted)
 
 
 def _deliver_or_survive(delivery_id: int, worker_id: str, connection: Any) -> DeliveryStatus | None:

@@ -27,6 +27,8 @@ are changing.
 | `MAX_RECEIVER_RETRY_DELAY_SECONDS` | `86400.0` | Longest delay a `RetryAfter` may ask for. |
 | `RETENTION_DAYS` | `90` | Prune window for an event that declares no [retention](retention.md) of its own, and the default quiet-receiver window. |
 | `PRUNE_BATCH_ROWS` | `5000` | Rows per prune transaction, delivery rows and event rows alike. |
+| `RELAY_PRUNE` | `True` | Whether an idle relay runs `prune_events`. Turn it off if you schedule the prune yourself. |
+| `RELAY_PRUNE_SECONDS` | `60` | The most often a relay sweeps, in seconds above zero. |
 | `TASK_BACKEND` | `None` | Dotted path, or a `{"BACKEND": ..., **options}` mapping. |
 
 ## The ones worth thinking about
@@ -138,6 +140,29 @@ hold.
 An event with more delivery rows than this has them deleted this many at a time,
 each chunk in its own transaction, and goes with the last of them. Override it for
 one run with `prune_events --batch-size`. See [pruning](operations.md#pruning).
+
+### `RELAY_PRUNE`
+
+Whether a relay that finds nothing to claim runs `prune_events()`, which is what
+makes an event declared to be [deleted on consumption](retention.md) go within
+about a minute without a cron line. On by default, because a retention policy
+that nothing carries out is the quiet failure. Set it to `False` when `prune_events`
+runs from a schedule of its own, or when you run the relay only as
+`deliver_events --once`, which never sweeps either way.
+
+Every long-running relay sweeps, whatever its `--lane`; the throttle is what
+keeps several cheap. A value that is not a bool fails the system check `E008`:
+`"false"` is a truthy string and would leave the sweep on. See
+[how the prune runs](retention.md#how-the-prune-runs).
+
+### `RELAY_PRUNE_SECONDS`
+
+The most often a relay sweeps, counted from the previous sweep on a monotonic
+clock; the first comes this long after the relay starts. A sweep that fails also
+waits a full interval. Raise it before turning the sweep off if the cost of
+an idle sweep, which grows with the live events that carry a retention of their
+own, matters on your database. Zero, a negative, NaN, infinity or a non-number
+fails the system check `E009`; `RELAY_PRUNE = False` is the way to say never.
 
 ### `TASK_BACKEND`
 

@@ -278,6 +278,40 @@ def test_a_coalesce_interval_that_is_not_a_duration_is_an_error(settings, interv
     assert [p.id for p in problems] == ["django_domain_events.E007"]
 
 
+@pytest.mark.parametrize("interval", [1, 0.5, 60, 3600.0])
+def test_a_positive_prune_interval_is_clean(settings, interval: float) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_PRUNE_SECONDS": interval}
+    assert checks.check_settings_keys_are_known() == []
+
+
+@pytest.mark.parametrize("interval", [0, -1, float("nan"), float("inf"), "60", None, True])
+def test_a_prune_interval_that_is_not_a_positive_duration_is_an_error(
+    settings, interval: object
+) -> None:
+    """One case per refusal: zero and a negative, NaN (false against everything),
+    infinity, a string, ``None`` and a bool (an ``int``, so it would read as one second)."""
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_PRUNE_SECONDS": interval}
+    problems = checks.check_settings_keys_are_known()
+    assert [p.id for p in problems] == ["django_domain_events.E009"]
+    assert repr(interval) in problems[0].msg
+
+
+@pytest.mark.parametrize("switch", [True, False])
+def test_the_prune_switch_is_clean_as_a_bool(settings, switch: bool) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_PRUNE": switch}
+    assert checks.check_settings_keys_are_known() == []
+
+
+@pytest.mark.parametrize("switch", ["false", 0, 1, None])
+def test_a_prune_switch_that_is_not_a_bool_is_an_error(settings, switch: object) -> None:
+    """``"false"`` is the case the check exists for: truthy, so the operator who
+    meant the sweep off would have it on."""
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_PRUNE": switch}
+    problems = checks.check_settings_keys_are_known()
+    assert [p.id for p in problems] == ["django_domain_events.E008"]
+    assert repr(switch) in problems[0].msg
+
+
 def _one_row_in_every_status(name_for: Callable[[str], str], key_for: Callable[[str], str]) -> None:
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.models.event_record import EventRecord

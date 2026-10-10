@@ -233,7 +233,19 @@ python manage.py prune_events --batch-size 1000
 
 An outbox without a prune story becomes the largest table in the database, and
 it becomes it quietly. **Nothing else deletes**: an event declared to be deleted
-on consumption is deleted by the next prune, and without a schedule, never.
+on consumption is deleted by the next prune.
+
+**A long-running relay runs that prune itself.** When a pass claims nothing, the
+relay runs `prune_events()` with its defaults, at most once per
+[`RELAY_PRUNE_SECONDS`](settings.md#relay_prune_seconds) (60), the first one an
+interval after it starts. Every relay does, whatever its `--lane`; a relay that
+is never idle does not; and `deliver_events --once` never does. A sweep that
+fails is logged and not retried before the next interval, and a stop request
+waits for a running sweep to return. Set
+[`RELAY_PRUNE`](settings.md#relay_prune) to `False` if you schedule
+`prune_events` yourself, which is also what a `--once` deployment needs; what the
+sweep costs, and when to prefer the schedule, is in
+[how the prune runs](retention.md#how-the-prune-runs).
 
 An event is due when its [retention](retention.md) says so: consumed, for one
 declared with a `Retention` policy; past its own window, for one declared with a
@@ -441,8 +453,9 @@ names the receiver and suggests `lease_seconds=`, because that is the fix.
 0    4 * * *  manage.py prune_events
 ```
 
-With a long-running relay instead, only the prune needs a schedule. Once any
-event is declared with a [`Retention` policy](retention.md), run the prune every
-minute rather than every night: its schedule is how long a consumed event
-outlives its consumption. What a prune with nothing to delete costs is in
-[scheduling the prune](retention.md#scheduling-the-prune).
+With a long-running relay instead, nothing needs a schedule: an idle relay
+runs the prune itself, every minute by default, so an event declared to be
+[deleted on consumption](retention.md) goes within about a minute. Schedule
+`prune_events` as well if the relay is never idle, and instead if you set
+`RELAY_PRUNE` to `False`. What a prune with nothing to delete costs is in
+[how the prune runs](retention.md#how-the-prune-runs).

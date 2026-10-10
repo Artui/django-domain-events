@@ -20,11 +20,14 @@ class PasswordResetRequested: ...
 class NewsletterSent: ...
 ```
 
-!!! warning "Nothing deletes without a prune schedule"
+!!! warning "Nothing deletes without a prune"
     A retention policy is carried out by `prune_events` and by nothing else. A
-    project that never runs it keeps every event forever, whatever its
-    declaration says, and one that runs it daily deletes consumed events daily.
-    See [scheduling](#scheduling-the-prune).
+    long-running relay runs it for you whenever it is idle, so
+    [`deliver_events`](operations.md#running-the-relay) deletes consumed events
+    within about a minute with no cron line. A project that delivers with
+    `deliver_events --once` from a schedule, or that turns the relay's sweep off,
+    keeps every event forever, whatever its declaration says, until it schedules
+    `prune_events` itself. See [how the prune runs](#how-the-prune-runs).
 
 ## The three forms
 
@@ -79,16 +82,34 @@ prune records each receiver's newest success among the rows it deletes, in the
 same transaction, and the report takes the later of that and the rows still
 there.
 
-## Scheduling the prune
+## How the prune runs
 
-A consumed event is deleted at the next prune, so the prune's schedule is the
-policy's latency. With `Retention` policies in use, run it often:
+A consumed event is deleted at the next prune, so how often the prune runs is the
+policy's latency. A relay that finds nothing to claim runs it, at most once per
+`RELAY_PRUNE_SECONDS` (60), the first one an interval after the relay starts. That
+makes "deleted as soon as consumed" true within about a minute of a sendout's
+last delivery, with nothing to schedule:
 
-```cron
-* * * * *  manage.py prune_events
-```
+- **Every long-running relay sweeps**, whatever its `--lane`, so a deployment
+  of lane relays prunes too. Several relays each sweep once per interval; that is
+  safe because the prune re-checks at the delete that an event is still due, and
+  it is cheap for the reason below.
+- **A relay with work does not sweep.** The sweep runs from an idle pass, so a
+  saturated relay defers it until it catches up, and a fleet that is never idle
+  never prunes. If that is your deployment, schedule `prune_events` as well.
+- **`deliver_events --once` never sweeps.** It is a schedule's job, and the
+  schedule can carry the prune.
+- **A sweep that fails is logged and the relay carries on**, without trying
+  again before the next interval.
+- A sweep is not interrupted by a stop request: the relay stops when it
+  returns, so the first sweep over a large backlog of already-due events is
+  better run by hand (`prune_events`) than by the first relay to start.
 
-A prune with nothing to delete runs four queries, and none of them reads
+Set [`RELAY_PRUNE`](settings.md#relay_prune) to `False` to turn it off when
+`prune_events` runs from a schedule of its own, and
+[`RELAY_PRUNE_SECONDS`](settings.md#relay_prune_seconds) to move the interval.
+
+A sweep with nothing to delete runs four queries, and none of them reads
 history. The ordinary window is one index range on `recorded_at`. Each policy,
 and the windows of their own, read a partial index holding only their own
 events still alive, and check each of those against a partial index of the
@@ -111,6 +132,14 @@ own, 5,000 `Retention.SUCCEEDED` events kept by a dead letter - and 445,000
 delivery rows, a prune with nothing to delete takes about 12 ms. The windows of
 their own take about 6 ms of it, 50,000 index entries read and discarded; the
 dead letters about 3 ms; the ordinary window nothing measurable.
+
+That is the price of an idle sweep, once per relay per interval: with three
+relays and the default 60 seconds, about 36 ms of database time a minute for
+that population, and a few milliseconds for one with few events of its own
+alive. It grows with the live events that carry a retention of their own, not
+with history, so a long `timedelta` window on a frequent event is what to watch,
+and the interval is the lever: raise `RELAY_PRUNE_SECONDS` before turning the
+sweep off.
 
 Before the per-policy queries and the delivery index, the same prune took about
 50 ms and read the delivery table in full on every run, a cost that grew with
