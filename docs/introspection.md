@@ -185,7 +185,12 @@ than the workers can drain.
 
 Steady non-zero `lapsed_leases` means workers are dying mid-delivery, or a
 receiver outruns its lease and has its work thrown away every time - see
-[`lease_seconds`](declaring.md#receivers).
+[`lease_seconds`](declaring.md#receivers). A relay that was asked to stop also
+gives its unstarted rows back by expiring their leases, so a brief non-zero
+reading after a deploy is that, not a dying worker.
+
+Every figure here is answered from an index and none of them scans the
+delivery table, so the call is cheap enough to scrape on an interval.
 
 `owed` means "not terminal", which is what the prune settles by and a superset
 of what the relay can claim at any given moment: a row inside its backoff window
@@ -201,6 +206,10 @@ Run with `python manage.py check`.
 | `E001` | Error | A receiver listens for a class that was never `@event`-decorated |
 | `E002` | Error | The configured `CODEC` cannot be imported |
 | `E005` | Error | A declared event has a field the configured codec cannot rebuild |
+| `E006` | Error | `WAKE` is neither `"notify"` nor `"poll"` |
+| `E007` | Error | `NOTIFY_COALESCE_SECONDS` is not a non-negative number |
+| `E008` | Error | `RELAY_PRUNE` is not a bool |
+| `E009` | Error | `RELAY_PRUNE_SECONDS` is not a positive number |
 | `W001` | Warning | Deliveries are owed to a receiver key the registry no longer has |
 | `W002` | Warning | Deliveries are owed for an event name the registry no longer has |
 | `W006` | Warning | A settings dict is named `DOMAIN_EVENTS` rather than `DJANGO_DOMAIN_EVENTS` |
