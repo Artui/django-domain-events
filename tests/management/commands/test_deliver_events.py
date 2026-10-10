@@ -87,6 +87,21 @@ def test_a_lane_and_a_batch_size_are_passed_through(
     assert (seen[0]["lane"], seen[0]["batch_size"]) == ("mail", 2)
 
 
+def test_a_single_pass_with_a_batch_size_delivers(order: OrderPlaced, record: list[str]) -> None:
+    """The real single pass, with no stand-in: --limit defaults to None, so a
+    --batch-size alone is not mistaken for the refused limit-and-batch pair."""
+    with transaction.atomic():
+        fire(order)
+    out = StringIO()
+    call_command("deliver_events", "--once", "--batch-size", "1", stdout=out)
+    assert "succeeded: 2" in out.getvalue()
+
+
+def test_a_single_pass_refuses_a_limit_with_a_batch_size() -> None:
+    with pytest.raises(ValueError, match="limit=3 is one claim of that many rows"):
+        call_command("deliver_events", "--once", "--limit", "3", "--batch-size", "2")
+
+
 def test_the_relay_refuses_where_locks_cannot_be_skipped() -> None:
     """SQLite cannot express a skipped lock, so two relays on it would hand the
     same row to two receivers on every pass.
