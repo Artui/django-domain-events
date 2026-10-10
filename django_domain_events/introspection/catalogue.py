@@ -39,6 +39,8 @@ def catalogue() -> Catalogue:
                 class_path=f"{cls.__module__}.{cls.__qualname__}",
                 doc=_doc(cls),
                 migrates_older_rows=hasattr(cls, "upgrade"),
+                retention_seconds=entry.retention_columns[0],
+                delete_when=entry.retention_columns[1],
                 fields=_fields(cls),
                 receivers=receivers,
             )

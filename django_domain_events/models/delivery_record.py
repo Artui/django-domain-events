@@ -171,6 +171,20 @@ class DeliveryRecord(models.Model):
                 fields=["receiver_key", "succeeded_at"],
                 name="dde_last_success",
             ),
+            # What the prune asks of each candidate event: has it a delivery
+            # that has not succeeded (Retention.SUCCEEDED), or one not
+            # terminal (everything else)? Both are "a row of this event among
+            # the unfinished ones", and the second condition implies this one,
+            # so one index answers both. It holds the owed rows plus the dead
+            # letters and orphans, never the succeeded history, so a probe
+            # costs the same however much history the table carries - where
+            # through the unique index it walked every row of the event, and
+            # the planner, pricing that, chose to read the whole table instead.
+            models.Index(
+                fields=["event"],
+                condition=~models.Q(status=DeliveryStatus.SUCCEEDED),
+                name="dde_unfinished_by_event",
+            ),
         ]
         verbose_name = "delivery record"
         verbose_name_plural = "delivery records"

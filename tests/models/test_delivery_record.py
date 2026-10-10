@@ -250,3 +250,13 @@ def test_dead_letters_have_a_partial_index_of_their_own() -> None:
     [index] = [i for i in DeliveryRecord._meta.indexes if i.name == "dde_dead_by_receiver"]
     assert tuple(index.fields) == ("receiver_key",)
     assert index.condition == models.Q(status=DeliveryStatus.DEAD)
+
+
+def test_the_unfinished_rows_of_each_event_have_a_partial_index() -> None:
+    """Not the duplicate the unique constraint makes of ``event_id`` alone:
+    it holds no succeeded row, so it stays as small as the owed rows and the
+    dead letters, and it is what the prune's per-event probes read. Its
+    condition is the weaker of the two they ask, so it serves both."""
+    [index] = [i for i in DeliveryRecord._meta.indexes if i.name == "dde_unfinished_by_event"]
+    assert tuple(index.fields) == ("event",)
+    assert index.condition == ~models.Q(status=DeliveryStatus.SUCCEEDED)

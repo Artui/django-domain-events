@@ -18,6 +18,7 @@ from django_domain_events import (
     AnyEvent,
     DeliveryContext,
     PermanentFailure,
+    Retention,
     RetryAfter,
     event,
     fire,
@@ -54,9 +55,17 @@ class OrderCancelled:
     reason: str
 
 
-@event(name="shop.StockReserved")
+@event(name="shop.StockReserved", retention=Retention.SUCCEEDED)
 @dataclass(frozen=True, slots=True)
 class StockReserved:
+    """Bookkeeping between two of our own steps, worth nothing once delivered.
+
+    `Retention.SUCCEEDED` has the next prune delete it, with its delivery rows,
+    as soon as every receiver has succeeded, rather than keeping it for
+    `RETENTION_DAYS` beside the orders it was about. A delivery that dead-letters
+    keeps it for the full window instead, so it can still be requeued.
+    """
+
     order_id: int
     sku: str
     quantity: int

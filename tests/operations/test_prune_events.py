@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
-from django.db import transaction
+from django.db import connection, models, transaction
 
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.models.receiver_last_success import ReceiverLastSuccess
+from django_domain_events.operations import prune_events as prune_module
 from django_domain_events.operations.prune_events import prune_events
 from django_domain_events.types.delivery_status import DeliveryStatus
+from tests.conftest import Plans, delivery_table_access, event_deleted
 from tests.testapp.events import OrderPlaced, PinnedName
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -140,3 +145,426 @@ def test_it_counts_events_not_cascaded_rows(order: OrderPlaced, record: list[str
     _age(365)
 
     assert prune_events() == 1
+
+
+# Per-event retention. These build their rows directly rather than through
+# fire(): the prune reads only the two columns fire() copies onto the row, and
+# never the registry, which is the property under test - the fate of an event
+# is settled by what it was recorded with.
+
+SUCCEEDED = DeliveryStatus.SUCCEEDED
+DEAD = DeliveryStatus.DEAD
+
+
+def _recorded(
+    *statuses: DeliveryStatus,
+    delete_when: str = "",
+    retention_seconds: int | None = None,
+    age: timedelta = timedelta(0),
+) -> EventRecord:
+    """One event with one delivery row per status, recorded ``age`` ago."""
+    now = datetime.now(timezone.utc)
+    event = EventRecord.objects.create(
+        name="testapp.OrderPlaced",
+        payload={},
+        occurred_at=now,
+        delete_when=delete_when,
+        retention_seconds=retention_seconds,
+    )
+    EventRecord.objects.filter(pk=event.pk).update(recorded_at=now - age)
+    DeliveryRecord.objects.bulk_create(
+        DeliveryRecord(
+            event=event,
+            receiver_key=f"testapp.r{n}",
+            status=status,
+            available_at=now,
+            succeeded_at=now if status == SUCCEEDED else None,
+        )
+        for n, status in enumerate(statuses)
+    )
+    return event
+
+
+def test_a_fan_out_with_one_dead_row_is_kept_until_every_delivery_succeeded() -> None:
+    """``succeeded`` waits for success: the dead letter keeps its event, so it
+    stays inspectable and ``requeue_dead`` still has something to reopen."""
+    kept = _recorded(SUCCEEDED, SUCCEEDED, DEAD, delete_when="succeeded")
+
+    assert prune_events() == 0
+    assert DeliveryRecord.objects.filter(event=kept).count() == 3
+
+
+def test_the_same_fan_out_is_deleted_once_settled() -> None:
+    """``settled`` waits only for every delivery to be terminal, dead letters
+    included, so the event goes without waiting out the window."""
+    _recorded(SUCCEEDED, SUCCEEDED, DEAD, delete_when="settled")
+
+    assert prune_events() == 1
+    assert not EventRecord.objects.exists()
+    assert not DeliveryRecord.objects.exists()
+
+
+def test_every_delivery_succeeded_deletes_it_at_once() -> None:
+    _recorded(SUCCEEDED, SUCCEEDED, delete_when="succeeded")
+
+    assert prune_events() == 1
+    assert not DeliveryRecord.objects.exists()
+
+
+def test_an_orphaned_delivery_keeps_an_event_waiting_for_success() -> None:
+    """Orphaned is terminal but not a success: nothing ran, so the event has not
+    been consumed."""
+    _recorded(SUCCEEDED, DeliveryStatus.ORPHANED, delete_when="succeeded")
+
+    assert prune_events() == 0
+
+
+@pytest.mark.parametrize("delete_when", ["succeeded", "settled"])
+@pytest.mark.parametrize(
+    "owed", [DeliveryStatus.PENDING, DeliveryStatus.FAILED, DeliveryStatus.CLAIMED]
+)
+def test_an_owed_delivery_keeps_it_under_either_policy(
+    delete_when: str, owed: DeliveryStatus
+) -> None:
+    _recorded(SUCCEEDED, owed, delete_when=delete_when)
+
+    assert prune_events() == 0
+
+
+@pytest.mark.parametrize("delete_when", ["succeeded", "settled"])
+def test_an_event_with_no_durable_deliveries_is_consumed_as_soon_as_it_commits(
+    delete_when: str,
+) -> None:
+    """Nothing is owed, so nothing is left to wait for. A suppressed event is
+    this case too: its row goes at the first sweep."""
+    _recorded(delete_when=delete_when)
+
+    assert prune_events() == 1
+
+
+def test_an_ordinary_event_is_not_deleted_on_consumption() -> None:
+    _recorded(SUCCEEDED, SUCCEEDED)
+
+    assert prune_events() == 0
+
+
+def test_an_event_kept_by_a_dead_letter_still_goes_at_the_ordinary_window() -> None:
+    """The dead letter keeps the event inspectable for RETENTION_DAYS, not
+    forever: without this the policy that deletes sooner would keep longer."""
+    _recorded(SUCCEEDED, DEAD, delete_when="succeeded", age=timedelta(days=120))
+
+    assert prune_events() == 1
+
+
+def test_an_unknown_policy_falls_back_to_the_ordinary_window() -> None:
+    """A value no release writes - a hand edit, or a downgrade - is neither
+    consumed early nor kept forever."""
+    _recorded(SUCCEEDED, delete_when="bogus")
+    _recorded(SUCCEEDED, delete_when="bogus", age=timedelta(days=120))
+
+    assert prune_events() == 1
+    assert EventRecord.objects.count() == 1
+
+
+def test_an_event_with_its_own_window_goes_when_that_window_passes() -> None:
+    hour = 3600
+    _recorded(SUCCEEDED, retention_seconds=hour, age=timedelta(hours=2))
+    kept = _recorded(SUCCEEDED, retention_seconds=hour, age=timedelta(minutes=30))
+
+    assert prune_events() == 1
+    assert list(EventRecord.objects.values_list("pk", flat=True)) == [kept.pk]
+
+
+def test_its_own_window_still_waits_for_every_delivery_to_settle() -> None:
+    _recorded(SUCCEEDED, DeliveryStatus.PENDING, retention_seconds=3600, age=timedelta(days=2))
+
+    assert prune_events() == 0
+
+
+def test_an_event_with_a_longer_window_of_its_own_outlives_retention_days() -> None:
+    """The ordinary window is the default, not a ceiling."""
+    _recorded(SUCCEEDED, retention_seconds=365 * 86400, age=timedelta(days=120))
+
+    assert prune_events() == 0
+
+
+def test_older_than_overrides_only_the_default_window() -> None:
+    """``--days`` replaces RETENTION_DAYS. An event that declared its own window
+    keeps it."""
+    _recorded(SUCCEEDED, retention_seconds=30 * 86400, age=timedelta(days=10))
+
+    assert prune_events(timedelta(days=1)) == 0
+
+
+def test_the_fate_is_read_off_the_row_not_the_registry(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """An event recorded under the ordinary window keeps it whether or not its
+    class is still declared: the prune never asks the registry."""
+    with transaction.atomic():
+        fire(order)
+    drain_outbox()
+    with event_deleted("testapp.OrderPlaced"):
+        assert prune_events() == 0
+        _age(120)
+        assert prune_events() == 1
+
+
+class _DeleteLog:
+    """The rows each DELETE statement removed, in order, by table."""
+
+    def __init__(self) -> None:
+        self.statements: list[tuple[str, int]] = []
+
+    def __call__(
+        self, execute: Callable[..., Any], sql: str, params: Any, many: bool, context: Any
+    ) -> Any:
+        result = execute(sql, params, many, context)
+        if sql.startswith("DELETE"):
+            target = sql.split("WHERE")[0]
+            table = "event" if EventRecord._meta.db_table in target else "delivery"
+            self.statements.append((table, context["cursor"].rowcount))
+        return result
+
+
+def test_a_batch_is_bounded_by_rows_not_events() -> None:
+    """Four events of three deliveries each, four rows a batch: one event per
+    transaction, because each costs its deliveries plus itself. Counted in
+    events, as batches used to be, the first would take all four and twelve
+    delivery rows with them."""
+    for _ in range(4):
+        _recorded(SUCCEEDED, SUCCEEDED, SUCCEEDED, delete_when="succeeded")
+
+    log = _DeleteLog()
+    with connection.execute_wrapper(log):
+        assert prune_events(batch_size=4) == 4
+    assert log.statements == [("delivery", 3), ("event", 1)] * 4
+
+
+def test_an_event_with_no_deliveries_still_counts_against_the_batch() -> None:
+    """The event row is a row. Otherwise a million suppressed events would be
+    one transaction."""
+    for _ in range(5):
+        _recorded(delete_when="settled")
+
+    log = _DeleteLog()
+    with connection.execute_wrapper(log):
+        assert prune_events(batch_size=2) == 5
+    assert [rows for table, rows in log.statements if table == "event"] == [2, 2, 1]
+
+
+def test_an_event_larger_than_the_batch_is_deleted_in_chunks() -> None:
+    """Its delivery rows go a batch at a time, each chunk its own transaction,
+    and the event row with the last of them."""
+    _recorded(*[SUCCEEDED] * 10, delete_when="succeeded")
+
+    log = _DeleteLog()
+    with connection.execute_wrapper(log):
+        assert prune_events(batch_size=4) == 1
+    assert log.statements == [("delivery", 4), ("delivery", 4), ("delivery", 2), ("event", 1)]
+    assert not DeliveryRecord.objects.exists()
+
+
+@pytest.mark.parametrize("size", [0, -1, True, "2", 2.5])
+def test_a_batch_size_that_is_not_a_positive_count_is_refused(size: object) -> None:
+    """One case per condition of the guard: zero and a negative by the lower
+    bound (zero would delete nothing and report success), ``True`` by the bool
+    test (an int, so it would read as one), and a string and a float by the
+    type test (a setting read from the environment arrives as the first)."""
+    with pytest.raises(ValueError, match="batch_size"):
+        prune_events(batch_size=size)
+
+
+@pytest.mark.parametrize(
+    ("delete_when", "retention_seconds", "age"),
+    [
+        ("succeeded", None, timedelta(0)),
+        ("settled", None, timedelta(0)),
+        ("", 3600, timedelta(hours=2)),
+        ("", None, timedelta(days=120)),
+    ],
+    ids=["succeeded", "settled", "own-window", "ordinary"],
+)
+def test_a_stale_selection_is_rechecked_at_the_delete(
+    monkeypatch: pytest.MonkeyPatch,
+    delete_when: str,
+    retention_seconds: int | None,
+    age: timedelta,
+) -> None:
+    """The selection handed to the delete names an event that a replay has
+    since made owed again. The delete must re-check, or the cascade takes the
+    reopened work with no record that anything was lost. The selection is
+    stubbed because a replay that lands before the prune starts is simply not
+    selected, and proves nothing about the delete."""
+    event = _recorded(
+        SUCCEEDED,
+        DeliveryStatus.PENDING,
+        delete_when=delete_when,
+        retention_seconds=retention_seconds,
+        age=age,
+    )
+    stale = iter([[event.pk]])
+    monkeypatch.setattr(prune_module, "_candidates", lambda due, take: next(stale, []))
+
+    assert prune_events() == 0
+    assert DeliveryRecord.objects.filter(event=event).count() == 2
+
+
+def test_a_stale_selection_is_rechecked_before_a_chunk_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same for an event too large for one batch, whose delivery rows go
+    before it does: a chunk is deleted only while its event is still due."""
+    event = _recorded(
+        SUCCEEDED, SUCCEEDED, SUCCEEDED, DeliveryStatus.PENDING, delete_when="settled"
+    )
+    stale = iter([[event.pk]])
+    monkeypatch.setattr(prune_module, "_candidates", lambda due, take: next(stale, []))
+
+    assert prune_events(batch_size=2) == 0
+    assert DeliveryRecord.objects.filter(event=event).count() == 4
+
+
+def _successes() -> dict[str, datetime]:
+    return dict(ReceiverLastSuccess.objects.values_list("receiver_key", "last_succeeded_at"))
+
+
+def test_each_receiver_s_last_success_outlives_its_deliveries() -> None:
+    """The newest success among what went, per receiver - and nothing for a
+    receiver whose deleted rows never succeeded."""
+    _recorded(SUCCEEDED, DEAD, delete_when="settled")
+    newest = _recorded(SUCCEEDED, delete_when="settled")
+    latest = datetime.now(timezone.utc) + timedelta(minutes=5)
+    DeliveryRecord.objects.filter(event=newest).update(succeeded_at=latest)
+
+    assert prune_events() == 2
+    assert _successes() == {"testapp.r0": latest}
+
+
+def test_a_prune_never_moves_a_last_success_backwards() -> None:
+    later = datetime.now(timezone.utc) + timedelta(days=1)
+    ReceiverLastSuccess.objects.create(receiver_key="testapp.r0", last_succeeded_at=later)
+    _recorded(SUCCEEDED, delete_when="succeeded")
+
+    assert prune_events() == 1
+    assert _successes() == {"testapp.r0": later}
+
+
+def test_a_prune_moves_a_last_success_forwards() -> None:
+    earlier = datetime.now(timezone.utc) - timedelta(days=1)
+    ReceiverLastSuccess.objects.create(receiver_key="testapp.r0", last_succeeded_at=earlier)
+    _recorded(SUCCEEDED, delete_when="succeeded")
+
+    assert prune_events() == 1
+    assert _successes()["testapp.r0"] > earlier
+
+
+def test_a_chunk_records_its_last_successes_too() -> None:
+    event = _recorded(SUCCEEDED, SUCCEEDED, SUCCEEDED, delete_when="succeeded")
+    for n, row in enumerate(DeliveryRecord.objects.filter(event=event).order_by("pk")):
+        row.receiver_key = "testapp.fan"
+        row.target = f"t{n}"
+        row.succeeded_at = datetime(2026, 1, 1 + n, tzinfo=timezone.utc)
+        row.save()
+
+    assert prune_events(batch_size=2) == 1
+    assert _successes() == {"testapp.fan": datetime(2026, 1, 3, tzinfo=timezone.utc)}
+
+
+def test_the_last_success_is_written_in_the_delete_s_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A delete that fails takes the record of it back with it, so the table
+    never claims a success for rows that are still there - and, the other way
+    round, rows are never deleted without it being written."""
+
+    def fail(ids: list[int]) -> int:
+        raise RuntimeError("the delete failed")
+
+    _recorded(SUCCEEDED, delete_when="succeeded")
+    monkeypatch.setattr(prune_module, "_delete_events", fail)
+
+    with pytest.raises(RuntimeError):
+        prune_events()
+    assert not ReceiverLastSuccess.objects.exists()
+
+
+def test_postgres_is_given_an_interval_for_the_window() -> None:
+    """Compiled here for the SQLite gate's sake, since the branch only runs on
+    Postgres; what it computes there is held by the window tests above, which
+    the Postgres job runs. Every other backend gets microseconds, the form its
+    datetime arithmetic expects."""
+    query = EventRecord.objects.all().query
+    compiler = query.get_compiler(using="default")
+    seconds = prune_module._Seconds(models.F("retention_seconds")).resolve_expression(query)
+
+    postgres, _ = seconds.as_postgresql(compiler, connection)
+    default, _ = seconds.as_sql(compiler, connection)
+    assert postgres.endswith("* INTERVAL '1 second')")
+    assert default.endswith("* 1000000)")
+
+
+EVENT_TABLE = EventRecord._meta.db_table
+
+
+@pytest.mark.skipif(
+    connection.vendor != "postgresql",
+    reason="asserts Postgres query plans; SQLite's planner is not the one a sweep runs on",
+)
+def test_each_kind_of_due_is_one_index_range(plans_without_seqscan: Plans) -> None:
+    """With nothing due, a sweep is four selects, none reading history: each
+    policy through its own range of dde_consumed_by_policy, the windows of
+    their own through dde_own_window, the ordinary window through
+    ``recorded_at`` - and every one checks its events' deliveries through
+    dde_unfinished_by_event, which holds no succeeded row.
+
+    A partial index serves a query only if its WHERE clause implies the
+    index's condition, so this is what fails when a filter is phrased any
+    other way. Four plans, not three, is the policies' OR split in two: under
+    the OR, at 440,000 delivery rows, Postgres read the whole retention index
+    and hashed the entire delivery table on every sweep. The delivery access
+    is what fails without the unfinished index, the probe then walking every
+    row of the event through the unique one. The window arm's
+    ``retention_seconds IS NOT NULL`` is not held here: Postgres 17 infers it
+    from the strict arithmetic beside it."""
+    now = datetime.now(timezone.utc)
+    EventRecord.objects.bulk_create(
+        EventRecord(name="testapp.OrderPlaced", payload={}, occurred_at=now) for _ in range(3000)
+    )
+    for n in range(50):
+        _recorded(DeliveryStatus.PENDING, delete_when="succeeded")
+        _recorded(SUCCEEDED, DeliveryStatus.DEAD, delete_when="succeeded")
+        _recorded(DeliveryStatus.PENDING, delete_when="settled")
+        _recorded(SUCCEEDED, retention_seconds=86400 * 30, age=timedelta(hours=n))
+    with connection.cursor() as cursor:
+        cursor.execute(f"ANALYZE {EVENT_TABLE}")
+        cursor.execute(f"ANALYZE {DeliveryRecord._meta.db_table}")
+
+    plans = plans_without_seqscan(prune_events)
+
+    assert len(plans) == 4, plans
+    succeeded, settled, own_window, ordinary = plans
+    for plan, value in ((succeeded, "succeeded"), (settled, "settled")):
+        assert "Index Cond: ((delete_when)::text = " in plan, plan
+        assert f"'{value}'" in plan and "dde_consumed_by_policy" in plan, plan
+        assert "dde_own_window" not in plan, plan
+    assert "dde_own_window" in own_window and "dde_consumed_by_policy" not in own_window
+    assert "recorded_at" in ordinary, ordinary
+    assert "dde_own_window" not in ordinary and "dde_consumed_by_policy" not in ordinary
+    # The helper attributes a bitmap scan to the event table only by an index
+    # name carrying the table's, which these two named ones do not.
+    event_side = {"dde_consumed_by_policy", "dde_own_window"}
+    for plan in plans:
+        assert f"Seq Scan on {EVENT_TABLE}" not in plan, plan
+        assert delivery_table_access(plan) - event_side == {"dde_unfinished_by_event"}, plan
+
+
+def test_the_batch_size_defaults_to_a_setting_of_its_own(settings: Any) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"PRUNE_BATCH_ROWS": 2, "BATCH_SIZE": 1000}
+    for _ in range(2):
+        _recorded(SUCCEEDED, delete_when="succeeded")
+
+    log = _DeleteLog()
+    with connection.execute_wrapper(log):
+        assert prune_events() == 2
+    assert [rows for table, rows in log.statements if table == "event"] == [1, 1]

@@ -47,6 +47,12 @@ receiver has a line under its table naming the callable its targets come from,
 and the JSON carries the same as `targets` on each receiver and
 `wildcard_receivers` at the top level.
 
+An event declared with a [retention](retention.md) of its own says so in a line of
+prose under its heading - "Kept for 7 days", or "Deleted once every delivery has
+succeeded" - and the JSON carries it as `retention_seconds` and `delete_when`,
+the two values `fire()` records on the event row. An event on the default window
+has neither, and no line.
+
 Building a catalogue never runs consumer code: a `default_factory` is **named**,
 not called.
 
@@ -101,9 +107,17 @@ Only a **succeeded** delivery counts. The question is whether the receiver did
 its work, not whether the relay tried - a row stuck failing for a month is
 exactly the case this must catch.
 
-The window defaults to `RETENTION_DAYS`, which is not a coincidence of numbers:
-past that point the prune has deleted the evidence, so "quiet for longer than
-retention" is the longest answer this can honestly give.
+The answer survives the prune. Deleting delivery rows would otherwise delete the
+evidence that a receiver ran - within minutes, for an event
+[deleted on consumption](retention.md) - so the prune records each receiver's
+newest success among the rows it deletes, in the same transaction as the delete,
+and this reports the later of that record and the rows still there. A receiver
+that never ran is still reported as never. The record is written only by the
+prune, never as deliveries succeed: one row per receiver, updated by every
+delivery, would queue a 20,000-row fan-out on a single lock.
+
+The window defaults to `RETENTION_DAYS`, the window an ordinary event's
+deliveries are kept for.
 
 The success time is read off `succeeded_at`, which is written on success and
 never cleared - unlike `completed_at`, which replay and requeue clear because a

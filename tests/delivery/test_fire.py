@@ -7,14 +7,16 @@ import importlib
 import secrets
 import warnings
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import pytest
 from django.contrib.auth.models import User
 from django.db import transaction
 
+from django_domain_events.declaration.event import event
 from django_domain_events.declaration.receiver import receiver
 from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.deliver import deliver_pending
@@ -22,11 +24,13 @@ from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.operations.prune_events import prune_events
 from django_domain_events.scope.attributed import attributed
 from django_domain_events.scope.suppressed import suppressed
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.types.retention import Retention
 from tests.testapp.events import Eagerly, OrderPlaced, PinnedName, Unheard
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -409,3 +413,73 @@ def test_the_callable_is_not_called_for_a_suppressed_event() -> None:
         fire(Unheard(value=1))
 
     targets.assert_not_called()
+
+
+@dataclass(frozen=True)
+class Retained:
+    value: int
+
+
+@contextmanager
+def _declared(retention: timedelta | Retention | None) -> Iterator[type]:
+    """``Retained`` declared with this retention for the length of a test."""
+    event(name="testapp.retained", retention=retention)(Retained)
+    try:
+        yield Retained
+    finally:
+        registry._events_by_class.pop(Retained, None)
+        registry._events_by_name.pop("testapp.retained", None)
+
+
+@pytest.mark.parametrize(
+    ("retention", "columns"),
+    [
+        (None, (None, "")),
+        (timedelta(days=7), (7 * 86400, "")),
+        (Retention.SUCCEEDED, (None, "succeeded")),
+        (Retention.SETTLED, (None, "settled")),
+    ],
+    ids=["default", "window", "succeeded", "settled"],
+)
+def test_the_retention_is_copied_onto_the_row(
+    retention: timedelta | Retention | None, columns: tuple[int | None, str]
+) -> None:
+    """At most one of the two columns, because the prune reads them as one
+    knob: a row carrying both would be a window and a policy at once."""
+    with _declared(retention) as cls, transaction.atomic():
+        event_id = fire(cls(value=1))
+    row = EventRecord.objects.get(pk=event_id)
+    assert (row.retention_seconds, row.delete_when) == columns
+
+
+@pytest.mark.parametrize("policy", [Retention.SUCCEEDED, Retention.SETTLED])
+def test_a_dedupe_key_is_refused_for_an_event_deleted_on_consumption(policy: Retention) -> None:
+    """The key is unique on the event row, so it protects only while the row
+    exists - minutes, here - and a re-fired duplicate would be accepted the
+    moment the first was pruned."""
+    with (
+        _declared(policy) as cls,
+        transaction.atomic(),
+        pytest.raises(ValueError, match="dedupe_key"),
+    ):
+        fire(cls(value=1), dedupe_key="once")
+    assert not EventRecord.objects.exists()
+
+
+def test_a_dedupe_key_is_accepted_with_a_window_of_its_own() -> None:
+    with _declared(timedelta(days=7)) as cls, transaction.atomic():
+        fire(cls(value=1), dedupe_key="once")
+    assert EventRecord.objects.get().dedupe_key == "once"
+
+
+def test_a_redeclared_event_does_not_change_the_fate_of_one_already_recorded() -> None:
+    """Copied at fire time, as max_attempts is onto a delivery: what the class
+    says later reaches the next event, not this one."""
+    with _declared(Retention.SUCCEEDED) as cls, transaction.atomic():
+        before = fire(cls(value=1))
+    with _declared(None) as cls, transaction.atomic():
+        after = fire(cls(value=2))
+
+    assert prune_events() == 1
+    assert list(EventRecord.objects.values_list("pk", flat=True)) == [after]
+    assert before != after

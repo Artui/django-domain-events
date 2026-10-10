@@ -17,7 +17,7 @@ are changing.
 | --- | --- | --- |
 | `CODEC` | `...DataclassCodec` | Encodes and decodes payloads. See [codecs](declaring.md#codecs). |
 | `WARN_OUTSIDE_ATOMIC` | `True` | Warn when `fire()` is called with no transaction open. |
-| `BATCH_SIZE` | `50` | Rows per claim, per prune batch and per requeue chunk. |
+| `BATCH_SIZE` | `50` | Rows per claim and per requeue chunk. |
 | `LEASE_SECONDS` | `300` | How long a claim is held before another worker may steal it. |
 | `POLL_SECONDS` | `1.0` | Relay poll interval, and the floor under `LISTEN`/`NOTIFY`. |
 | `WAKE` | `"notify"` | `"notify"` or `"poll"`. `"poll"` sends no `NOTIFY` and the relay does not `LISTEN`; latency is then `POLL_SECONDS`. |
@@ -25,7 +25,8 @@ are changing.
 | `BACKOFF_BASE_SECONDS` | `2.0` | First retry ceiling; doubles per attempt. |
 | `BACKOFF_CAP_SECONDS` | `3600.0` | Ceiling the doubling stops at. |
 | `MAX_RECEIVER_RETRY_DELAY_SECONDS` | `86400.0` | Longest delay a `RetryAfter` may ask for. |
-| `RETENTION_DAYS` | `90` | Prune window, and the default quiet-receiver window. |
+| `RETENTION_DAYS` | `90` | Prune window for an event that declares no [retention](retention.md) of its own, and the default quiet-receiver window. |
+| `PRUNE_BATCH_ROWS` | `5000` | Rows per prune transaction, delivery rows and event rows alike. |
 | `TASK_BACKEND` | `None` | Dotted path, or a `{"BACKEND": ..., **options}` mapping. |
 
 ## The ones worth thinking about
@@ -112,13 +113,25 @@ fails the system check `E007`.
 
 ### `BATCH_SIZE`
 
-Three jobs, deliberately one number: it is "how many rows this package touches in
-one statement", and the reasons to raise or lower it point the same way for all
-three.
+Two jobs, deliberately one number: it is "how many rows this package touches in
+one statement", and the reasons to raise or lower it point the same way for both.
 
 The requeue chunks on it because SQLite refuses more than 32,766 parameters in
 one statement, and a dead-letter table past that is an ordinary outcome of one
 bad deploy.
+
+### `PRUNE_BATCH_ROWS`
+
+How many rows one prune transaction deletes, counting each event's delivery rows
+and the event row itself. A setting of its own, rather than `BATCH_SIZE`, because
+the unit differs: a claim takes delivery rows one receiver at a time, while a
+prune takes whole events, and one fan-out event can carry tens of thousands of
+rows. Counted in events, a batch's size was whatever the events in it happened to
+hold.
+
+An event with more delivery rows than this has them deleted this many at a time,
+each chunk in its own transaction, and goes with the last of them. Override it for
+one run with `prune_events --batch-size`. See [pruning](operations.md#pruning).
 
 ### `TASK_BACKEND`
 

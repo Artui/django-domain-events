@@ -25,6 +25,18 @@ would strand rows written under the old name:
 class OrderSubmitted: ...
 ```
 
+An event is kept for `RETENTION_DAYS` unless its declaration says otherwise:
+`retention=timedelta(...)` for a window of its own, or `Retention.SUCCEEDED` or
+`Retention.SETTLED` to delete it, with its delivery rows, as soon as it has been
+consumed. The policy is copied onto each event as it is fired. See
+[retention](retention.md) for what each keeps and what deleting early gives up.
+
+```python
+@event(name="mail.NewsletterSent", retention=Retention.SUCCEEDED)
+@dataclass(frozen=True, slots=True)
+class NewsletterSent: ...
+```
+
 !!! warning "The name is what rows are written under"
     Renaming the class without pinning the name leaves every unfinished row
     naming something the registry no longer has. The
