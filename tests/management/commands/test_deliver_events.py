@@ -109,6 +109,24 @@ def test_a_signal_asks_the_relay_to_stop(
     assert _handlers() == before, "the previous handlers were not restored"
 
 
+def test_a_single_pass_leaves_the_signals_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--once`` is one pass, so it has no batch to hand back and nothing to
+    stop between; a signal ends it as it ends any command, which the
+    operations page says."""
+    during: list[dict[int, object]] = []
+
+    def one_pass(*, limit: int | None, worker_id: str) -> dict:
+        during.append(_handlers())
+        return {}
+
+    monkeypatch.setattr(deliver_events, "deliver_pending", one_pass)
+    before = _handlers()
+
+    call_command("deliver_events", "--once", stdout=StringIO())
+
+    assert during == [before]
+
+
 def test_a_second_signal_exits_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
     """An operator who sends it twice has stopped waiting for the receiver in
     hand. A BaseException, because the relay swallows every Exception a

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.db import DEFAULT_DB_ALIAS, OperationalError, connection, connections, transaction
 
 from django_domain_events.declaration.registry import registry
@@ -443,9 +444,41 @@ def test_a_hand_back_that_fails_does_not_kill_the_relay(
     def broken(*args: object, **kwargs: object) -> int:
         raise OperationalError("the connection is lost")
 
-    monkeypatch.setattr(run_relay_module, "hand_back", broken, raising=False)
+    monkeypatch.setattr(run_relay_module, "hand_back", broken)
     counts = run_relay(worker_id="w1", stop=lambda: bool(record), wait=lambda _: False, **UNSAFE)
 
     assert counts == {DeliveryStatus.SUCCEEDED: 1}
     assert "could not hand back" in caplog.text
     assert closes == [write_alias()]
+
+
+def test_an_exit_raised_mid_delivery_ends_the_relay_and_rolls_the_receiver_back(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """What a second signal does: ``deliver_events`` raises ``SystemExit`` from
+    its handler, wherever the main thread is. The relay swallows every
+    ``Exception`` a delivery raises, so this holds that its guards stay that
+    narrow - widened to ``BaseException``, they would swallow the exit and the
+    relay would carry on. The receiver's work rolls back with its transaction,
+    and its row stays claimed for its lease to lapse, as a crashed worker's
+    does."""
+    with transaction.atomic():
+        fire(order)
+    record.clear()
+    users = get_user_model().objects
+
+    def interrupted(evt: OrderPlaced) -> None:
+        users.create(username="written-before-the-exit")
+        record.append("interrupted")
+        raise SystemExit(128 + 15)
+
+    # Bounded, so an exit that is swallowed fails the raises below rather than
+    # leaving the relay running forever.
+    with receiver_replaced("testapp.durable_receiver", interrupted), pytest.raises(SystemExit):
+        run_relay(worker_id="w1", passes=2, wait=lambda _: False, **UNSAFE)
+
+    assert record[-1] == "interrupted", "a delivery ran after the exit"
+    assert not users.filter(username="written-before-the-exit").exists()
+    interrupted_row = DeliveryRecord.objects.get(receiver_key="testapp.durable_receiver")
+    assert interrupted_row.status == DeliveryStatus.CLAIMED
+    assert interrupted_row.lease_expires_at > datetime.now(timezone.utc)

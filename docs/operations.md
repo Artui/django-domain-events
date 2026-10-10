@@ -34,7 +34,15 @@ How long a stop takes:
 - the rest of the running receiver, if one is running;
 - up to `POLL_SECONDS`, if the relay is idle and waiting for work;
 - up to 15 seconds, if the database is down and the relay is waiting between
-  claims (see below).
+  claims (see below);
+- however long a connection attempt in progress takes to fail. Against an
+  address that drops packets rather than refusing them, that is the operating
+  system's TCP timeout, often minutes, because libpq sets no `connect_timeout`
+  by default. Set one in `DATABASES[...]["OPTIONS"]`, for example
+  `{"connect_timeout": 5}`.
+
+The stop applies to the relay. `deliver_events --once` does not handle signals:
+it is one pass, and a signal ends it the way it ends any other command.
 
 **`terminationGracePeriodSeconds` has to cover the longest receiver you run**,
 and usually that is the one that decides. Kubernetes' default is 30 seconds. A
@@ -63,9 +71,10 @@ pod looked healthy.
 A failed claim is retried after a pause. The pause starts at `POLL_SECONDS`,
 doubles on each consecutive failure up to 15 seconds, and resets at the first
 claim that succeeds. So the relay is working again within about 15 seconds of
-the database coming back. A relay that exited instead would wait out its
-supervisor's restart backoff, which reaches five minutes under Kubernetes'
-`CrashLoopBackOff`.
+the database coming back, plus however long a connection attempt takes to fail
+(the `connect_timeout` above bounds that). A relay that exited instead would
+wait out its supervisor's restart backoff, which reaches five minutes under
+Kubernetes' `CrashLoopBackOff`.
 
 ### A receiver holds a transaction open
 
