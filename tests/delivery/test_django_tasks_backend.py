@@ -543,7 +543,7 @@ def test_a_message_for_a_released_row_does_not_take_it(
     ),
 )
 def test_two_copies_at_once_run_the_receiver_once(
-    order: OrderPlaced, record: list[str], task_site: None
+    order: OrderPlaced, record: list[str], task_site: None, caplog
 ) -> None:
     """Two workers dequeue the same message at the same moment, each on its own
     connection. Both read a CLAIMED row with the token they carry; the take is
@@ -559,20 +559,34 @@ def test_two_copies_at_once_run_the_receiver_once(
         # one is still inside the receiver's transaction.
         time.sleep(0.3)
 
+    errors: list[BaseException] = []
+
     def copy() -> None:
         try:
             barrier.wait(timeout=10)
             _replay(message)
+        except BaseException as exc:
+            errors.append(exc)
         finally:
             connections.close_all()
 
-    with receiver_replaced("testapp.durable_receiver", slow):
+    with (
+        receiver_replaced("testapp.durable_receiver", slow),
+        caplog.at_level("WARNING", logger="django_domain_events.delivery.deliver"),
+    ):
         threads = [threading.Thread(target=copy) for _ in range(2)]
         for t in threads:
             t.start()
         for t in threads:
             t.join(timeout=20)
 
+    # A copy that died - on the barrier, a connection, anything - would also
+    # leave one run behind. Both must have finished cleanly, and the loser must
+    # have been turned away by the take rather than by a crash.
+    assert not any(t.is_alive() for t in threads), "a copy did not finish"
+    assert errors == []
+    refused = [r for r in caplog.records if "no longer holds" in r.getMessage()]
+    assert len(refused) == 1
     assert ran == [1]
     row = DeliveryRecord.objects.get(pk=delivery_id)
     assert (row.status, row.attempts) == (DeliveryStatus.SUCCEEDED, 1)
@@ -604,3 +618,38 @@ def test_the_eager_path_hands_off_under_its_own_claim(
         object.__setattr__(entry, "eager", False)
 
     assert ENQUEUED == []
+
+
+def test_the_take_survives_a_receiver_that_raises(
+    order: OrderPlaced, record: list[str], task_site: None
+) -> None:
+    """The take commits on its own, before the receiver's transaction opens.
+    Inside that transaction it would roll back with a raising receiver: the row
+    would stay CLAIMED under the relay's claim, the failure would be written
+    against a claim that never landed and so not at all, and the same message
+    delivered again would take the row and run it a second time."""
+    from django_domain_events.declaration.registry import registry
+
+    delivery_id, message = _handed_off(order)
+    failures: list[object] = []
+
+    def explode(evt: OrderPlaced) -> None:
+        raise RuntimeError("downstream is down")
+
+    entry = registry.receiver_for_key("testapp.durable_receiver")
+    original = entry.on_failure
+    object.__setattr__(entry, "on_failure", failures.append)
+    try:
+        with receiver_replaced("testapp.durable_receiver", explode):
+            _replay(message)
+            row = DeliveryRecord.objects.get(pk=delivery_id)
+            assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 1)
+            assert len(failures) == 1
+
+            _replay(message)
+    finally:
+        object.__setattr__(entry, "on_failure", original)
+
+    row = DeliveryRecord.objects.get(pk=delivery_id)
+    assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 1)
+    assert len(failures) == 1

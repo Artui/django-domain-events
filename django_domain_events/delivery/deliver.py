@@ -33,7 +33,7 @@ def deliver_one(
     claimed_by: str | None = None,
     claimed_at: str | None = None,
 ) -> DeliveryStatus | None:
-    """Run one delivery and record its outcome. ``None`` means it was not run.
+    """Run one delivery and record its outcome. ``None`` means this call recorded none.
 
     The receiver's work and the acknowledgement commit together, so a receiver
     touching only this database is effectively once: the duplicate at-least-once
