@@ -124,7 +124,8 @@ class ConvertDigest(Operation):
             schema_editor.execute(self._postgres("forwards", schema_editor, from_state))
             return
         for operation, before, after in self._steps(app_label, from_state):
-            operation.database_forwards(app_label, schema_editor, before, after)
+            if not self._printing_only(operation, schema_editor):
+                operation.database_forwards(app_label, schema_editor, before, after)
 
     def database_backwards(self, app_label, schema_editor, from_state, to_state):
         # Django passes the state *after* this operation as from_state when
@@ -134,7 +135,26 @@ class ConvertDigest(Operation):
             schema_editor.execute(self._postgres("backwards", schema_editor, to_state))
             return
         for operation, before, after in reversed(self._steps(app_label, to_state)):
-            operation.database_backwards(app_label, schema_editor, after, before)
+            if not self._printing_only(operation, schema_editor):
+                operation.database_backwards(app_label, schema_editor, after, before)
+
+    @staticmethod
+    def _printing_only(operation, schema_editor):
+        """Whether ``operation`` is the copy and ``sqlmigrate`` is only printing.
+
+        Django marks a top-level RunPython as not writable as SQL and skips
+        it, but it takes this operation for a schema one and runs it, so the
+        copy would run against the live table under a command that must touch
+        nothing (test_sqlmigrate_prints_the_conversion_without_running_it).
+        Without the first conjunct an ordinary ``migrate`` never runs the copy,
+        and test_every_hex_digest_becomes_the_raw_bytes_it_spelled goes red; without
+        the second the schema steps print nothing either, which the sqlmigrate
+        test catches.
+        """
+        if schema_editor.collect_sql and not operation.reduces_to_sql:
+            schema_editor.collected_sql.append("-- THIS OPERATION CANNOT BE WRITTEN AS SQL")
+            return True
+        return False
 
     def describe(self):
         return "Store the delivery target digest as raw bytes"

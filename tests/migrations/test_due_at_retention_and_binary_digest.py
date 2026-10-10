@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
 from django.db.migrations.executor import MigrationExecutor
 from django.test.utils import CaptureQueriesContext
@@ -158,6 +159,29 @@ def test_the_conversion_reaches_every_row_across_batches(
 
     MigrationExecutor(connection).migrate(BEFORE)
     assert _stored(BEFORE) == {t: hashlib.sha256(t.encode()).hexdigest() for t in TARGETS}
+
+
+@pytest.mark.parametrize("backwards", [False, True], ids=["forwards", "backwards"])
+def test_sqlmigrate_prints_the_conversion_without_running_it(
+    at_the_previous_schema: MigrationExecutor, backwards: bool
+) -> None:
+    """``sqlmigrate`` prints SQL and must touch nothing. Django marks a
+    ``RunPython`` it meets at the top level as not writable as SQL, but the
+    copy here runs inside ConvertDigest, which Django takes for a schema
+    operation - so without the guard the copy ran against the live table,
+    failing on the column the printed SQL had not created."""
+    _populate_the_old_schema()
+    before = _stored(BEFORE)
+
+    sql = call_command("sqlmigrate", APP, AFTER[0][1], backwards=backwards)
+
+    if connection.vendor == "postgresql":
+        assert ("decode(" if not backwards else "encode(") in sql
+    else:
+        assert "-- THIS OPERATION CANNOT BE WRITTEN AS SQL" in sql
+        # The swap's schema steps around the copy still print.
+        assert "target_digest_raw" in sql
+    assert _stored(BEFORE) == before
 
 
 class _RecordingPostgresEditor:
