@@ -19,6 +19,7 @@ from django_domain_events.delivery.deliver import deliver_one, deliver_pending
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
 from django_domain_events.delivery.retry_after import RetryAfter
+from django_domain_events.delivery.utils import partition_by_lane
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.settings import setting
@@ -1064,7 +1065,7 @@ def test_a_deleted_receivers_row_is_in_the_default_lane(order: OrderPlaced) -> N
     gone = _delivery_id("tests.mail")
 
     with receiver_deleted("testapp.durable_receiver"):
-        inside, rest = deliver_module.partition_by_lane(ids, "default")
+        inside, rest = partition_by_lane(ids, "default")
 
     assert inside == ids, "a row with no receiver was not counted in the default lane"
     assert rest == []

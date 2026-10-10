@@ -47,7 +47,9 @@ class RetryAfter(Exception):
     the row ``FAILED`` and ``on_failure`` told the attempt number the receiver
     was given - which the next run is given again, since nothing was spent.
 
-    A negative delay is refused where it is constructed. The relay would record
+    A deferral that does not count must ask for a wait above zero, since a zero
+    would return at once and, spending nothing, would loop until
+    ``give_up_after``. A negative delay is refused where it is constructed. The relay would record
     that refusal as an ordinary failure on the ordinary curve, with a message
     saying why, rather than scheduling an attempt in the past.
     """
@@ -58,6 +60,13 @@ class RetryAfter(Exception):
         # try to build a timedelta from it.
         if not seconds >= 0:
             raise ValueError(f"RetryAfter needs a delay of zero seconds or more, got {seconds!r}")
+        # A deferral that does not count and asks for no wait would come back at
+        # once, every time, until ``give_up_after`` ended it: a hot loop spending
+        # no attempt. A counting retry of zero is bounded by ``max_attempts``.
+        if not counts and not seconds > 0:
+            raise ValueError(
+                f"RetryAfter(counts=False) needs a delay above zero seconds, got {seconds!r}"
+            )
         self.seconds = float(seconds)
         self.reason = reason
         self.counts = counts

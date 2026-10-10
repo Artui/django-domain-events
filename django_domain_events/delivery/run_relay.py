@@ -12,13 +12,9 @@ from django.db import Error, connections
 from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
-from django_domain_events.delivery.deliver import (
-    OnDeferral,
-    claim_size,
-    dispatch_one,
-    partition_by_lane,
-)
+from django_domain_events.delivery.deliver import dispatch_one
 from django_domain_events.delivery.hand_back import hand_back
+from django_domain_events.delivery.utils import OnDeferral, claim_size, partition_by_lane
 from django_domain_events.delivery.wake import wait_for_work
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.operations.prune_events import prune_events

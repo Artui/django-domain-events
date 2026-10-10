@@ -83,6 +83,23 @@ def test_zero_means_as_soon_as_possible() -> None:
     assert RetryAfter(0).seconds == 0.0
 
 
+@pytest.mark.parametrize("seconds", [0, 0.0])
+def test_a_deferral_that_does_not_count_must_ask_for_a_wait(seconds: float) -> None:
+    """Held by the ``not seconds > 0`` conjunct of the ``counts=False`` guard.
+
+    Zero is valid for a counting retry (``max_attempts`` bounds it), so the
+    plain check cannot be what refuses it here.
+    """
+    with pytest.raises(ValueError, match="above zero seconds"):
+        RetryAfter(seconds, counts=False)
+    assert RetryAfter(seconds).seconds == 0.0
+
+
+def test_a_nan_deferral_that_does_not_count_is_refused_by_the_plain_check() -> None:
+    with pytest.raises(ValueError, match="zero seconds or more"):
+        RetryAfter(float("nan"), counts=False)
+
+
 def test_it_sets_the_schedule_instead_of_the_backoff_curve(settings) -> None:
     """The requested delay, not the curve.
 
@@ -295,7 +312,7 @@ def test_a_jittered_delay_stays_under_the_ceiling(
 
 def test_on_failure_hears_a_deferral_with_the_attempt_the_receiver_was_told() -> None:
     seen: list[DeliveryFailure] = []
-    _deferring("probe.heard", seconds=0, give_up_after=timedelta(days=1), on_failure=seen.append)
+    _deferring("probe.heard", seconds=1, give_up_after=timedelta(days=1), on_failure=seen.append)
     _fire()
 
     deliver_pending(limit=1, ignore_backoff=True)
@@ -397,7 +414,7 @@ def test_a_deferral_with_no_give_up_after_counts_and_says_so_once(
     """Nothing else would ever end the delivery, so it is spent like any
     ``RetryAfter``, and the declaration is named once per process rather than
     once per row of a twenty-thousand row burst."""
-    _deferring("probe.unbounded", seconds=0, max_attempts=3)
+    _deferring("probe.unbounded", seconds=1, max_attempts=3)
     _fire()
     _fire()
 
@@ -422,7 +439,7 @@ def test_a_drain_meeting_a_deferral_ends() -> None:
     leaves nothing else to end the loop: without the lane being set aside for
     the rest of the pass, it would claim the row again until the receiver's
     runaway guard stopped it."""
-    seen = _deferring("probe.drained", seconds=0, give_up_after=timedelta(days=1))
+    seen = _deferring("probe.drained", seconds=1, give_up_after=timedelta(days=1))
     _fire()
 
     assert drain_outbox() == {DeliveryStatus.FAILED: 1}
