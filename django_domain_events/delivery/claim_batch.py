@@ -4,8 +4,10 @@ from datetime import datetime, timedelta
 
 from django.db import connections, models, transaction
 
+from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.types.registered_receiver import DEFAULT_LANE
 
 
 def claim_batch(
@@ -16,6 +18,7 @@ def claim_batch(
     limit: int,
     only_ids: list[int] | None = None,
     ignore_backoff: bool = False,
+    lane: str | None = None,
 ) -> list[int]:
     """Take ownership of up to ``limit`` deliveries and return their ids.
 
@@ -30,6 +33,13 @@ def claim_batch(
 
     ``ignore_backoff`` claims rows whose retry is still scheduled. It exists for
     the test helper, which cannot wait out a jittered hour to observe a retry.
+
+    ``lane`` claims only the rows of the receivers declared in it, read from the
+    registry on every call; ``"default"`` claims every row no named lane takes,
+    which includes the rows of a receiver that no longer exists; None claims
+    every lane. The filter is applied to the whole of the owed condition, both
+    arms, so a relay never takes over another lane's lapsed claims
+    (``test_a_lapsed_claim_in_a_named_lane_stays_out_of_the_default_lane``).
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
 
@@ -37,6 +47,7 @@ def claim_batch(
     if not ignore_backoff:
         retryable &= models.Q(available_at__lte=now)
     owed = retryable | models.Q(status=DeliveryStatus.CLAIMED, lease_expires_at__lt=now)
+    owed &= _in_lane(lane)
 
     alias = write_alias()
     connection = connections[alias]
@@ -58,6 +69,23 @@ def claim_batch(
                 lease_expires_at=now + lease,
             )
     return ids
+
+
+def _in_lane(lane: str | None) -> models.Q:
+    """The rows a relay serving ``lane`` may claim, as one condition.
+
+    A project that never names a lane sends exactly the claim it sent before
+    lanes existed
+    (``test_without_named_lanes_the_default_lane_sends_the_unfiltered_claim``):
+    Django compiles a negated ``__in`` over no values to nothing at all, so the
+    default lane needs no special case for an empty exclusion. A named lane with
+    no receivers compiles to a condition nothing matches, and claims nothing.
+    """
+    if lane is None:
+        return models.Q()
+    if lane == DEFAULT_LANE:
+        return ~models.Q(receiver_key__in=registry.receiver_keys_in_named_lanes())
+    return models.Q(receiver_key__in=registry.receiver_keys_in_lane(lane))
 
 
 def _locked(queryset: models.QuerySet, *, skip_locked: bool, for_update: bool) -> models.QuerySet:

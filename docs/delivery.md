@@ -115,6 +115,45 @@ adding a little on top of it. Retrying a shared downstream at
 ceiling-plus-a-bit keeps every failed delivery in the same cohort, which is the
 thundering herd the backoff was meant to break up.
 
+### A curve per receiver
+
+The two settings are the curve for every receiver. One that talks to a
+destination with its own idea of patience declares its own:
+
+```python
+@receiver(OrderPlaced, backoff_base_seconds=120, backoff_cap_seconds=1800, max_attempts=10)
+def email_receipt(evt: OrderPlaced) -> None: ...
+```
+
+Either may be declared alone, and the other comes from its setting. Declaring
+both with the cap below the base is refused at the decorator, because every
+retry would wait for the cap and the base would never be read.
+
+The curve is read when an attempt fails, not copied onto the row, so a deploy
+that changes it applies to deliveries already in flight. `max_attempts` is the
+opposite on purpose: it is copied at fire time, so lowering it cannot
+dead-letter rows already owed.
+
+**Full jitter applies to a declared curve too, and it is easy to misread.** A
+base of 60 does not mean "retry in a minute"; it means "retry somewhere in the
+next minute", and the first retry can land after a few seconds. The ceilings
+above are the longest each wait can be, and on average a wait is half its
+ceiling. So the span a retry budget covers is a distribution, not a number:
+
+- the **sum of the ceilings** is the longest it can last;
+- **half of that** is how long it lasts on average.
+
+The curve above, with ten attempts, has nine waits with ceilings of 120, 240,
+480, 960 and then 1800 seconds five times: at most three hours, an hour and a
+half on average. It is the curve the [example shop](https://github.com/Artui/django-domain-events/tree/main/examples/shop)
+gives its receipt mailer, and the demo there checks both numbers. The same
+eight attempts on the default two-second base wait at most 254 seconds in all,
+so a mail provider down for an hour dead-letters every one of them.
+
+A list of delays or a callable schedule is not offered, because the
+[catalogue](introspection.md#the-catalogue) publishes the curve and could not
+publish either.
+
 Dead is where a delivery stops **on its own**, not where it stops for good - see
 [requeue](operations.md#requeue-from-the-dead-letter-queue).
 

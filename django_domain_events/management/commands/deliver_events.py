@@ -11,6 +11,7 @@ from django.core.management.base import BaseCommand, OutputWrapper
 
 from django_domain_events.delivery.deliver import deliver_pending
 from django_domain_events.delivery.run_relay import run_relay
+from django_domain_events.types.registered_receiver import DEFAULT_LANE
 
 # What a container runtime sends to ask for a stop, and what Ctrl-C sends.
 _STOPPING = (signal.SIGTERM, signal.SIGINT)
@@ -24,14 +25,39 @@ class Command(BaseCommand):
         parser.add_argument("--limit", type=int, default=None, help="Deliver at most this many.")
         parser.add_argument("--passes", type=int, default=None, help="Stop after this many passes.")
         parser.add_argument("--worker-id", default=None, help="Defaults to host:pid.")
+        parser.add_argument(
+            "--lane",
+            default=DEFAULT_LANE,
+            help=(
+                "Serve only the receivers declared with this lane=. Defaults to the "
+                "default lane: every receiver not declared in a named one."
+            ),
+        )
+        parser.add_argument(
+            "--batch-size",
+            type=int,
+            default=None,
+            help="Rows per claim for this process. Defaults to BATCH_SIZE.",
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
         worker_id = options["worker_id"] or f"{socket.gethostname()}:{os.getpid()}"
         if options["once"]:
-            counts = deliver_pending(limit=options["limit"], worker_id=worker_id)
+            counts = deliver_pending(
+                limit=options["limit"],
+                worker_id=worker_id,
+                lane=options["lane"],
+                batch_size=options["batch_size"],
+            )
         else:
             with _StopOnSignal(self.stderr) as stop:
-                counts = run_relay(worker_id=worker_id, passes=options["passes"], stop=stop)
+                counts = run_relay(
+                    worker_id=worker_id,
+                    passes=options["passes"],
+                    stop=stop,
+                    lane=options["lane"],
+                    batch_size=options["batch_size"],
+                )
         if not counts:
             self.stdout.write("Nothing owed.")
             return

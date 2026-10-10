@@ -21,6 +21,7 @@ from django_domain_events.settings import get_task_backend, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.types.registered_receiver import RegisteredReceiver
 from django_domain_events.utils import TERMINAL, decode_payload, parse_datetime
 
 logger = logging.getLogger(__name__)
@@ -119,6 +120,7 @@ def deliver_one(
         return _fail(
             fence,
             delivery,
+            receiver,
             f"No event is registered under {delivery.event.name!r}, so its "
             f"payload cannot be rebuilt.",
         )
@@ -146,6 +148,7 @@ def deliver_one(
         actor_label=delivery.event.actor_label,
         scope=delivery.event.scope,
         target=delivery.target,
+        delivery_id=delivery.pk,
     )
     try:
         with (
@@ -181,6 +184,7 @@ def deliver_one(
         return _fail(
             fence,
             delivery,
+            receiver,
             f"{type(exc).__name__}: {exc}",
             attempt=attempt,
             terminal=isinstance(exc, PermanentFailure),
@@ -347,6 +351,7 @@ def dispatch_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryS
 def _fail(
     fence: _Fence,
     row: Any,
+    receiver: RegisteredReceiver,
     message: str,
     attempt: int | None = None,
     *,
@@ -360,6 +365,10 @@ def _fail(
     with the receiver's own schedule: it raised ``RetryAfter``. Neither changes
     how the attempt is counted, so neither can keep a row alive past the budget
     it was fired with.
+
+    The curve is the receiver's own where it declared one, read from the
+    registration ``deliver_one`` resolved for this attempt rather than from the
+    row: a curve changed by a deploy applies to deliveries already in flight.
     """
     now = datetime.now(timezone.utc)
     attempts = attempt if attempt is not None else row.attempts + 1
@@ -369,8 +378,8 @@ def _fail(
     wait = (
         backoff(
             attempts,
-            base=setting("BACKOFF_BASE_SECONDS"),
-            cap=setting("BACKOFF_CAP_SECONDS"),
+            base=_or_setting(receiver.backoff_base_seconds, "BACKOFF_BASE_SECONDS"),
+            cap=_or_setting(receiver.backoff_cap_seconds, "BACKOFF_CAP_SECONDS"),
             jitter=random.random(),
         )
         if requested_delay is None
@@ -386,6 +395,28 @@ def _fail(
     if outcome is not None:
         _notify_failure(row, status=status, attempt=attempts, error=truncated)
     return outcome
+
+
+def claim_size(batch_size: int | None) -> int:
+    """The rows one claim takes: ``batch_size`` if given, else ``BATCH_SIZE``.
+
+    Shared by ``run_relay`` and ``deliver_pending``, which both take a size of
+    their own for their claims alone - ``BATCH_SIZE`` also sizes prune batches
+    and requeue chunks, and a mail relay wants a batch it can send inside one
+    lease. A size below one is refused rather than run: it claims nothing on
+    every pass, so a relay sized that way idles forever with work owed
+    (``test_a_relay_refuses_a_batch_that_claims_nothing``).
+    """
+    if batch_size is None:
+        return setting("BATCH_SIZE")
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be positive, got {batch_size}")
+    return batch_size
+
+
+def _or_setting(declared: float | None, name: str) -> float:
+    """A receiver's declared value, or the setting it overrides when it has none."""
+    return setting(name) if declared is None else declared
 
 
 def _capped(row: Any, seconds: float) -> timedelta:
@@ -468,6 +499,8 @@ def deliver_pending(
     *,
     worker_id: str = "deliver_pending",
     ignore_backoff: bool = False,
+    lane: str | None = None,
+    batch_size: int | None = None,
 ) -> dict[DeliveryStatus, int]:
     """Claim and deliver what is owed, and report the outcome.
 
@@ -476,9 +509,18 @@ def deliver_pending(
     relay uses, so a pass here and a running relay do not hand the same row to
     two receivers - on a backend with row locking. SQLite has none, so two
     concurrent passes there can both take the same row.
+
+    ``lane`` delivers only that lane's rows, as ``run_relay(lane=...)`` claims
+    them; ``"default"`` is every row no named lane takes. None, the default
+    here, is every lane, which is what this function did before lanes existed
+    and what ``drain_outbox`` promises. ``deliver_events --once`` passes the
+    default lane unless told otherwise, as the relay does.
+
+    ``batch_size`` sizes each claim in place of ``BATCH_SIZE``.
     """
+    registry.require_lane(lane)
     lease = timedelta(seconds=setting("LEASE_SECONDS"))
-    batch_size = setting("BATCH_SIZE")
+    batch_size = claim_size(batch_size)
 
     counts: dict[DeliveryStatus, int] = {}
     while True:
@@ -488,6 +530,7 @@ def deliver_pending(
             lease=lease,
             limit=limit if limit is not None else batch_size,
             ignore_backoff=ignore_backoff,
+            lane=lane,
         )
         for delivery_id in ids:
             outcome = dispatch_one(delivery_id, worker_id=worker_id)

@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 from django.db import OperationalError, connection, transaction
 
+from django_domain_events.declaration.registry import registry
+from django_domain_events.delivery import deliver as deliver_module
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.deliver import deliver_one, deliver_pending
 from django_domain_events.delivery.drain_outbox import drain_outbox
@@ -15,9 +20,12 @@ from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.settings import setting
+from django_domain_events.types.delivery_context import DeliveryContext
+from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
-from tests.conftest import receiver_deleted, receiver_replaced
-from tests.testapp.events import OrderPlaced, SlowWork
+from django_domain_events.types.registered_receiver import RegisteredReceiver
+from tests.conftest import receiver_deleted, receiver_registered, receiver_replaced
+from tests.testapp.events import OrderPlaced, SlowWork, calls
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -747,3 +755,144 @@ def test_a_failed_row_claimed_early_on_purpose_still_runs(
 
     assert deliver_pending(ignore_backoff=True) == {DeliveryStatus.SUCCEEDED: 1}
     assert record == ["durable:7"]
+
+
+@contextmanager
+def _declared(key: str, **fields: object) -> Iterator[None]:
+    """Change what one registered receiver declares, for the duration of a test."""
+    entry = registry.receiver_for_key(key)
+    original = {name: getattr(entry, name) for name in fields}
+    for name, value in fields.items():
+        object.__setattr__(entry, name, value)
+    try:
+        yield
+    finally:
+        for name, value in original.items():
+            object.__setattr__(entry, name, value)
+
+
+def _explode(evt: OrderPlaced) -> None:
+    raise RuntimeError("downstream is down")
+
+
+def _wait_after_failing(key: str) -> float:
+    """Fail one attempt of ``key`` and return the delay it was scheduled for."""
+    before = datetime.now(timezone.utc)
+    with receiver_replaced(key, _explode):
+        assert deliver_one(_delivery_id(key)) is DeliveryStatus.FAILED
+    return (_delivery(key).available_at - before).total_seconds()
+
+
+def test_a_receiver_can_declare_its_own_backoff_base(
+    order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Read when the attempt fails, from the registry - the row was fired
+    before the curve was declared, which is the case of a deploy changing it
+    under deliveries already in flight."""
+    monkeypatch.setattr(deliver_module.random, "random", lambda: 1.0)
+    _fire(order)
+
+    with _declared("testapp.durable_receiver", backoff_base_seconds=600):
+        waited = _wait_after_failing("testapp.durable_receiver")
+
+    assert 595 < waited < 605
+    assert _wait_after_failing("testapp.with_context") < setting("BACKOFF_BASE_SECONDS") + 5
+
+
+def test_a_receiver_can_declare_its_own_backoff_cap(
+    order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ten attempts in, the setting's base of 2 seconds has doubled to 1024,
+    under the setting's cap of an hour and well over this receiver's 30."""
+    monkeypatch.setattr(deliver_module.random, "random", lambda: 1.0)
+    _fire(order)
+    _set("testapp.durable_receiver", attempts=9, max_attempts=20)
+    _set("testapp.with_context", attempts=9, max_attempts=20)
+
+    with _declared("testapp.durable_receiver", backoff_cap_seconds=30):
+        waited = _wait_after_failing("testapp.durable_receiver")
+
+    assert 25 < waited < 35
+    assert _wait_after_failing("testapp.with_context") > 1000
+
+
+def test_the_delivery_id_reaches_a_receiver_taking_context(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The id of the row being delivered, which is what a receiver needs to
+    correlate its own record with the outbox's."""
+    _fire(order)
+    seen: list[DeliveryContext] = []
+
+    with receiver_replaced("testapp.with_context", lambda evt, ctx: seen.append(ctx)):
+        deliver_one(_delivery_id("testapp.with_context"))
+
+    assert [ctx.delivery_id for ctx in seen] == [_delivery_id("testapp.with_context")]
+
+
+def _laned_mail() -> RegisteredReceiver:
+    return RegisteredReceiver(
+        key="tests.mail",
+        event_class=OrderPlaced,
+        func=lambda evt: calls.append("mail"),
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=5,
+        eager=False,
+        site="relay",
+        lane="mail",
+    )
+
+
+def test_deliver_pending_serves_the_lane_it_is_given(order: OrderPlaced, record: list[str]) -> None:
+    with receiver_registered(_laned_mail()):
+        _fire(order)
+        record.clear()
+
+        assert deliver_pending(lane="mail") == {DeliveryStatus.SUCCEEDED: 1}
+        assert record == ["mail"]
+        assert deliver_pending(lane="default") == {DeliveryStatus.SUCCEEDED: 2}
+        assert "mail" not in record[1:]
+
+
+def test_deliver_pending_with_no_lane_serves_every_lane(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Its contract before lanes, kept: drain_outbox() is built on it and
+    promises everything owed."""
+    with receiver_registered(_laned_mail()):
+        _fire(order)
+
+        assert deliver_pending() == {DeliveryStatus.SUCCEEDED: 3}
+
+
+def test_deliver_pending_refuses_a_lane_nobody_declared(order: OrderPlaced) -> None:
+    with pytest.raises(ValueError, match="No receiver is declared in lane 'mial'"):
+        deliver_pending(lane="mial")
+
+
+def test_deliver_pending_claims_in_batches_of_the_size_it_is_given(
+    order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Overriding BATCH_SIZE for its claims alone, and still draining everything
+    owed when no limit is set."""
+    limits: list[int] = []
+    real = deliver_module.claim_batch
+
+    def spy(**kwargs: Any) -> list[int]:
+        limits.append(kwargs["limit"])
+        return real(**kwargs)
+
+    monkeypatch.setattr(deliver_module, "claim_batch", spy)
+    _fire(order)
+
+    assert deliver_pending(batch_size=1) == {DeliveryStatus.SUCCEEDED: 2}
+    assert limits == [1, 1, 1]
+
+
+@pytest.mark.parametrize("size", [0, -1])
+def test_deliver_pending_refuses_a_batch_that_claims_nothing(size: int) -> None:
+    """A batch of zero claims nothing on every pass, so the loop it sizes ends
+    at once having delivered nothing, and a relay sized that way idles forever."""
+    with pytest.raises(ValueError, match="batch_size must be positive"):
+        deliver_pending(batch_size=size)

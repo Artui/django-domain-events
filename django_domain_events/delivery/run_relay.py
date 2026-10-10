@@ -9,14 +9,16 @@ from typing import Any
 
 from django.db import Error, connections
 
+from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
-from django_domain_events.delivery.deliver import dispatch_one
+from django_domain_events.delivery.deliver import claim_size, dispatch_one
 from django_domain_events.delivery.hand_back import hand_back
 from django_domain_events.delivery.wake import wait_for_work
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.types.registered_receiver import DEFAULT_LANE
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,8 @@ def run_relay(
     wait: Callable[[float], bool] | None = None,
     stop: Callable[[], bool] = lambda: False,
     allow_unsafe_concurrency: bool = False,
+    lane: str | None = DEFAULT_LANE,
+    batch_size: int | None = None,
 ) -> dict[DeliveryStatus, int]:
     """Claim and deliver until ``passes`` is spent, ``stop`` says so, or forever.
 
@@ -63,6 +67,25 @@ def run_relay(
     ``allow_unsafe_concurrency`` lifts that for a deployment running exactly one
     relay, which is a real shape in development; running two under it is the
     thing the guard exists to prevent.
+
+    ``lane`` is the lane this process serves: only the rows of receivers
+    declared with that ``lane=``, read from the registry on every claim. The
+    default lane is every row no named lane takes, including the rows of a
+    receiver that has since been deleted, and it is what a relay serves unless
+    told otherwise - the default relay staying out of a slow lane is the whole
+    of the isolation. None serves every lane, for a single relay in development.
+    A lane no receiver is declared in is refused at start, because a relay
+    serving it would claim nothing and look healthy doing it.
+
+    Concurrency is the number of processes. Deliveries run one at a time within
+    a relay, so a lane that must go faster runs more relays with the same
+    ``lane``; nothing here limits the rate across them.
+
+    ``batch_size`` sizes this relay's claims in place of ``BATCH_SIZE``, which
+    also sizes prune batches and requeue chunks. Every row of a batch is
+    claimed under one lease, and a row still waiting its turn when that lease
+    lapses is taken by another relay, so a slow lane wants a batch it can work
+    through inside ``LEASE_SECONDS``.
     """
     connection = connections[write_alias()]
     if not (allow_unsafe_concurrency or connection.features.has_select_for_update_skip_locked):
@@ -71,9 +94,10 @@ def run_relay(
             f"a relay on it is not safe against a second copy of itself. Use "
             f"deliver_events --once, or drain_outbox() in tests."
         )
+    registry.require_lane(lane)
 
     lease = timedelta(seconds=setting("LEASE_SECONDS"))
-    batch_size = setting("BATCH_SIZE")
+    batch_size = claim_size(batch_size)
     poll = setting("POLL_SECONDS")
 
     counts: dict[DeliveryStatus, int] = {}
@@ -86,7 +110,9 @@ def run_relay(
         # conditioned on.
         claimed_at = now()
         try:
-            ids = claim_batch(worker_id=worker_id, now=claimed_at, lease=lease, limit=batch_size)
+            ids = claim_batch(
+                worker_id=worker_id, now=claimed_at, lease=lease, limit=batch_size, lane=lane
+            )
         except Exception as exc:
             failed_claims += 1
             logger.exception("relay %s could not claim", worker_id)

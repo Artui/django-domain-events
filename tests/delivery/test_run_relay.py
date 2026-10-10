@@ -14,9 +14,12 @@ from django_domain_events.delivery.run_relay import run_relay
 from django_domain_events.delivery.wake import wait_for_work
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.models.delivery_record import DeliveryRecord
+from django_domain_events.settings import setting
+from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
-from tests.conftest import receiver_replaced
-from tests.testapp.events import OrderPlaced
+from django_domain_events.types.registered_receiver import RegisteredReceiver
+from tests.conftest import receiver_registered, receiver_replaced
+from tests.testapp.events import OrderPlaced, calls
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -482,3 +485,83 @@ def test_an_exit_raised_mid_delivery_ends_the_relay_and_rolls_the_receiver_back(
     interrupted_row = DeliveryRecord.objects.get(receiver_key="testapp.durable_receiver")
     assert interrupted_row.status == DeliveryStatus.CLAIMED
     assert interrupted_row.lease_expires_at > datetime.now(timezone.utc)
+
+
+def _mail() -> RegisteredReceiver:
+    return RegisteredReceiver(
+        key="tests.mail",
+        event_class=OrderPlaced,
+        func=lambda evt: calls.append("mail"),
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=5,
+        eager=False,
+        site="relay",
+        lane="mail",
+    )
+
+
+def test_a_relay_serves_the_default_lane_unless_told_otherwise(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The default relay staying out of a named lane is the whole of the
+    isolation, so it is what a relay started with no lane does."""
+    with receiver_registered(_mail()):
+        with transaction.atomic():
+            fire(order)
+        record.clear()
+
+        assert run_relay(worker_id="w1", passes=1, **UNSAFE) == {DeliveryStatus.SUCCEEDED: 2}
+        assert "mail" not in record
+        assert run_relay(worker_id="w2", passes=1, lane="mail", **UNSAFE) == {
+            DeliveryStatus.SUCCEEDED: 1
+        }
+        assert record[-1] == "mail"
+
+
+def test_a_relay_given_no_lane_at_all_serves_every_lane(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    with receiver_registered(_mail()):
+        with transaction.atomic():
+            fire(order)
+
+        assert run_relay(worker_id="w1", passes=1, lane=None, **UNSAFE) == {
+            DeliveryStatus.SUCCEEDED: 3
+        }
+
+
+def test_a_relay_for_a_lane_nobody_declared_refuses_to_start() -> None:
+    """It would claim nothing, forever, and look healthy doing it."""
+    with pytest.raises(ValueError, match="No receiver is declared in lane 'mial'"):
+        run_relay(worker_id="w1", passes=1, lane="mial", **UNSAFE)
+
+
+def test_a_relay_claims_in_batches_of_its_own_size(
+    order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per process, for claims only: a mail relay wants a batch it can send
+    within one lease, while BATCH_SIZE also sizes pruning and requeues."""
+    limits: list[int] = []
+    real = run_relay_module.claim_batch
+
+    def spy(**kwargs: object) -> list[int]:
+        limits.append(kwargs["limit"])
+        return real(**kwargs)
+
+    monkeypatch.setattr(run_relay_module, "claim_batch", spy)
+    with transaction.atomic():
+        fire(order)
+
+    run_relay(worker_id="w1", passes=1, batch_size=1, **UNSAFE)
+    run_relay(worker_id="w1", passes=1, wait=lambda _: False, **UNSAFE)
+
+    assert limits == [1, setting("BATCH_SIZE")]
+
+
+@pytest.mark.parametrize("size", [0, -1])
+def test_a_relay_refuses_a_batch_that_claims_nothing(size: int) -> None:
+    """A batch of zero claims nothing on every pass: a relay that idles forever
+    with work owed."""
+    with pytest.raises(ValueError, match="batch_size must be positive"):
+        run_relay(worker_id="w1", passes=1, batch_size=size, **UNSAFE)

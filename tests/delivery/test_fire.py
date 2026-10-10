@@ -26,6 +26,7 @@ from django_domain_events.scope.attributed import attributed
 from django_domain_events.scope.suppressed import suppressed
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
+from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.testapp.events import Eagerly, OrderPlaced, PinnedName, Unheard
 
@@ -304,6 +305,38 @@ def test_the_callable_is_handed_the_event_and_the_fire_time_context() -> None:
         {"tenant": "acme"},
         "",
     )
+    # No row exists yet: the callable is what decides which rows to write.
+    assert context.delivery_id is None
+
+
+def test_an_eager_receiver_in_a_named_lane_is_still_attempted_at_commit() -> None:
+    """The lane decides which relay picks up what the eager attempt did not
+    finish; it does not move the eager attempt out of the firing process."""
+    ran: list[int] = []
+    receiver(Unheard, key="probe.eager_mail", eager=True, lane="mail")(
+        lambda event: ran.append(event.value)
+    )
+
+    with transaction.atomic():
+        fire(Unheard(value=3))
+
+    assert ran == [3]
+    assert DeliveryRecord.objects.get(receiver_key="probe.eager_mail").status == "succeeded"
+
+
+def test_receivers_without_a_row_are_given_no_delivery_id(order: OrderPlaced) -> None:
+    """INLINE and ON_COMMIT receivers are handed the fire-time context, and
+    there is no delivery row behind either of them to name."""
+    seen: list[DeliveryContext] = []
+    for mode in (DeliveryMode.INLINE, DeliveryMode.ON_COMMIT):
+        receiver(Unheard, mode=mode, takes_context=True, key=f"probe.{mode.value}")(
+            lambda event, context: seen.append(context)
+        )
+
+    with transaction.atomic():
+        fire(Unheard(value=1))
+
+    assert [context.delivery_id for context in seen] == [None, None]
 
 
 def test_a_target_is_written_as_long_as_it_was_returned() -> None:

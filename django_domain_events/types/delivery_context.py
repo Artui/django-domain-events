@@ -36,3 +36,12 @@ class DeliveryContext:
 
     Last, and defaulted, so adding it does not break a consumer constructing one
     - this is an exported type."""
+
+    delivery_id: int | None = None
+    """The primary key of the delivery row this attempt is for.
+
+    Set only on the context the relay or a task builds for a delivery. None
+    where no row exists: the context ``targets=`` callables receive at fire
+    time, which is what decides the rows, and the one INLINE and ON_COMMIT
+    receivers receive, which never have one. Optional and last for the same
+    reason as ``target``."""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 
 import pytest
@@ -140,3 +141,50 @@ def test_a_wildcard_is_matched_when_asked_not_when_declared() -> None:
     r.register_event(_entry(DeclaredLater, "app.DeclaredLater"))
 
     assert [x.key for x in r.receivers_for(DeclaredLater)] == ["app.everything"]
+
+
+def _laned(r: Registry) -> Registry:
+    """Two receivers in ``mail``, one in ``search``, one in the default lane."""
+    for key, lane in [("app.a", "mail"), ("app.b", "search"), ("app.c", "default")]:
+        r.register_receiver(dataclasses.replace(_receiver(key, Alpha, print), lane=lane))
+    r.register_receiver(dataclasses.replace(_receiver("app.d", Beta, print), lane="mail"))
+    return r
+
+
+def test_a_named_lane_is_the_receivers_declared_in_it() -> None:
+    r = _laned(Registry())
+
+    assert r.receiver_keys_in_lane("mail") == ["app.a", "app.d"]
+    assert r.receiver_keys_in_lane("search") == ["app.b"]
+    assert r.receiver_keys_in_lane("nobody") == []
+
+
+def test_the_default_lane_is_defined_by_what_the_named_lanes_take() -> None:
+    """Every key in a named lane, so the default lane can be phrased as
+    everything else - which is what reaches a row whose receiver was deleted."""
+    r = _laned(Registry())
+
+    assert r.receiver_keys_in_named_lanes() == ["app.a", "app.b", "app.d"]
+    assert Registry().receiver_keys_in_named_lanes() == []
+
+
+def test_the_declared_lanes_are_listed() -> None:
+    assert _laned(Registry()).lanes() == ["default", "mail", "search"]
+    assert Registry().lanes() == ["default"]
+
+
+def test_a_lane_nobody_declared_is_refused() -> None:
+    """A relay started for a misspelt lane would claim nothing, forever, and
+    look healthy doing it."""
+    r = _laned(Registry())
+
+    with pytest.raises(ValueError, match=r"No receiver is declared in lane 'mial'.*mail, search"):
+        r.require_lane("mial")
+
+
+@pytest.mark.parametrize("lane", ["mail", "default", None])
+def test_a_declared_lane_the_default_and_every_lane_are_accepted(lane: str | None) -> None:
+    """The default lane exists with no receiver in it - it is where a deleted
+    receiver's rows drain - and None is every lane at once."""
+    _laned(Registry()).require_lane(lane)
+    Registry().require_lane("default")
