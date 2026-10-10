@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -160,6 +161,7 @@ def check_settings_keys_are_known(**kwargs: Any) -> list[Any]:
     # Folded in here rather than registered on its own: it is the same silent
     # ineffective configuration, and the check is already wired.
     problems.extend(_wake_setting_problems())
+    problems.extend(_relay_prune_setting_problems())
     return problems
 
 
@@ -197,6 +199,50 @@ def _wake_setting_problems() -> list[Any]:
                 "seconds, zero or more.",
                 hint="Use 0 to send every notification, or a positive number of seconds.",
                 id="django_domain_events.E007",
+            )
+        )
+    return problems
+
+
+def _relay_prune_setting_problems() -> list[Any]:
+    """``RELAY_PRUNE`` is a switch and ``RELAY_PRUNE_SECONDS`` a positive interval.
+
+    Both fail the relay quietly if misread. A ``RELAY_PRUNE`` of ``"false"`` is
+    a truthy string and would leave the sweep on for the operator who meant it
+    off, and an interval of zero, a negative or NaN compares true or false
+    against every elapsed time and turns the throttle into a sweep on every idle
+    pass, or into none. Infinity is refused too: it is the off switch spelt
+    badly, and ``RELAY_PRUNE`` is the spelling.
+
+    The interval guard is one branch arc of several conditions, each held by a
+    case of ``test_a_prune_interval_that_is_not_a_positive_duration_is_an_error``:
+    the bool test by ``True``, the type test by ``"60"`` and ``None``, the sign
+    test by ``0`` and ``-1``, the finiteness test by ``inf``, and the spelling
+    ``interval > 0`` rather than ``interval <= 0`` by ``nan``, which is false
+    against both.
+    """
+    problems: list[Any] = []
+    switch = setting("RELAY_PRUNE")
+    if not isinstance(switch, bool):
+        problems.append(
+            Error(
+                f"RELAY_PRUNE is {switch!r}, which is not a bool.",
+                hint="Use True to let an idle relay prune, or False to schedule prune_events.",
+                id="django_domain_events.E008",
+            )
+        )
+    interval = setting("RELAY_PRUNE_SECONDS")
+    if (
+        isinstance(interval, bool)
+        or not isinstance(interval, (int, float))
+        or not (interval > 0 and math.isfinite(interval))
+    ):
+        problems.append(
+            Error(
+                f"RELAY_PRUNE_SECONDS is {interval!r}, which is not a finite number of "
+                "seconds above zero.",
+                hint="Set RELAY_PRUNE to False to stop the relay pruning rather than a long interval.",
+                id="django_domain_events.E009",
             )
         )
     return problems

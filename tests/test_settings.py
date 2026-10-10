@@ -51,3 +51,8 @@ def test_the_wake_defaults() -> None:
     """Notify on Postgres, at most one NOTIFY per half second per process."""
     assert setting("WAKE") == "notify"
     assert setting("NOTIFY_COALESCE_SECONDS") == 0.5
+
+
+def test_the_relay_sweep_is_on_and_throttled_to_a_minute_by_default() -> None:
+    assert setting("RELAY_PRUNE") is True
+    assert setting("RELAY_PRUNE_SECONDS") == 60
