@@ -113,14 +113,35 @@ def reserve_stock(evt: OrderPlaced) -> None:
     fire(StockReserved(order_id=evt.order_id, sku=evt.sku, quantity=evt.quantity))
 
 
-@receiver(OrderPlaced, mode=DURABLE, eager=True, key="shop.email_receipt", max_attempts=8)
+@receiver(
+    OrderPlaced,
+    mode=DURABLE,
+    eager=True,
+    key="shop.email_receipt",
+    max_attempts=10,
+    backoff_base_seconds=120,
+    backoff_cap_seconds=1800,
+    lane="mail",
+)
 def email_receipt(evt: OrderPlaced) -> None:
     """A side effect the database cannot undo, so at-least-once is real here.
 
     `eager=True` attempts it the moment the transaction commits, in the web
     process, with the relay as the fallback - outbox durability at on-commit
-    latency. `max_attempts=8` because a mail provider being down for an hour is
-    ordinary and the default five would dead-letter through it.
+    latency.
+
+    A curve of its own, because a mail provider being down for an hour is
+    ordinary. Ten attempts make nine waits, with ceilings of 2, 4, 8 and 16
+    minutes and then 30 minutes five times: at most three hours. Full jitter
+    draws each wait from zero up to its ceiling, so on average the budget lasts
+    half that, an hour and a half - not a guarantee, which no jittered curve
+    can give. The settings' 2-second base would have lasted at most 254
+    seconds over eight attempts, and an hour-long outage would dead-letter
+    every receipt sent into it.
+
+    `lane="mail"` because sending is slow next to everything else here: run it
+    with relays of its own (`deliver_events --lane mail`), and the relay
+    started without `--lane` stays out of it.
     """
     from shop.models import Order, SentEmail
 

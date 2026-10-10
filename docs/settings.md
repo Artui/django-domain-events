@@ -17,7 +17,7 @@ are changing.
 | --- | --- | --- |
 | `CODEC` | `...DataclassCodec` | Encodes and decodes payloads. See [codecs](declaring.md#codecs). |
 | `WARN_OUTSIDE_ATOMIC` | `True` | Warn when `fire()` is called with no transaction open. |
-| `BATCH_SIZE` | `50` | Rows per claim and per requeue chunk. |
+| `BATCH_SIZE` | `50` | Rows per claim and per requeue chunk. A relay may override it for its claims. |
 | `LEASE_SECONDS` | `300` | How long a claim is held before another worker may steal it. |
 | `POLL_SECONDS` | `1.0` | Relay poll interval, and the floor under `LISTEN`/`NOTIFY`. |
 | `WAKE` | `"notify"` | `"notify"` or `"poll"`. `"poll"` sends no `NOTIFY` and the relay does not `LISTEN`; latency is then `POLL_SECONDS`. |
@@ -119,6 +119,12 @@ one statement", and the reasons to raise or lower it point the same way for both
 The requeue chunks on it because SQLite refuses more than 32,766 parameters in
 one statement, and a dead-letter table past that is an ordinary outcome of one
 bad deploy.
+
+A relay can size its own claims without moving the other two:
+`deliver_events --batch-size 5`, or `run_relay(batch_size=5)`. That is the
+knob for a [lane](operations.md#lanes-a-relay-per-kind-of-work) of slow
+receivers, which wants a batch it can work through inside `LEASE_SECONDS`
+while pruning keeps its larger statements.
 
 ### `PRUNE_BATCH_ROWS`
 

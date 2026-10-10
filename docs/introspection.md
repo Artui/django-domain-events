@@ -53,6 +53,17 @@ succeeded" - and the JSON carries it as `retention_seconds` and `delete_when`,
 the two values `fire()` records on the event row. An event on the default window
 has neither, and no line.
 
+A receiver with a [curve of its own](delivery.md#a-curve-per-receiver) or in a
+named [lane](operations.md#lanes-a-relay-per-kind-of-work) gets a line under
+its table too - "retries on its own curve: base 120s, cap 1800s", "is served by
+relays started with `--lane mail`" - and the JSON carries
+`backoff_base_seconds`, `backoff_cap_seconds` and `lane` on every receiver.
+Lines rather than columns, so the tables a project has already committed do
+not change shape for properties most receivers do not have. A half of the curve
+left to its setting is named as the setting rather than resolved, because the
+catalogue describes declarations and the machine that builds it need not share
+the relay's settings.
+
 Building a catalogue never runs consumer code: a `default_factory` is **named**,
 not called.
 

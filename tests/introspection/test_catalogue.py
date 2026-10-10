@@ -301,3 +301,22 @@ def test_the_retention_is_published_as_fire_records_it(
     with _kept(retention):
         entry = _by_name("tests.kept")
     assert (entry.retention_seconds, entry.delete_when) == published
+
+
+def test_a_declared_curve_and_lane_reach_the_catalogue() -> None:
+    """Both change how a receiver behaves in production - when it is retried,
+    and which relay process runs it - so a diff of the catalogue should show a
+    change to either."""
+    declared = _durable(
+        "testapp.mail", AnyEvent, backoff_base_seconds=60, backoff_cap_seconds=1200, lane="mail"
+    )
+    with receiver_registered(declared):
+        [mail] = catalogue().wildcard_receivers
+
+    assert (mail.backoff_base_seconds, mail.backoff_cap_seconds, mail.lane) == (60, 1200, "mail")
+    plain = _by_name("testapp.OrderPlaced").receivers[0]
+    assert (plain.backoff_base_seconds, plain.backoff_cap_seconds, plain.lane) == (
+        None,
+        None,
+        "default",
+    )

@@ -14,6 +14,8 @@ from django.utils.timezone import now
 from django_domain_events import (
     assert_fired,
     attributed,
+    backoff,
+    catalogue,
     deliver_pending,
     outbox_health,
     prune_events,
@@ -329,4 +331,31 @@ class Command(BaseCommand):
             "shop.notify_warehouse" in quiet,
             False,
         )
+
+        head("14. The receipt mailer has a lane of its own, and a curve that lasts")
+        receipt = "shop.email_receipt"
+        replay_events([placed.pk], receiver_keys=[receipt])
+        sent_before = SentEmail.objects.count()
+        print(f"   default lane: {deliver_pending(worker_id='demo', lane='default')}")
+        check(
+            "a relay without --lane leaves the mail lane alone",
+            SentEmail.objects.count(),
+            sent_before,
+        )
+        print(f"   mail lane:    {deliver_pending(worker_id='demo', lane='mail')}")
+        check("the mail lane's relay sends it", SentEmail.objects.count(), sent_before + 1)
+        [mailer] = [r for e in catalogue().events for r in e.receivers if r.key == receipt]
+        # One wait between each pair of attempts, each drawn from zero up to
+        # its ceiling: the sum of the ceilings is the longest the budget can
+        # last, and half of it is how long it lasts on average.
+        ceilings = [
+            backoff(
+                n, base=mailer.backoff_base_seconds, cap=mailer.backoff_cap_seconds, jitter=1.0
+            ).total_seconds()
+            for n in range(1, mailer.max_attempts)
+        ]
+        print(f"   {mailer.max_attempts} attempts, waits of at most {[int(c) for c in ceilings]}s")
+        print(f"   lasts at most {sum(ceilings) / 3600:g}h, {sum(ceilings) / 7200:g}h on average")
+        check("the retry budget lasts at most three hours", sum(ceilings), 3 * 3600)
+        check("and an hour and a half on average", sum(ceilings) / 2, 1.5 * 3600)
         print("\nEvery claim above was checked.")

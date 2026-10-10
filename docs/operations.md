@@ -12,9 +12,76 @@ python manage.py deliver_events --once                   # one pass
 python manage.py deliver_events --limit 100              # cap one pass
 python manage.py deliver_events --worker-id box-1        # defaults to host:pid
 python manage.py deliver_events --passes 5               # stop after five
+python manage.py deliver_events --lane mail              # only receivers in lane "mail"
+python manage.py deliver_events --batch-size 5           # rows per claim, this process
 ```
 
 Run as many as you like on Postgres. On SQLite, run exactly one.
+
+### Lanes: a relay per kind of work
+
+One relay delivers one row at a time. A receiver that takes a second per
+delivery - an email provider, a slow partner API - holds every receiver queued
+behind it for that second, and a burst of twenty thousand of them holds the
+rest of the outbox for hours. A lane gives it relays of its own:
+
+```python
+@receiver(MailOrderQueued, lane="mail", takes_context=True, targets=recipients)
+def send_mail(evt: MailOrderQueued, ctx: DeliveryContext) -> None: ...
+```
+
+```bash
+python manage.py deliver_events                          # the default lane
+python manage.py deliver_events --lane mail --batch-size 5
+```
+
+- **A relay started without `--lane` serves the default lane**: every receiver
+  not declared in a named one, and every row whose receiver no longer exists,
+  which it records orphaned. So the default relay stays out of `mail` without
+  being told about it, and a slow receiver added next month is isolated by
+  its own declaration rather than by an edit to every deployment manifest.
+- **Membership is read from the declarations at every claim**, not stored on
+  the row. Moving a receiver to another lane moves the deliveries it is still
+  owed with it, and a receiver removed from a lane falls back to the default
+  one.
+- **A lane nobody declared is refused at start.** A relay for a misspelt lane
+  would otherwise claim nothing, forever, and look healthy doing it.
+- **`--once` follows the same rule**, so a cron running `deliver_events --once`
+  beside a mail relay stays out of the mail lane. Called from code,
+  `deliver_pending()` delivers every lane unless given one, and
+  `drain_outbox()` always delivers every lane; `run_relay(lane=None)` serves
+  every lane from a single relay, for development.
+- **`--batch-size` sizes this process's claims** in place of `BATCH_SIZE`, which
+  also sizes prune batches and requeue chunks. Every row of a batch is claimed
+  under one lease, and a row still waiting its turn when the lease lapses is
+  taken by another relay, so a slow lane wants a batch it can send inside
+  `LEASE_SECONDS`. With `--once` it cannot be combined with `--limit`, which is
+  one claim of exactly that many rows; the pair is refused rather than the
+  batch silently ignored.
+- **An `eager=True` attempt still runs in the firing process**, whatever the
+  lane: the lane decides which relay picks up what eager delivery did not
+  finish.
+
+**Concurrency is the number of processes.** Deliveries are serial within a
+relay, so a lane that has to go faster runs more relays with the same `--lane`,
+and they share its rows through the same skipped locks as any other relays. At
+0.1 to 1 second per send, one process delivers 1 to 10 a second; a provider
+allowing 18 a second takes somewhere between two and eighteen mail relays. The
+package does not limit the rate across them - it is not a distributed rate
+limiter - so the number of processes is the limit, and a destination that
+throttles still answers with errors that cost attempts.
+
+A deployment with a mail lane, as Kubernetes Deployments:
+
+```yaml
+# deliver-events: the default lane
+command: ["python", "manage.py", "deliver_events"]
+replicas: 2
+---
+# deliver-events-mail: its own lane, sized to the provider's rate
+command: ["python", "manage.py", "deliver_events", "--lane", "mail", "--batch-size", "5"]
+replicas: 4
+```
 
 ### Stopping it
 

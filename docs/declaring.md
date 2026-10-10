@@ -62,6 +62,14 @@ def reserve_stock(evt: OrderPlaced) -> None: ...
 | `takes_context` | `False` | Receive a second `DeliveryContext` argument. |
 | `on_failure` | `None` | Called after a failed attempt is recorded. See [delivery](delivery.md#recording-a-failed-attempt). |
 | `targets` | `None` | One delivery per target this returns. See [fan-out](#fan-out-one-delivery-per-target). |
+| `backoff_base_seconds` | `None` | Override `BACKOFF_BASE_SECONDS` for this receiver's retries. See [delivery](delivery.md#a-curve-per-receiver). |
+| `backoff_cap_seconds` | `None` | Override `BACKOFF_CAP_SECONDS` for this receiver's retries. |
+| `lane` | `"default"` | Which relay processes claim its rows. See [lanes](operations.md#lanes-a-relay-per-kind-of-work). |
+
+`max_attempts`, `eager`, `site="task"`, `lease_seconds`, `targets`, the two
+backoff knobs and `lane` each describe a delivery row, so a receiver declaring
+any of them with `mode=INLINE` or `ON_COMMIT` is refused at the decorator: it
+has no row to retry, lease, fan out or claim.
 
 `takes_context` is the spelling `django.tasks.task` uses for the same idea. The
 overloads make a type checker enforce the arity it implies, so declaring one and
@@ -72,6 +80,12 @@ writing the other fails at the decorator rather than in the relay hours later.
 def audit(evt: OrderPlaced, ctx: DeliveryContext) -> None:
     log.info("attempt %s of %s", ctx.attempt, ctx.event_name)
 ```
+
+`ctx.delivery_id` is the primary key of the delivery row being attempted, for a
+receiver that keeps its own record and wants to join it to the outbox's - an
+email log storing the provider's message id beside the delivery that sent it,
+say. It is `None` wherever no row exists: in the context a `targets=` callable
+receives at fire time, and for `INLINE` and `ON_COMMIT` receivers.
 
 !!! note "A long receiver needs `lease_seconds`, not a heartbeat"
     A receiver still working when its lease lapses has its row taken by another
@@ -84,6 +98,13 @@ def audit(evt: OrderPlaced, ctx: DeliveryContext) -> None:
 !!! note "`max_attempts` is frozen at fire time"
     It is copied onto the delivery row when the event is fired, so lowering it
     later cannot retroactively dead-letter rows already in flight.
+
+!!! note "The curve and the lane are read live"
+    `backoff_base_seconds`, `backoff_cap_seconds` and `lane` are the opposite of
+    `max_attempts`: they are read from the declaration when they are needed -
+    the curve when an attempt fails, the lane when a relay claims - and never
+    copied onto the row. A deploy that changes either changes it for the
+    deliveries already owed.
 
 ## Every event: `AnyEvent`
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 
@@ -263,3 +264,42 @@ def test_json_carries_the_retention() -> None:
     document = render_catalogue(Catalogue(events=(_kept(delete_when="settled"),)), format="json")
     [event] = json.loads(document)["events"]
     assert (event["retention_seconds"], event["delete_when"]) == (None, "settled")
+
+
+def _with(**fields: object) -> str:
+    """The Markdown of one event whose one receiver declares ``fields``."""
+    receiver = dataclasses.replace(_receiver("shop.mail"), **fields)
+    return render_catalogue(Catalogue(events=(_event("shop.Sent", receiver),)))
+
+
+def test_a_named_lane_is_said_in_prose_under_the_table() -> None:
+    """Prose rather than a column, for the reason the targets line gives: a
+    column would change every committed catalogue for a property most receivers
+    do not have."""
+    assert "`shop.mail` is served by relays started with `--lane mail`." in _with(lane="mail")
+    assert "--lane" not in _with()
+
+
+def test_a_declared_curve_is_said_in_prose_under_the_table() -> None:
+    both = _with(backoff_base_seconds=60.0, backoff_cap_seconds=1200.0)
+    assert "`shop.mail` retries on its own curve: base 60s, cap 1200s." in both
+    base_only = _with(backoff_base_seconds=0.5)
+    assert "base 0.5s, cap `BACKOFF_CAP_SECONDS`." in base_only
+    cap_only = _with(backoff_cap_seconds=300)
+    assert "base `BACKOFF_BASE_SECONDS`, cap 300s." in cap_only
+    assert "own curve" not in _with()
+
+
+def test_json_carries_the_curve_and_the_lane() -> None:
+    receiver = dataclasses.replace(
+        _receiver("shop.mail"), backoff_base_seconds=60.0, backoff_cap_seconds=1200.0, lane="mail"
+    )
+    parsed = json.loads(
+        render_catalogue(Catalogue(events=(_event("shop.Sent", receiver),)), format="json")
+    )
+    [published] = parsed["events"][0]["receivers"]
+    assert (
+        published["backoff_base_seconds"],
+        published["backoff_cap_seconds"],
+        published["lane"],
+    ) == (60.0, 1200.0, "mail")

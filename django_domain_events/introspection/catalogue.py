@@ -64,6 +64,9 @@ def _described(receivers: Iterable[RegisteredReceiver]) -> tuple[CatalogueReceiv
             takes_context=r.takes_context,
             lease_seconds=r.lease_seconds,
             targets=None if r.targets is None else _callable_path(r.targets),
+            backoff_base_seconds=r.backoff_base_seconds,
+            backoff_cap_seconds=r.backoff_cap_seconds,
+            lane=r.lane,
         )
         for r in sorted(receivers, key=lambda r: r.key)
     )

@@ -43,6 +43,65 @@ def test_a_limit_is_passed_through(order: OrderPlaced, record: list[str]) -> Non
     assert "succeeded: 1" in out.getvalue()
 
 
+def _captured(monkeypatch: pytest.MonkeyPatch, name: str) -> list[dict[str, object]]:
+    """Replace the relay or the single pass with one that records its arguments."""
+    seen: list[dict[str, object]] = []
+
+    def stand_in(**kwargs: object) -> dict:
+        seen.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(deliver_events, name, stand_in)
+    return seen
+
+
+@pytest.mark.parametrize(
+    ("argv", "name"),
+    [([], "run_relay"), (["--once"], "deliver_pending")],
+    ids=["relay", "once"],
+)
+def test_without_a_lane_it_serves_the_default_lane(
+    argv: list[str], name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both modes, so a cron running --once beside a mail relay stays out of the
+    mail lane exactly as the default relay does."""
+    seen = _captured(monkeypatch, name)
+
+    call_command("deliver_events", *argv, stdout=StringIO())
+
+    assert (seen[0]["lane"], seen[0]["batch_size"]) == ("default", None)
+
+
+@pytest.mark.parametrize(
+    ("argv", "name"),
+    [([], "run_relay"), (["--once"], "deliver_pending")],
+    ids=["relay", "once"],
+)
+def test_a_lane_and_a_batch_size_are_passed_through(
+    argv: list[str], name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = _captured(monkeypatch, name)
+
+    call_command("deliver_events", *argv, "--lane", "mail", "--batch-size", "2", stdout=StringIO())
+
+    assert (seen[0]["lane"], seen[0]["batch_size"]) == ("mail", 2)
+
+
+def test_a_single_pass_with_a_batch_size_delivers(order: OrderPlaced, record: list[str]) -> None:
+    """The real single pass, with no stand-in: --limit defaults to None, so a
+    --batch-size alone is not mistaken for the refused limit-and-batch pair."""
+    with transaction.atomic():
+        fire(order)
+    out = StringIO()
+    call_command("deliver_events", "--once", "--batch-size", "1", stdout=out)
+    assert "succeeded: 2" in out.getvalue()
+
+
+def test_a_single_pass_refuses_a_limit_with_a_batch_size() -> None:
+    with pytest.raises(ValueError, match="limit=3 is one claim of that many rows"):
+        call_command("deliver_events", "--once", "--limit", "3", "--batch-size", "2")
+
+
 def test_the_relay_refuses_where_locks_cannot_be_skipped() -> None:
     """SQLite cannot express a skipped lock, so two relays on it would hand the
     same row to two receivers on every pass.
@@ -94,7 +153,7 @@ def test_a_signal_asks_the_relay_to_stop(
     hand finishes and the rest of the batch is handed back."""
     seen: list[bool] = []
 
-    def relay(*, worker_id: str, passes: int | None, stop: Callable[[], bool]) -> dict:
+    def relay(*, worker_id: str, passes: int | None, stop: Callable[[], bool], **_: object) -> dict:
         seen.append(stop())
         signal.raise_signal(signum)
         seen.append(stop())
@@ -115,7 +174,7 @@ def test_a_single_pass_leaves_the_signals_alone(monkeypatch: pytest.MonkeyPatch)
     operations page says."""
     during: list[dict[int, object]] = []
 
-    def one_pass(*, limit: int | None, worker_id: str) -> dict:
+    def one_pass(*, limit: int | None, worker_id: str, **_: object) -> dict:
         during.append(_handlers())
         return {}
 
@@ -132,7 +191,7 @@ def test_a_second_signal_exits_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
     hand. A BaseException, because the relay swallows every Exception a
     delivery raises and a receiver may too."""
 
-    def relay(*, worker_id: str, passes: int | None, stop: Callable[[], bool]) -> dict:
+    def relay(*, worker_id: str, passes: int | None, stop: Callable[[], bool], **_: object) -> dict:
         signal.raise_signal(signal.SIGTERM)
         signal.raise_signal(signal.SIGTERM)
         raise AssertionError("the second signal did not end the command")
@@ -155,7 +214,7 @@ def test_off_the_main_thread_the_relay_runs_without_a_stop(
     by one. It still runs, and says so, rather than refusing."""
     seen: list[bool] = []
 
-    def relay(*, worker_id: str, passes: int | None, stop: Callable[[], bool]) -> dict:
+    def relay(*, worker_id: str, passes: int | None, stop: Callable[[], bool], **_: object) -> dict:
         seen.append(stop())
         return {}
 

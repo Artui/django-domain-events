@@ -47,6 +47,8 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
 | The partners change, then a replay | `replay_events` asking for the targets again: a partner still subscribed is reopened, a new one added, one that left untouched |
 | A consumed event, then a prune | `Retention.SUCCEEDED` deleting `StockReserved` once delivered while the orders stay for `RETENTION_DAYS`, and `quiet_receivers` still knowing its receiver ran |
 
+| The receipt is replayed into its lane | `lane="mail"`: the default lane's pass leaves it alone and the mail lane's sends it; and the receipt's own retry curve, checked to last at most three hours and an hour and a half on average |
+
 ## The declarations
 
 `shop/events.py` is the whole surface. Worth reading in this order:
@@ -61,8 +63,14 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
    its acknowledgement commit together and the duplicate at-least-once entitles
    you to cannot be observed. It also fires a second event.
 4. **`email_receipt`** - a side effect the database cannot undo, so at-least-once
-   is real here. `eager=True` for latency, `max_attempts=8` because a mail
-   provider being down for an hour is ordinary.
+   is real here. `eager=True` for latency. A retry curve of its own -
+   `backoff_base_seconds=120`, `backoff_cap_seconds=1800`, `max_attempts=10` -
+   because a mail provider being down for an hour is ordinary: nine waits whose
+   ceilings sum to three hours, so an hour and a half on average, since full
+   jitter draws each wait from zero up to its ceiling. The settings' 2-second
+   base would have spent eight attempts in at most 254 seconds. And
+   `lane="mail"`, so sending runs on relays of its own and a slow provider holds
+   up nothing else.
 5. **`write_audit_trail`** - `takes_context=True` for the attribution the row
    carries, and `lease_seconds=900` because it is slow. A receiver cannot extend
    its own lease: it runs inside the transaction carrying its acknowledgement,
@@ -102,7 +110,8 @@ the same one to two workers needs `SELECT ... FOR UPDATE SKIP LOCKED`. On
 SQLite it refuses to start rather than pretend:
 
 ```bash
-DDE_EXAMPLE_DATABASE=postgres python manage.py deliver_events
+DDE_EXAMPLE_DATABASE=postgres python manage.py deliver_events              # the default lane
+DDE_EXAMPLE_DATABASE=postgres python manage.py deliver_events --lane mail  # the receipts
 ```
 
 Not shown here, and worth reading about instead:

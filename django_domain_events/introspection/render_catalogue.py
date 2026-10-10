@@ -112,6 +112,25 @@ def _receiver_table(receivers: tuple[CatalogueReceiver, ...]) -> list[str]:
                 f"`{receiver.targets}`.",
                 "",
             ]
+        if receiver.backoff_base_seconds is not None or receiver.backoff_cap_seconds is not None:
+            # Either half alone is a curve of its own; the other half is named
+            # as the setting it comes from rather than resolved, because the
+            # catalogue describes declarations and a setting can differ between
+            # the machine that builds it and the ones that run the relay. Each
+            # half of the condition is held by one case of
+            # test_a_declared_curve_is_said_in_prose_under_the_table.
+            base = _seconds(receiver.backoff_base_seconds, "BACKOFF_BASE_SECONDS")
+            cap = _seconds(receiver.backoff_cap_seconds, "BACKOFF_CAP_SECONDS")
+            lines += [
+                f"`{_cell(receiver.key)}` retries on its own curve: base {base}, cap {cap}.",
+                "",
+            ]
+        if receiver.lane != "default":
+            lines += [
+                f"`{_cell(receiver.key)}` is served by relays started with "
+                f"`--lane {_cell(receiver.lane)}`.",
+                "",
+            ]
     return lines
 
 
@@ -148,6 +167,11 @@ def _duration(seconds: int) -> str:
             unit, count = name, seconds // size
             break
     return f"{count} {unit}{'' if count == 1 else 's'}"
+
+
+def _seconds(value: float | None, setting: str) -> str:
+    """A declared duration as ``60s``, or the setting that supplies it."""
+    return f"`{setting}`" if value is None else f"{value:g}s"
 
 
 def _cell(value: str) -> str:
