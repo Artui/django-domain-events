@@ -31,6 +31,13 @@ def replay_events(
     it to run again. A receiver with no row for the event is *added*: it did not
     exist when the event fired, and you are choosing to give it the backlog.
 
+    Both are owed *now*, so both get ``due_at`` set to the moment of the
+    replay. A receiver's ``give_up_after`` is measured from it, and measuring
+    from the event's own timestamp would dead-letter a replayed month-old event
+    on its first deferral
+    (``test_a_replayed_old_event_is_not_dead_lettered_on_its_first_deferral``
+    and ``test_a_row_a_replay_adds_is_owed_from_the_replay_too``).
+
     A delivery still in flight is left alone. Reopening a claimed row would hand
     the same work to two receivers, which is the one thing the lease exists to
     prevent.
@@ -62,6 +69,18 @@ def replay_events(
         # any single event would otherwise discard the reopens for every other
         # event the operator asked for.
         with transaction.atomic(using=alias):
+            # The event row is locked for the transaction, which is what a prune
+            # about to delete this event waits on: it then re-reads that the
+            # event is owed again. Gone already means a prune got there first,
+            # and there is nothing left to replay
+            # (test_a_replay_in_flight_is_not_deleted_under).
+            if (
+                not EventRecord.objects.using(alias)
+                .select_for_update()
+                .filter(pk=record.pk)
+                .exists()
+            ):
+                continue
             entry = registry.event_for_name(record.name)
             if entry is None:
                 continue
@@ -101,6 +120,7 @@ def replay_events(
                     status=DeliveryStatus.PENDING,
                     attempts=0,
                     available_at=now,
+                    due_at=now,
                     claimed_by="",
                     claimed_at=None,
                     lease_expires_at=None,
@@ -121,6 +141,7 @@ def replay_events(
                                 target=targets[digest],
                                 max_attempts=receiver.max_attempts,
                                 available_at=now,
+                                due_at=now,
                             )
                             for digest in missing
                         ],

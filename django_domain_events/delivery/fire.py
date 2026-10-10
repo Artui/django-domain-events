@@ -44,6 +44,11 @@ def fire(
     consequences silently never happened. It also costs whatever the callable
     costs, on every event it is owed - one query per fired event per fan-out
     receiver, for one that reads a table.
+
+    The event's declared ``retention`` is copied onto the row. A ``dedupe_key``
+    is refused, with ``ValueError``, for an event declared to delete on
+    consumption: the key is unique on the row, so it would protect only until
+    the prune deleted it.
     """
     # Imported here, not at module level: Django imports an app's package before
     # the app registry is ready, and this package's __init__ re-exports fire().
@@ -85,6 +90,19 @@ def fire(
     if suppression is not None and not suppression[1]:
         return None
 
+    retention_seconds, delete_when = entry.retention_columns
+    if delete_when and dedupe_key is not None:
+        # Refused here because it is a call argument, so the declaration
+        # cannot see it. The key is unique on the event row, so it protects
+        # only while the row exists, and this row goes minutes after it is
+        # consumed: a duplicate fired after that would be accepted.
+        raise ValueError(
+            f"fire({entry.name}) was given a dedupe_key, but {entry.name} is deleted "
+            f"once consumed ({entry.retention}), and the key protects only while the "
+            f"row exists. Declare it with a timedelta retention to keep the key for a "
+            f"known window, or drop the key."
+        )
+
     record = EventRecord.objects.create(
         name=entry.name,
         version=entry.version,
@@ -100,6 +118,11 @@ def fire(
         correlation_id=scope.correlation_id or inherited_correlation_id(),
         causation_id=causing_event_id(),
         suppressed_reason=suppression[0] if suppression is not None else "",
+        # Copied, as max_attempts is onto a delivery, so re-declaring or
+        # deleting the class later cannot change this event's fate. At most
+        # one of the two is set: see RegisteredEvent.retention_columns.
+        retention_seconds=retention_seconds,
+        delete_when=delete_when,
     )
     if suppression is not None:
         # Recorded, deliberately undelivered, and the reason is on the row. No
@@ -187,7 +210,10 @@ def _deliver_eagerly(delivery_ids: list[int]) -> Callable[[], None]:
             only_ids=delivery_ids,
         )
         for delivery_id in claimed:
-            dispatch_one(delivery_id)
+            # As the worker that claimed it. Left to read the owner off the row,
+            # the fence would agree with whoever took the row since, and a
+            # site="task" hand-off would carry that worker's claim instead.
+            dispatch_one(delivery_id, worker_id="eager")
 
     return run
 

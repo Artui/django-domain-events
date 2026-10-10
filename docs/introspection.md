@@ -47,6 +47,26 @@ receiver has a line under its table naming the callable its targets come from,
 and the JSON carries the same as `targets` on each receiver and
 `wildcard_receivers` at the top level.
 
+An event declared with a [retention](retention.md) of its own says so in a line of
+prose under its heading - "Kept for 7 days", or "Deleted once every delivery has
+succeeded" - and the JSON carries it as `retention_seconds` and `delete_when`,
+the two values `fire()` records on the event row. An event on the default window
+has neither, and no line.
+
+A receiver with a [curve of its own](delivery.md#a-curve-per-receiver) or in a
+named [lane](operations.md#lanes-a-relay-per-kind-of-work) gets a line under
+its table too - "retries on its own curve: base 120s, cap 1800s", "is served by
+relays started with `--lane mail`" - and the JSON carries
+`backoff_base_seconds`, `backoff_cap_seconds` and `lane` on every receiver. So
+does a declared [`give_up_after`](delivery.md#give_up_after-keeps-every-delivery-ending):
+"dead-letters a deferral once its delivery has been owed for 172800s", and
+`give_up_after_seconds` in the JSON, null where none is declared.
+Lines rather than columns, so the tables a project has already committed do
+not change shape for properties most receivers do not have. A half of the curve
+left to its setting is named as the setting rather than resolved, because the
+catalogue describes declarations and the machine that builds it need not share
+the relay's settings.
+
 Building a catalogue never runs consumer code: a `default_factory` is **named**,
 not called.
 
@@ -101,9 +121,17 @@ Only a **succeeded** delivery counts. The question is whether the receiver did
 its work, not whether the relay tried - a row stuck failing for a month is
 exactly the case this must catch.
 
-The window defaults to `RETENTION_DAYS`, which is not a coincidence of numbers:
-past that point the prune has deleted the evidence, so "quiet for longer than
-retention" is the longest answer this can honestly give.
+The answer survives the prune. Deleting delivery rows would otherwise delete the
+evidence that a receiver ran - within minutes, for an event
+[deleted on consumption](retention.md) - so the prune records each receiver's
+newest success among the rows it deletes, in the same transaction as the delete,
+and this reports the later of that record and the rows still there. A receiver
+that never ran is still reported as never. The record is written only by the
+prune, never as deliveries succeed: one row per receiver, updated by every
+delivery, would queue a 20,000-row fan-out on a single lock.
+
+The window defaults to `RETENTION_DAYS`, the window an ordinary event's
+deliveries are kept for.
 
 The success time is read off `succeeded_at`, which is written on success and
 never cleared - unlike `completed_at`, which replay and requeue clear because a
@@ -157,7 +185,12 @@ than the workers can drain.
 
 Steady non-zero `lapsed_leases` means workers are dying mid-delivery, or a
 receiver outruns its lease and has its work thrown away every time - see
-[`lease_seconds`](declaring.md#receivers).
+[`lease_seconds`](declaring.md#receivers). A relay that was asked to stop also
+gives its unstarted rows back by expiring their leases, so a brief non-zero
+reading after a deploy is that, not a dying worker.
+
+Every figure here is answered from an index and none of them scans the
+delivery table, so the call is cheap enough to scrape on an interval.
 
 `owed` means "not terminal", which is what the prune settles by and a superset
 of what the relay can claim at any given moment: a row inside its backoff window
@@ -173,6 +206,11 @@ Run with `python manage.py check`.
 | `E001` | Error | A receiver listens for a class that was never `@event`-decorated |
 | `E002` | Error | The configured `CODEC` cannot be imported |
 | `E005` | Error | A declared event has a field the configured codec cannot rebuild |
+| `E006` | Error | `WAKE` is neither `"notify"` nor `"poll"` |
+| `E007` | Error | `NOTIFY_COALESCE_SECONDS` is not a non-negative number |
+| `E008` | Error | `RELAY_PRUNE` is not a bool |
+| `E009` | Error | `RELAY_PRUNE_SECONDS` is not a positive number |
+| `E010` | Error | `PRUNE_BATCH_ROWS` is not a positive whole number |
 | `W001` | Warning | Deliveries are owed to a receiver key the registry no longer has |
 | `W002` | Warning | Deliveries are owed for an event name the registry no longer has |
 | `W006` | Warning | A settings dict is named `DOMAIN_EVENTS` rather than `DJANGO_DOMAIN_EVENTS` |

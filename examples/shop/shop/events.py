@@ -7,6 +7,7 @@ something a real application would want.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from django.db.models import F
@@ -18,6 +19,7 @@ from django_domain_events import (
     AnyEvent,
     DeliveryContext,
     PermanentFailure,
+    Retention,
     RetryAfter,
     event,
     fire,
@@ -54,9 +56,17 @@ class OrderCancelled:
     reason: str
 
 
-@event(name="shop.StockReserved")
+@event(name="shop.StockReserved", retention=Retention.SUCCEEDED)
 @dataclass(frozen=True, slots=True)
 class StockReserved:
+    """Bookkeeping between two of our own steps, worth nothing once delivered.
+
+    `Retention.SUCCEEDED` has the next prune delete it, with its delivery rows,
+    as soon as every receiver has succeeded, rather than keeping it for
+    `RETENTION_DAYS` beside the orders it was about. A delivery that dead-letters
+    keeps it for the full window instead, so it can still be requeued.
+    """
+
     order_id: int
     sku: str
     quantity: int
@@ -104,14 +114,35 @@ def reserve_stock(evt: OrderPlaced) -> None:
     fire(StockReserved(order_id=evt.order_id, sku=evt.sku, quantity=evt.quantity))
 
 
-@receiver(OrderPlaced, mode=DURABLE, eager=True, key="shop.email_receipt", max_attempts=8)
+@receiver(
+    OrderPlaced,
+    mode=DURABLE,
+    eager=True,
+    key="shop.email_receipt",
+    max_attempts=10,
+    backoff_base_seconds=120,
+    backoff_cap_seconds=1800,
+    lane="mail",
+)
 def email_receipt(evt: OrderPlaced) -> None:
     """A side effect the database cannot undo, so at-least-once is real here.
 
     `eager=True` attempts it the moment the transaction commits, in the web
     process, with the relay as the fallback - outbox durability at on-commit
-    latency. `max_attempts=8` because a mail provider being down for an hour is
-    ordinary and the default five would dead-letter through it.
+    latency.
+
+    A curve of its own, because a mail provider being down for an hour is
+    ordinary. Ten attempts make nine waits, with ceilings of 2, 4, 8 and 16
+    minutes and then 30 minutes five times: at most three hours. Full jitter
+    draws each wait from zero up to its ceiling, so on average the budget lasts
+    half that, an hour and a half - not a guarantee, which no jittered curve
+    can give. The settings' 2-second base would have lasted at most 254
+    seconds over eight attempts, and an hour-long outage would dead-letter
+    every receipt sent into it.
+
+    `lane="mail"` because sending is slow next to everything else here: run it
+    with relays of its own (`deliver_events --lane mail`), and the relay
+    started without `--lane` stays out of it.
     """
     from shop.models import Order, SentEmail
 
@@ -207,6 +238,28 @@ def book_customs_clearance(evt: ParcelDispatched) -> None:
     day by default - and logs a warning naming both numbers.
     """
     raise RetryAfter(seconds=2 * 86400, reason="the broker is closed for a two-day holiday")
+
+
+@receiver(
+    ParcelDispatched,
+    mode=DURABLE,
+    key="shop.email_dispatch_notice",
+    lane="mail",
+    give_up_after=timedelta(days=2),
+)
+def email_dispatch_notice(evt: ParcelDispatched) -> None:
+    """`RetryAfter(counts=False)`, because a spent quota is not this email's fault.
+
+    The mail provider's daily sending quota is gone until it resets in an hour.
+    That is a limit on the destination, not a failure of the row, so it spends
+    no attempt: the next one runs between one and two hours from now, and the
+    relay that heard it pauses the mail lane for the hour and hands back the
+    rest of its batch rather than paying a call per email to hear the same
+    answer. `give_up_after` is what still ends it - a notice owed for two days
+    is dead-lettered on its next deferral. Deliberately always over quota, so
+    the demo can show it.
+    """
+    raise RetryAfter(seconds=3600, reason="the daily sending quota is spent", counts=False)
 
 
 def partners_subscribed(evt: object, ctx: DeliveryContext) -> list[str]:

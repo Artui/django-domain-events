@@ -106,7 +106,7 @@ In tests, `drain_outbox()` runs the real delivery path to completion, and
 ## Operations
 
 ```bash
-python manage.py prune_events                 # delete settled events past the window
+python manage.py prune_events                 # delete settled events past their retention
 python manage.py replay_events 41 42          # make those events owed again
 python manage.py requeue_dead --receiver k    # give dead deliveries their budget back
 ```

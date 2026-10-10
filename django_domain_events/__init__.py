@@ -42,6 +42,7 @@ from django_domain_events.types.quiet_receiver import QuietReceiver
 from django_domain_events.types.receiver_backlog import ReceiverBacklog
 from django_domain_events.types.registered_event import RegisteredEvent
 from django_domain_events.types.registered_receiver import RegisteredReceiver
+from django_domain_events.types.retention import Retention
 from django_domain_events.types.scope import Scope
 from django_domain_events.types.task_backend import TaskBackend
 from django_domain_events.version import __version__
@@ -73,6 +74,7 @@ __all__ = [
     "RegisteredEvent",
     "RegisteredReceiver",
     "Registry",
+    "Retention",
     "RetryAfter",
     "Scope",
     "TaskBackend",

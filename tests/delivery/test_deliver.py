@@ -2,22 +2,33 @@
 
 from __future__ import annotations
 
+import dataclasses
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 from django.db import OperationalError, connection, transaction
 
+from django_domain_events.declaration.registry import registry
+from django_domain_events.delivery import deliver as deliver_module
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.deliver import deliver_one, deliver_pending
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.retry_after import RetryAfter
+from django_domain_events.delivery.utils import partition_by_lane
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.settings import setting
+from django_domain_events.types.delivery_context import DeliveryContext
+from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
-from tests.conftest import receiver_deleted, receiver_replaced
-from tests.testapp.events import OrderPlaced, SlowWork
+from django_domain_events.types.registered_receiver import RegisteredReceiver
+from tests.conftest import receiver_deleted, receiver_registered, receiver_replaced
+from tests.testapp.events import OrderPlaced, SlowWork, calls
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -104,6 +115,11 @@ def test_a_failing_receiver_is_retried_then_dead_lettered(
         assert (first.attempts, first.completed_at) == (1, None)
         assert "downstream is down" in first.last_error
 
+        # Due now: a FAILED row waiting out its backoff is not owed, and
+        # deliver_one refuses it for every caller.
+        DeliveryRecord.objects.filter(pk=first.pk).update(
+            available_at=datetime.now(timezone.utc) - timedelta(seconds=1)
+        )
         assert deliver_one(_delivery_id("testapp.durable_receiver")) is DeliveryStatus.DEAD
         second = _delivery("testapp.durable_receiver")
         assert second.attempts == 2
@@ -583,3 +599,520 @@ def test_a_receivers_own_write_is_invisible_to_another_worker_until_it_commits(
     assert DeliveryRecord.objects.get(pk=row.pk).lease_expires_at > started + timedelta(
         minutes=30
     ), "and yet it did land, once the receiver had already finished"
+
+
+def _set(key: str, **fields: object) -> int:
+    """Hand-write a row into a state, the way a stale or repeated message finds it."""
+    delivery_id = _delivery_id(key)
+    DeliveryRecord.objects.filter(pk=delivery_id).update(**fields)
+    return delivery_id
+
+
+def test_a_settled_row_delivered_again_does_not_run_its_receiver_twice(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """A queue that redelivers - ``acks_late`` and a broker's visibility timeout
+    both do - hands ``deliver_one`` a row that already succeeded. Running it
+    again repeats the receiver's work and the acknowledgement it committed with,
+    which breaks the one promise that makes a database-only receiver effectively
+    once."""
+    _fire(order)
+    delivery_id = _delivery_id("testapp.durable_receiver")
+    assert deliver_one(delivery_id) is DeliveryStatus.SUCCEEDED
+    record.clear()
+
+    assert deliver_one(delivery_id) is None
+
+    assert record == []
+    assert _delivery("testapp.durable_receiver").attempts == 1
+
+
+def test_a_dead_row_is_not_run_or_resurrected(order: OrderPlaced, record: list[str]) -> None:
+    """A dead letter is final. Running it again spends a sixth attempt of five
+    and writes SUCCEEDED over a row whose dead-letter notice has already gone
+    out, so the two records of one delivery disagree."""
+    _fire(order)
+    delivery_id = _set(
+        "testapp.durable_receiver",
+        status=DeliveryStatus.DEAD,
+        attempts=5,
+        max_attempts=5,
+        completed_at=datetime.now(timezone.utc),
+    )
+    record.clear()
+
+    assert deliver_one(delivery_id) is None
+
+    assert record == []
+    row = _delivery("testapp.durable_receiver")
+    assert (row.status, row.attempts) == (DeliveryStatus.DEAD, 5)
+
+
+def test_an_orphaned_row_is_not_run(order: OrderPlaced, record: list[str]) -> None:
+    """The third terminal status, held by its own test: the refusal reads a set,
+    and dropping one member from it leaves the other two tests green."""
+    _fire(order)
+    delivery_id = _set(
+        "testapp.durable_receiver",
+        status=DeliveryStatus.ORPHANED,
+        completed_at=datetime.now(timezone.utc),
+    )
+    record.clear()
+
+    assert deliver_one(delivery_id) is None
+
+    assert record == []
+    assert _delivery("testapp.durable_receiver").status == DeliveryStatus.ORPHANED
+
+
+def test_a_failed_row_not_yet_due_is_not_run(order: OrderPlaced, record: list[str]) -> None:
+    """``available_at`` is the backoff, and a ``RetryAfter`` the receiver raised
+    writes it too. Running the row early ignores both - and for a destination
+    that answered 429 with an hour, that is the call it asked not to get."""
+    _fire(order)
+    delivery_id = _set(
+        "testapp.durable_receiver",
+        status=DeliveryStatus.FAILED,
+        attempts=1,
+        available_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    record.clear()
+
+    assert deliver_one(delivery_id) is None
+
+    assert record == []
+    row = _delivery("testapp.durable_receiver")
+    assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 1)
+
+
+def test_a_failed_row_that_is_due_still_runs(order: OrderPlaced, record: list[str]) -> None:
+    """The other half of the backoff check: refusing every FAILED row would pass
+    the test above and strand every retry."""
+    _fire(order)
+    delivery_id = _set(
+        "testapp.durable_receiver",
+        status=DeliveryStatus.FAILED,
+        attempts=1,
+        available_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+    )
+    record.clear()
+
+    assert deliver_one(delivery_id) is DeliveryStatus.SUCCEEDED
+    assert record == ["durable:7"]
+
+
+def test_half_a_claim_takes_nothing(order: OrderPlaced, record: list[str]) -> None:
+    """Either half of a claim on its own still triggers the take, and the take
+    cannot match a row with a missing half. Without that, a backend that dropped
+    one argument would fall through to running the row unconditionally - the
+    redelivery bug, reintroduced by a typo."""
+    with transaction.atomic():
+        fire(order)
+    claim_batch(worker_id="w1", now=datetime.now(timezone.utc), lease=timedelta(hours=1), limit=10)
+    row = _delivery("testapp.durable_receiver")
+    record.clear()
+
+    assert deliver_one(row.pk, claimed_by="w1") is None
+    assert deliver_one(row.pk, claimed_at=row.claimed_at.isoformat()) is None
+
+    assert record == []
+    assert _delivery("testapp.durable_receiver").claimed_by == "w1"
+
+
+def test_a_take_moves_the_row_to_the_named_worker(order: OrderPlaced, record: list[str]) -> None:
+    """``worker_id`` names who takes the row, so a task worker can log under a
+    name of its own; the claim it was handed is what it takes the row from."""
+    with transaction.atomic():
+        fire(order)
+    claim_batch(worker_id="w1", now=datetime.now(timezone.utc), lease=timedelta(hours=1), limit=10)
+    row = _delivery("testapp.durable_receiver")
+    record.clear()
+
+    outcome = deliver_one(
+        row.pk, worker_id="celery-7", claimed_by="w1", claimed_at=row.claimed_at.isoformat()
+    )
+
+    assert outcome is DeliveryStatus.SUCCEEDED
+    after = _delivery("testapp.durable_receiver")
+    assert after.claimed_by == "celery-7"
+    assert after.claimed_at > row.claimed_at
+
+
+def test_a_failed_row_claimed_early_on_purpose_still_runs(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """``ignore_backoff=True`` claims a row before its ``available_at`` because
+    an operator asked for exactly that. The claim makes it CLAIMED, and a
+    CLAIMED row is its claimer's to run whatever its backoff said - which is
+    why the backoff check reads the FAILED status and not ``available_at``
+    alone."""
+    _fire(order)
+    _set(
+        "testapp.durable_receiver",
+        status=DeliveryStatus.FAILED,
+        attempts=1,
+        available_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    _set("testapp.with_context", status=DeliveryStatus.SUCCEEDED)
+    record.clear()
+
+    assert deliver_pending(ignore_backoff=True) == {DeliveryStatus.SUCCEEDED: 1}
+    assert record == ["durable:7"]
+
+
+@contextmanager
+def _declared(key: str, **fields: object) -> Iterator[None]:
+    """Change what one registered receiver declares, for the duration of a test."""
+    entry = registry.receiver_for_key(key)
+    original = {name: getattr(entry, name) for name in fields}
+    for name, value in fields.items():
+        object.__setattr__(entry, name, value)
+    try:
+        yield
+    finally:
+        for name, value in original.items():
+            object.__setattr__(entry, name, value)
+
+
+def _explode(evt: OrderPlaced) -> None:
+    raise RuntimeError("downstream is down")
+
+
+def _wait_after_failing(key: str) -> float:
+    """Fail one attempt of ``key`` and return the delay it was scheduled for."""
+    before = datetime.now(timezone.utc)
+    with receiver_replaced(key, _explode):
+        assert deliver_one(_delivery_id(key)) is DeliveryStatus.FAILED
+    return (_delivery(key).available_at - before).total_seconds()
+
+
+def test_a_receiver_can_declare_its_own_backoff_base(
+    order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Read when the attempt fails, from the registry - the row was fired
+    before the curve was declared, which is the case of a deploy changing it
+    under deliveries already in flight."""
+    monkeypatch.setattr(deliver_module.random, "random", lambda: 1.0)
+    _fire(order)
+
+    with _declared("testapp.durable_receiver", backoff_base_seconds=600):
+        waited = _wait_after_failing("testapp.durable_receiver")
+
+    assert 595 < waited < 605
+    assert _wait_after_failing("testapp.with_context") < setting("BACKOFF_BASE_SECONDS") + 5
+
+
+def test_a_receiver_can_declare_its_own_backoff_cap(
+    order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ten attempts in, the setting's base of 2 seconds has doubled to 1024,
+    under the setting's cap of an hour and well over this receiver's 30."""
+    monkeypatch.setattr(deliver_module.random, "random", lambda: 1.0)
+    _fire(order)
+    _set("testapp.durable_receiver", attempts=9, max_attempts=20)
+    _set("testapp.with_context", attempts=9, max_attempts=20)
+
+    with _declared("testapp.durable_receiver", backoff_cap_seconds=30):
+        waited = _wait_after_failing("testapp.durable_receiver")
+
+    assert 25 < waited < 35
+    assert _wait_after_failing("testapp.with_context") > 1000
+
+
+def test_the_delivery_id_reaches_a_receiver_taking_context(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The id of the row being delivered, which is what a receiver needs to
+    correlate its own record with the outbox's."""
+    _fire(order)
+    seen: list[DeliveryContext] = []
+
+    with receiver_replaced("testapp.with_context", lambda evt, ctx: seen.append(ctx)):
+        deliver_one(_delivery_id("testapp.with_context"))
+
+    assert [ctx.delivery_id for ctx in seen] == [_delivery_id("testapp.with_context")]
+
+
+def _laned_mail() -> RegisteredReceiver:
+    return RegisteredReceiver(
+        key="tests.mail",
+        event_class=OrderPlaced,
+        func=lambda evt: calls.append("mail"),
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=5,
+        eager=False,
+        site="relay",
+        lane="mail",
+    )
+
+
+def test_deliver_pending_serves_the_lane_it_is_given(order: OrderPlaced, record: list[str]) -> None:
+    with receiver_registered(_laned_mail()):
+        _fire(order)
+        record.clear()
+
+        assert deliver_pending(lane="mail") == {DeliveryStatus.SUCCEEDED: 1}
+        assert record == ["mail"]
+        assert deliver_pending(lane="default") == {DeliveryStatus.SUCCEEDED: 2}
+        assert "mail" not in record[1:]
+
+
+def test_deliver_pending_with_no_lane_serves_every_lane(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Its contract before lanes, kept: drain_outbox() is built on it and
+    promises everything owed."""
+    with receiver_registered(_laned_mail()):
+        _fire(order)
+
+        assert deliver_pending() == {DeliveryStatus.SUCCEEDED: 3}
+
+
+def _throttled_mail(seen: list[int]) -> RegisteredReceiver:
+    """A mail-lane receiver whose destination is throttling: every call defers
+    without counting. Stops with a BaseException past five calls, so a pass
+    that kept claiming its rows fails rather than hangs."""
+
+    def throttled(evt: OrderPlaced) -> None:
+        seen.append(evt.order_id)
+        if len(seen) > 5:
+            raise _Runaway("a throttled lane kept being claimed")
+        raise RetryAfter(30, reason="throttled", counts=False)
+
+    return RegisteredReceiver(
+        key="tests.throttled",
+        event_class=OrderPlaced,
+        func=throttled,
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=5,
+        eager=False,
+        site="relay",
+        lane="mail",
+        give_up_after=timedelta(days=1),
+    )
+
+
+class _Runaway(BaseException):
+    """A BaseException, so delivery does not record it as a failure."""
+
+
+def _given_back(key: str) -> list[int]:
+    """The rows of ``key`` handed back: still CLAIMED, with a lease in the past."""
+    return sorted(
+        DeliveryRecord.objects.filter(
+            receiver_key=key,
+            status=DeliveryStatus.CLAIMED,
+            lease_expires_at__lt=datetime.now(timezone.utc),
+        ).values_list("pk", flat=True)
+    )
+
+
+def test_a_deferral_sets_its_lane_aside_and_the_pass_delivers_the_rest(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Serving every lane, the claimed batch mixes them. The deferring lane's
+    unstarted rows are handed back rather than attempted, and the other lanes'
+    rows in the same batch are still delivered."""
+    seen: list[int] = []
+    with receiver_registered(_throttled_mail(seen)):
+        for _ in range(3):
+            _fire(order)
+
+        assert deliver_pending() == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 6}
+
+        assert len(seen) == 1, "the throttled lane's other rows were attempted"
+        handed_back = _given_back("tests.throttled")
+        assert len(handed_back) == 2
+        taken = claim_batch(
+            worker_id="w2",
+            now=datetime.now(timezone.utc),
+            lease=timedelta(minutes=5),
+            limit=10,
+            lane="mail",
+        )
+        assert sorted(taken) == handed_back, "another worker could not take them at once"
+
+
+def test_a_deferral_in_the_lane_a_pass_serves_ends_the_pass(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    seen: list[int] = []
+    with receiver_registered(_throttled_mail(seen)):
+        for _ in range(3):
+            _fire(order)
+
+        assert deliver_pending(lane="mail") == {DeliveryStatus.FAILED: 1}
+
+        assert len(seen) == 1
+        assert len(_given_back("tests.throttled")) == 2
+
+
+def test_a_deferral_is_reported_to_whoever_dispatched_it(order: OrderPlaced) -> None:
+    """With its lane and the delay the destination asked for, not the jittered
+    one: a pause longer than asked would hold back rows the destination is
+    ready for."""
+    paused: list[tuple[str, float]] = []
+    with receiver_registered(_throttled_mail([])):
+        _fire(order)
+        [row_id] = claim_batch(
+            worker_id="w1",
+            now=datetime.now(timezone.utc),
+            lease=timedelta(minutes=5),
+            limit=10,
+            lane="mail",
+        )
+        outcome = deliver_module.dispatch_one(
+            row_id, worker_id="w1", on_deferral=lambda lane, s: paused.append((lane, s))
+        )
+
+    assert outcome == DeliveryStatus.FAILED
+    assert paused == [("mail", 30.0)]
+
+
+def test_a_deferral_this_worker_could_not_record_pauses_nothing(
+    order: OrderPlaced, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker that lost the row has no say over its lane: whoever holds the
+    row now decides what its deferral means."""
+    paused: list[tuple[str, float]] = []
+    with receiver_registered(_throttled_mail([])):
+        _fire(order)
+        [row_id] = claim_batch(
+            worker_id="w1",
+            now=datetime.now(timezone.utc),
+            lease=timedelta(minutes=5),
+            limit=10,
+            lane="mail",
+        )
+        monkeypatch.setattr(deliver_module._Fence, "write", lambda self, **fields: None)
+        outcome = deliver_module.dispatch_one(
+            row_id, worker_id="w1", on_deferral=lambda lane, s: paused.append((lane, s))
+        )
+
+    assert outcome is None
+    assert paused == []
+
+
+def _claimed(lane: str) -> int:
+    [row_id] = claim_batch(
+        worker_id="w1",
+        now=datetime.now(timezone.utc),
+        lease=timedelta(minutes=5),
+        limit=10,
+        lane=lane,
+    )
+    return row_id
+
+
+def test_a_deferral_run_directly_is_recorded_and_pauses_nothing(order: OrderPlaced) -> None:
+    """``deliver_one`` holds no batch, so there is nothing to pause or hand
+    back; the deferral is still recorded as it is anywhere else."""
+    with receiver_registered(_throttled_mail([])):
+        _fire(order)
+        row_id = _claimed("mail")
+
+        assert deliver_one(row_id, worker_id="w1") == DeliveryStatus.FAILED
+
+    row = DeliveryRecord.objects.get(pk=row_id)
+    assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 0)
+
+
+def test_a_deferral_inside_a_task_is_recorded(order: OrderPlaced) -> None:
+    """A task runs ``deliver_one`` with the claim its message carried, in a
+    process holding no batch: nothing to pause, and the deferral recorded all
+    the same."""
+    with receiver_registered(_throttled_mail([])):
+        _fire(order)
+        row_id = _claimed("mail")
+        row = DeliveryRecord.objects.get(pk=row_id)
+
+        outcome = deliver_one(
+            row_id, claimed_by=row.claimed_by, claimed_at=row.claimed_at.isoformat()
+        )
+
+    assert outcome == DeliveryStatus.FAILED
+    row.refresh_from_db()
+    assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 0)
+
+
+def test_a_give_up_this_worker_could_not_record_tells_on_failure_nothing(
+    order: OrderPlaced, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """As with every other outcome: the worker holding the row now is the one
+    that will record it, and telling the hook twice would log it twice."""
+    heard: list[object] = []
+    bounded = dataclasses.replace(_throttled_mail([]), on_failure=heard.append)
+    with receiver_registered(bounded):
+        _fire(order)
+        EventRecord.objects.update(recorded_at=datetime.now(timezone.utc) - timedelta(days=2))
+        row_id = _claimed("mail")
+        monkeypatch.setattr(deliver_module._Fence, "write", lambda self, **fields: None)
+
+        assert deliver_one(row_id, worker_id="w1") is None
+
+    assert heard == []
+
+
+def test_a_deleted_receivers_row_is_in_the_default_lane(order: OrderPlaced) -> None:
+    """As the claim reads it: a row whose receiver is gone names no lane, and
+    it drains through the default one, so a default-lane deferral hands it back
+    with the rest."""
+    with receiver_registered(_laned_mail()):
+        _fire(order)
+    ids = list(DeliveryRecord.objects.order_by("pk").values_list("pk", flat=True))
+    gone = _delivery_id("tests.mail")
+
+    with receiver_deleted("testapp.durable_receiver"):
+        inside, rest = partition_by_lane(ids, "default")
+
+    assert inside == ids, "a row with no receiver was not counted in the default lane"
+    assert rest == []
+    assert gone in inside
+
+
+def test_deliver_pending_refuses_a_lane_nobody_declared(order: OrderPlaced) -> None:
+    with pytest.raises(ValueError, match="No receiver is declared in lane 'mial'"):
+        deliver_pending(lane="mial")
+
+
+def test_deliver_pending_claims_in_batches_of_the_size_it_is_given(
+    order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Overriding BATCH_SIZE for its claims alone, and still draining everything
+    owed when no limit is set."""
+    limits: list[int] = []
+    real = deliver_module.claim_batch
+
+    def spy(**kwargs: Any) -> list[int]:
+        limits.append(kwargs["limit"])
+        return real(**kwargs)
+
+    monkeypatch.setattr(deliver_module, "claim_batch", spy)
+    _fire(order)
+
+    assert deliver_pending(batch_size=1) == {DeliveryStatus.SUCCEEDED: 2}
+    assert limits == [1, 1, 1]
+
+
+def test_a_limit_and_a_batch_size_together_are_refused(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """A limit is one claim of that many rows, so the batch would be ignored -
+    and claiming a hundred rows under one lease is what a small batch is asked
+    for to prevent. Each alone is accepted, which holds both conjuncts."""
+    _fire(order)
+
+    with pytest.raises(ValueError, match="limit=100 is one claim of that many rows"):
+        deliver_pending(limit=100, batch_size=5)
+    assert deliver_pending(limit=1) == {DeliveryStatus.SUCCEEDED: 1}
+    assert deliver_pending(batch_size=5) == {DeliveryStatus.SUCCEEDED: 1}
+
+
+@pytest.mark.parametrize("size", [0, -1])
+def test_deliver_pending_refuses_a_batch_that_claims_nothing(size: int) -> None:
+    """A batch of zero claims nothing on every pass, so the loop it sizes ends
+    at once having delivered nothing, and a relay sized that way idles forever."""
+    with pytest.raises(ValueError, match="batch_size must be positive"):
+        deliver_pending(batch_size=size)

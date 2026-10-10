@@ -45,3 +45,14 @@ def test_a_receivers_requested_retry_is_capped_at_a_day_by_default() -> None:
     that asked to be left alone."""
     assert setting("MAX_RECEIVER_RETRY_DELAY_SECONDS") == 86400.0
     assert setting("MAX_RECEIVER_RETRY_DELAY_SECONDS") != setting("BACKOFF_CAP_SECONDS")
+
+
+def test_the_wake_defaults() -> None:
+    """Notify on Postgres, at most one NOTIFY per half second per process."""
+    assert setting("WAKE") == "notify"
+    assert setting("NOTIFY_COALESCE_SECONDS") == 0.5
+
+
+def test_the_relay_sweep_is_on_and_throttled_to_a_minute_by_default() -> None:
+    assert setting("RELAY_PRUNE") is True
+    assert setting("RELAY_PRUNE_SECONDS") == 60

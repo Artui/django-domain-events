@@ -15,12 +15,20 @@ DEFAULTS: dict[str, Any] = {
     "BATCH_SIZE": 50,
     "LEASE_SECONDS": 300,
     "POLL_SECONDS": 1.0,
+    "WAKE": "notify",
+    "NOTIFY_COALESCE_SECONDS": 0.5,
     "BACKOFF_BASE_SECONDS": 2.0,
     "BACKOFF_CAP_SECONDS": 3600.0,
     "MAX_RECEIVER_RETRY_DELAY_SECONDS": 86400.0,
     "RETENTION_DAYS": 90,
+    "PRUNE_BATCH_ROWS": 5000,
+    "RELAY_PRUNE": True,
+    "RELAY_PRUNE_SECONDS": 60,
     "TASK_BACKEND": None,
 }
+
+
+WAKE_MODES = ("notify", "poll")
 
 
 def setting(key: str) -> Any:

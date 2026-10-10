@@ -7,6 +7,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-10-11
+
+### Added
+- `CeleryBackend` (`django_domain_events.delivery.celery_backend.CeleryBackend`),
+  a task backend for projects that run Celery, behind a new `celery` extra. Its
+  task is `django_domain_events.deliver_delivery`; a worker must list the module
+  in Celery's `imports`.
+- `@event(retention=...)`: a per-event lifetime for the event row and its
+  deliveries. A `timedelta` keeps the event that long; `Retention.SUCCEEDED`
+  deletes it once every delivery has succeeded, and `Retention.SETTLED` once
+  every delivery is terminal, dead letters included. The policy is copied onto
+  the event row when it is fired, so changing a declaration never rewrites the
+  history already recorded. Firing an event declared with `Retention.SUCCEEDED` or
+  `Retention.SETTLED` with a `dedupe_key` raises `ValueError`, because the key
+  protects only while the row exists.
+- `prune_events` honours those policies, sizes its batches in rows rather than
+  events (`PRUNE_BATCH_ROWS`, default 5000; `--batch-size` on the command), takes
+  a `stop` callable checked between batches, and records each receiver's last
+  success in a small table so `quiet_receivers` outlives the deliveries it was
+  read from.
+- `RELAY_PRUNE_SECONDS` (default 60): how often an idle relay sweeps; see
+  `RELAY_PRUNE` under Changed.
+- `WAKE` (`"notify"` or `"poll"`, default `"notify"`) and
+  `NOTIFY_COALESCE_SECONDS` (default 0.5): the Postgres wake-up is coalesced per
+  process, so a burst of events sends one notification rather than one each.
+- Receivers take `backoff_base_seconds=`, `backoff_cap_seconds=` and `lane=`.
+  `run_relay(lane=...)` and `deliver_pending(lane=...)` serve one lane, and both
+  take `batch_size=`, which sizes their claims alone. The default lane serves
+  every receiver that names none.
+- `DeliveryContext.delivery_id`, and the catalogue shows a receiver's own retry
+  curve, lane and `give_up_after`.
+- `RetryAfter(seconds, counts=False)`: a deferral that does not spend an attempt,
+  for a destination limiting how much it accepts. It is bounded by
+  `@receiver(give_up_after=timedelta(...))`, measured from when the row became
+  owed, past which the next deferral dead-letters it. The relay pauses the
+  receiver's lane for the requested time and hands back the rest of the batch
+  rather than spending a call on each row; `counts=False` needs a wait above zero
+  and falls back to a counting retry, with a warning once, when no
+  `give_up_after` is declared.
+- System checks `E006` to `E010` for the new settings, and `W001`/`W002` now read
+  the owed indexes instead of scanning the delivery table.
+- `deliver_events --lane` and `--batch-size`, and `CatalogueEvent.retention_seconds`
+  and `delete_when` in the catalogue.
+- The admin shows a delivery's target digest as hex.
+- The example shop demonstrates per-receiver backoff, a mail lane, retention and
+  a non-counting deferral.
+
+### Changed
+- **`RELAY_PRUNE` defaults to `True`.** A relay that finds nothing to claim now
+  runs `prune_events()` itself, at most every `RELAY_PRUNE_SECONDS`, so a
+  project that never scheduled the prune stops growing without a cron entry. A
+  project that never pruned and holds more than `RETENTION_DAYS` of settled
+  events will start deleting them within a minute of a relay going idle, and the
+  first sweep deletes the whole backlog before the relay claims again, a batch
+  at a time. Set `RELAY_PRUNE = False`, or run `prune_events` by hand, before
+  upgrading if that is not what you want. A failing sweep is logged and the
+  relay goes on; a stop request waits for at most one batch.
+- **Migration `0006` rewrites tables.** On Postgres it converts `target_digest`
+  to `bytea` in place (a table rewrite under an exclusive lock), drops and
+  re-adds the event foreign key (re-validating every row) and builds five
+  indexes, one in `0007`, without `CONCURRENTLY`. Run it in a maintenance window
+  on a large delivery table; `sqlmigrate` prints the statements without
+  converting anything.
+- **Task messages queued by 0.9 fail in a 0.10 worker.** They carry only the
+  delivery id, and the task now takes the claim as well; the rows recover once
+  their lease lapses. Drain the queue before upgrading workers.
+- **`deliver_one` refuses rows that are not owed** to any caller: a settled or
+  dead row, or one still backing off, returns `None` instead of running the
+  receiver. It used to force a run.
+- **A task backend's `enqueue` takes the claim.** `TaskBackend.enqueue(delivery_id,
+  claimed_by, claimed_at)` carries the relay's claim token on the message, and
+  `deliver_one` takes the row with one conditional `UPDATE` on that token before
+  the receiver runs. A custom backend must forward the two new arguments to
+  `deliver_one`. `DjangoTasksBackend` does so.
+- The target digest is stored as raw bytes (`BinaryField`) rather than a 64
+  character string, converted in place on Postgres by migration `0006`. The
+  migration also adds `due_at`, the retention columns and the partial indexes the
+  scraped queries and the prune use; `0007` adds the last-success table and an
+  index over unfinished rows.
+- `outbox_health()` and `quiet_receivers()` are answered from those indexes and
+  no longer scan the delivery table.
+- `deliver_events` stops gracefully on `SIGTERM` or `SIGINT`: it finishes the
+  delivery under way, hands the rest of its batch back and exits, and a second
+  signal exits at once.
+- `replay_events` and `requeue_dead` reset `due_at`, so a replayed row is
+  measured from when it was replayed.
+
+### Fixed
+- A stale or redelivered task message ran the receiver on a row it no longer
+  owned; the take now refuses any row that is not CLAIMED by the same worker at
+  the same claim time.
+- The relay exited when its claim raised, for instance during a database
+  restart. It now backs off, capped at fifteen seconds, and carries on.
+- A prune could delete deliveries a concurrent `replay_events` or `requeue_dead`
+  had just reopened, after reporting them reopened: the prune re-checked that
+  the event was settled against a snapshot taken before the replay committed.
+  The event row is now locked, in primary key order, before the re-check, by
+  the prune and by both operations. This predates 0.10.0 on the whole-event
+  path; the per-event chunks and the relay's own sweep make it likelier.
+- The example shop overstated its retries.
+
 ## [0.9.0] — 2026-09-16
 
 ### Added
@@ -532,7 +633,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/Artui/django-domain-events/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/Artui/django-domain-events/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Artui/django-domain-events/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Artui/django-domain-events/compare/v0.6.0...v0.7.0

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from datetime import timedelta
 from typing import Literal, TypeVar, overload
 
 from django_domain_events.declaration.registry import registry
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_mode import DeliveryMode
-from django_domain_events.types.registered_receiver import RegisteredReceiver
+from django_domain_events.types.registered_receiver import DEFAULT_LANE, RegisteredReceiver
 from django_domain_events.utils import label_for
 
 E = TypeVar("E")
@@ -30,6 +31,10 @@ def receiver(
     lease_seconds: int | None = None,
     on_failure: Callable[[DeliveryFailure], None] | None = None,
     targets: Targets[E] | None = None,
+    backoff_base_seconds: float | None = None,
+    backoff_cap_seconds: float | None = None,
+    lane: str = DEFAULT_LANE,
+    give_up_after: timedelta | None = None,
 ) -> Callable[[Plain[E]], Plain[E]]: ...
 @overload
 def receiver(
@@ -44,6 +49,10 @@ def receiver(
     lease_seconds: int | None = None,
     on_failure: Callable[[DeliveryFailure], None] | None = None,
     targets: Targets[E] | None = None,
+    backoff_base_seconds: float | None = None,
+    backoff_cap_seconds: float | None = None,
+    lane: str = DEFAULT_LANE,
+    give_up_after: timedelta | None = None,
 ) -> Callable[[WithContext[E]], WithContext[E]]: ...
 def receiver(
     event_class: type[E],
@@ -57,6 +66,10 @@ def receiver(
     lease_seconds: int | None = None,
     on_failure: Callable[[DeliveryFailure], None] | None = None,
     targets: Targets[E] | None = None,
+    backoff_base_seconds: float | None = None,
+    backoff_cap_seconds: float | None = None,
+    lane: str = DEFAULT_LANE,
+    give_up_after: timedelta | None = None,
 ) -> Callable[[Callable[..., None]], Callable[..., None]]:
     """Register a callable to receive one event type, or every event.
 
@@ -131,6 +144,41 @@ def receiver(
 
     ``replay_events`` calls it again, so a replay goes to the targets that exist
     at replay time.
+
+    ``backoff_base_seconds`` and ``backoff_cap_seconds`` override
+    ``BACKOFF_BASE_SECONDS`` and ``BACKOFF_CAP_SECONDS`` for this receiver alone,
+    as ``lease_seconds`` overrides ``LEASE_SECONDS``. They are read when an
+    attempt fails, not copied onto the row, so a curve changed by a deploy
+    applies to deliveries already in flight. Either may be declared without the
+    other, which then comes from its setting; only when both are declared is the
+    cap refused for being below the base, since a setting can change after the
+    declaration is read. **Full jitter applies to this curve as to the
+    default**: each wait is drawn from zero up to the ceiling, so a base of
+    sixty seconds means a first retry somewhere in the next minute, possibly
+    after a few seconds, never "in a minute". A list of delays or a callable is
+    not offered, because the catalogue could not publish one.
+
+    ``lane`` names the relay processes that claim this receiver's rows:
+    ``deliver_events --lane mail`` claims only receivers declared with
+    ``lane="mail"``, and a relay started without ``--lane`` claims every row no
+    named lane takes - including rows whose receiver has since been deleted,
+    which it records orphaned. It is read from the registry at claim time, so
+    moving a receiver to another lane moves its owed rows with it. It is how a
+    slow receiver stops holding up the rest, and it is declared here rather than
+    as relay flags because the default relay is the one that must exclude it,
+    and an exclusion list kept in deployment manifests goes stale. An
+    ``eager=True`` attempt still runs in the firing process, whatever the lane.
+
+    ``give_up_after`` is the bound that ends a delivery whose receiver defers
+    with ``RetryAfter(seconds, counts=False)``. That deferral spends no
+    attempt, so ``max_attempts`` cannot end it; this does. Once a row has been
+    owed for this long - since it was written, or since a replay or requeue
+    reopened it - the next deferral dead-letters it, as a spent budget would.
+    It is a ``timedelta`` because a bare number has no unit. Without it, a
+    deferral that does not count is counted after all, with a warning, so that
+    every delivery still ends. It bounds deferrals alone: an ordinary failure
+    or a counting ``RetryAfter`` is still ended by ``max_attempts``, however
+    long the row has been owed.
     """
 
     if site not in ("relay", "task"):
@@ -152,6 +200,49 @@ def receiver(
         # second relay reclaims the row immediately and both run it - the exact
         # double delivery the lease exists to prevent.
         raise ValueError(f"lease_seconds must be positive, got {lease_seconds}")
+    for name, seconds in (
+        ("backoff_base_seconds", backoff_base_seconds),
+        ("backoff_cap_seconds", backoff_cap_seconds),
+    ):
+        if seconds is not None and seconds <= 0:
+            # A zero base or cap retries at once, so the whole budget is spent
+            # in the time it takes to fail that many times in a row.
+            raise ValueError(f"{name} must be positive, got {seconds}")
+    if (
+        backoff_base_seconds is not None
+        and backoff_cap_seconds is not None
+        and backoff_cap_seconds < backoff_base_seconds
+    ):
+        # The cap would win on every attempt and the base would be a number
+        # nothing reads. Compared only when both are declared: the other half
+        # is otherwise a setting, read when an attempt fails rather than here.
+        # One arc, so each conjunct has its own test: without the comparison
+        # every curve declaring both halves is refused
+        # (test_a_backoff_curve_is_recorded_on_the_registration); without
+        # either ``is not None`` the comparison meets None and raises TypeError
+        # (the two cases of test_either_half_of_the_curve_may_be_declared_alone).
+        # test_a_cap_below_the_base_is_refused holds the guard itself.
+        raise ValueError(
+            f"backoff_cap_seconds={backoff_cap_seconds} is below "
+            f"backoff_base_seconds={backoff_base_seconds}; every retry would wait "
+            f"for the cap, so the base would never be read."
+        )
+    if not isinstance(lane, str) or not lane:
+        # A blank lane cannot be named on the command line, so a receiver in it
+        # would be served by no relay at all. Each half has a case of
+        # test_a_lane_must_be_a_non_empty_string: 3 for the type, "" for blank.
+        raise ValueError(f"lane must be a non-empty string, got {lane!r}")
+    if give_up_after is not None and not (
+        isinstance(give_up_after, timedelta) and give_up_after > timedelta(0)
+    ):
+        # A bare number has no unit, and zero dead-letters every deferral on
+        # arrival. One arc, so each conjunct has a test that fails without it:
+        # ``is not None`` - every receiver declaring none, the test app's
+        # included, so without it the suite cannot even start; the type -
+        # test_a_give_up_after_that_is_not_a_timedelta_is_refused, where 3600
+        # would reach the comparison and raise TypeError; the sign -
+        # test_a_give_up_after_that_is_not_in_the_future_is_refused.
+        raise ValueError(f"give_up_after must be a positive timedelta, got {give_up_after!r}")
     if mode is not DeliveryMode.DURABLE:
         # Same reasoning as site=, applied to the rest of the row-shaped knobs.
         # Accepting them would let a declaration state a retry budget, an eager
@@ -163,12 +254,17 @@ def receiver(
             ("eager", eager, False),
             ("lease_seconds", lease_seconds, None),
             ("targets", targets, None),
+            ("backoff_base_seconds", backoff_base_seconds, None),
+            ("backoff_cap_seconds", backoff_cap_seconds, None),
+            ("lane", lane, DEFAULT_LANE),
+            ("give_up_after", give_up_after, None),
         ):
             if value != default:
                 raise ValueError(
                     f"{name}={value!r} needs mode=DURABLE; a {mode.name} receiver "
                     f"has no delivery row, so it is never retried, never attempted "
-                    f"a second time, never leased and never fanned out."
+                    f"a second time, never leased, never fanned out and never "
+                    f"claimed by a relay."
                 )
 
     def decorate(func: Callable[..., None]) -> Callable[..., None]:
@@ -185,6 +281,10 @@ def receiver(
                 on_failure=on_failure,
                 lease_seconds=lease_seconds,
                 targets=targets,
+                backoff_base_seconds=backoff_base_seconds,
+                backoff_cap_seconds=backoff_cap_seconds,
+                lane=lane,
+                give_up_after=give_up_after,
             )
         )
         return func

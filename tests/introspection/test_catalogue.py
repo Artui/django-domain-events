@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import functools
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Literal
 
+import pytest
+
 from django_domain_events.declaration.any_event import AnyEvent
+from django_domain_events.declaration.registry import registry
 from django_domain_events.introspection.catalogue import catalogue
 from django_domain_events.types.delivery_mode import DeliveryMode
+from django_domain_events.types.registered_event import RegisteredEvent
 from django_domain_events.types.registered_receiver import RegisteredReceiver
+from django_domain_events.types.retention import Retention
 from tests.conftest import event_registered, receiver_registered
 
 
@@ -255,3 +263,71 @@ def test_a_fan_out_publishes_where_its_targets_come_from() -> None:
 
     assert fan.targets == "tests.introspection.test_catalogue.owed_endpoints"
     assert _by_name("testapp.OrderPlaced").receivers[0].targets is None
+
+
+@dataclass(frozen=True)
+class Kept:
+    value: int
+
+
+@contextmanager
+def _kept(retention: timedelta | Retention | None) -> Iterator[None]:
+    """``Kept`` declared with this retention for the length of a test."""
+    registry.register_event(
+        RegisteredEvent(event_class=Kept, name="tests.kept", version=1, retention=retention)
+    )
+    try:
+        yield
+    finally:
+        registry._events_by_class.pop(Kept, None)
+        registry._events_by_name.pop("tests.kept", None)
+
+
+@pytest.mark.parametrize(
+    ("retention", "published"),
+    [
+        (None, (None, "")),
+        (timedelta(days=7), (7 * 86400, "")),
+        (Retention.SUCCEEDED, (None, "succeeded")),
+        (Retention.SETTLED, (None, "settled")),
+    ],
+    ids=["default", "window", "succeeded", "settled"],
+)
+def test_the_retention_is_published_as_fire_records_it(
+    retention: timedelta | Retention | None, published: tuple[int | None, str]
+) -> None:
+    """In the two columns fire() writes, so a pipeline diffing catalogues sees
+    an event start deleting on consumption, and the JSON stays plain values."""
+    with _kept(retention):
+        entry = _by_name("tests.kept")
+    assert (entry.retention_seconds, entry.delete_when) == published
+
+
+def test_a_declared_curve_and_lane_reach_the_catalogue() -> None:
+    """Both change how a receiver behaves in production - when it is retried,
+    and which relay process runs it - so a diff of the catalogue should show a
+    change to either."""
+    declared = _durable(
+        "testapp.mail", AnyEvent, backoff_base_seconds=60, backoff_cap_seconds=1200, lane="mail"
+    )
+    with receiver_registered(declared):
+        [mail] = catalogue().wildcard_receivers
+
+    assert (mail.backoff_base_seconds, mail.backoff_cap_seconds, mail.lane) == (60, 1200, "mail")
+    plain = _by_name("testapp.OrderPlaced").receivers[0]
+    assert (plain.backoff_base_seconds, plain.backoff_cap_seconds, plain.lane) == (
+        None,
+        None,
+        "default",
+    )
+
+
+def test_give_up_after_reaches_the_catalogue_in_seconds() -> None:
+    """It decides when a deferred delivery is dead-lettered, so a diff of the
+    catalogue should show it, and as a number the JSON can carry."""
+    declared = _durable("testapp.bounded", AnyEvent, give_up_after=timedelta(hours=6))
+    with receiver_registered(declared):
+        [bounded] = catalogue().wildcard_receivers
+
+    assert bounded.give_up_after_seconds == 21600.0
+    assert _by_name("testapp.OrderPlaced").receivers[0].give_up_after_seconds is None
