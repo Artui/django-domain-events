@@ -693,3 +693,16 @@ def test_requeue_dead_locks_the_events_before_it_reopens_their_rows(
     assert locked < updated, statements
     assert f'"{EVENT_TABLE}"' in statements[locked]
     assert EventRecord.objects.filter(pk=event.pk).exists()
+
+
+def test_a_limit_is_spent_across_the_policies_not_per_policy() -> None:
+    """Each policy is a query of its own; the limit is what remains of the
+    caller's after the arms before it, not the whole of it for every arm. Passing
+    ``limit`` unreduced deletes up to ``limit`` per arm: three here, not two."""
+    _recorded(SUCCEEDED, delete_when="succeeded")
+    _recorded(SUCCEEDED, delete_when="succeeded")
+    _recorded(SUCCEEDED, delete_when="settled")
+    _recorded(SUCCEEDED, age=timedelta(days=365))
+
+    assert prune_events(limit=2) == 2
+    assert EventRecord.objects.count() == 2
