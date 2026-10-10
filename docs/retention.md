@@ -88,12 +88,25 @@ policy's latency. With `Retention` policies in use, run it often:
 * * * * *  manage.py prune_events
 ```
 
-That is cheap when there is nothing to delete: three queries, each an index range
-rather than a read of the history. The ordinary window is read through
-`recorded_at`; the other two through a partial index holding only the events with
-a policy of their own that are still alive. Events deleted on consumption leave
-it within a prune, so it stays as small as the backlog; events with a window of
-their own stay in it for that window, and each prune reads all of those.
+A prune with nothing to delete runs three queries. The ordinary window is one
+index range on `recorded_at`, and costs nothing however long the history. The
+other two read a partial index holding only the events that declare a retention
+and are still alive - **all of it, every prune**, since nothing bounds how
+recently such an event can have become due - and check each of those events'
+delivery rows. So their cost grows with how many such events are alive:
+
+- An event deleted on consumption leaves the index within a prune of being
+  consumed, so for those it is the backlog - except that a `Retention.SUCCEEDED`
+  event kept by a dead letter stays for `RETENTION_DAYS`.
+- An event with a window of its own stays in the index for that window, so a long
+  window on a frequent event makes every prune read every one of them.
+
+Measured on Postgres 17 (a laptop, synthetic data, single warm runs, so
+directional): with 55,000 such events alive and 440,000 delivery rows, a prune
+with nothing to delete took about 50 ms, and the planner chose to answer the
+consumed check by reading the delivery table in full rather than probing it per
+event. Measure on your own data before running it every minute against a large
+table.
 
 It deletes in [batches of rows](operations.md#pruning), not of events, so a
 20,000-target fan-out does not become one 20,000-row transaction.

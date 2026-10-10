@@ -512,15 +512,20 @@ EVENT_TABLE = EventRecord._meta.db_table
     reason="asserts Postgres query plans; SQLite's planner is not the one a sweep runs on",
 )
 def test_each_kind_of_due_is_one_index_range(plans_without_seqscan: Plans) -> None:
-    """With nothing due, a sweep is three selects, and each reads an index
-    rather than the history: the two policies through the partial index that
-    holds only events with one, the ordinary window through ``recorded_at``.
+    """With nothing due, a sweep is three selects, none reading the event
+    history: the two policies through the partial index that holds only events
+    with one, the ordinary window through ``recorded_at``.
 
     The partial index serves a query only if its WHERE clause implies the
-    index's condition, so this is what fails when the policy filter is phrased
-    any other way - ``delete_when__in``, say, or the window comparison without
-    ``retention_seconds IS NOT NULL`` beside it. Populated and analyzed, so the
-    plans are the ones a table with history gets."""
+    index's condition, so this is what fails when the consumption filter is
+    phrased any other way - ``delete_when__in``, say. The window arm's
+    ``retention_seconds IS NOT NULL`` is not held here: Postgres 17 infers it
+    from the strict arithmetic beside it, and the test passes without it.
+
+    It pins the event side. The delivery-side assertion holds at this size
+    only: on a delivery table of hundreds of thousands of rows the planner
+    may hash the consumed check's subqueries over a full read of that table,
+    which ``docs/retention.md`` records as measured."""
     now = datetime.now(timezone.utc)
     EventRecord.objects.bulk_create(
         EventRecord(name="testapp.OrderPlaced", payload={}, occurred_at=now) for _ in range(3000)

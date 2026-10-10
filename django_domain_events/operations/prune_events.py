@@ -67,11 +67,13 @@ def prune_events(
     deletes, in the same transaction, which is what lets ``quiet_receivers()``
     still report a receiver whose events are all gone.
 
-    Cheap when nothing is due: one query per kind of due, each an index range
-    rather than a read of the history - the ordinary window's on
-    ``recorded_at``, the other two on the partial index holding only events
-    with a policy of their own. That index holds every such event still
-    alive, so the window-of-its-own query reads all of those each time.
+    One query per kind of due, none of which reads the event history: the
+    ordinary window is a range on ``recorded_at``, the other two read the
+    partial index holding only events with a policy of their own. They read
+    all of it, every sweep, and check each event's delivery rows, so with
+    nothing due their cost grows with how many such events are alive - and
+    on a populated delivery table the planner may answer the consumed check
+    by reading that table in full. ``docs/retention.md`` has the measurement.
     """
     from django_domain_events.models.event_record import EventRecord
 

@@ -293,5 +293,5 @@ names the receiver and suggests `lease_seconds=`, because that is the fix.
 With a long-running relay instead, only the prune needs a schedule. Once any
 event is declared with a [`Retention` policy](retention.md), run the prune every
 minute rather than every night: its schedule is how long a consumed event
-outlives its consumption, and a prune with nothing to delete is three index
-lookups.
+outlives its consumption. What a prune with nothing to delete costs is in
+[scheduling the prune](retention.md#scheduling-the-prune).
