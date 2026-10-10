@@ -47,16 +47,18 @@ def quiet_receivers(
         (r for r in registry.receivers() if r.mode is DeliveryMode.DURABLE),
         key=lambda r: r.key,
     )
-    rows = (
-        DeliveryRecord.objects.filter(receiver_key__in=[r.key for r in durable])
-        .values("receiver_key")
-        .annotate(last=models.Max("succeeded_at"))
-    )
-    last_seen = {row["receiver_key"]: row["last"] for row in rows}
-
     quiet = []
     for receiver in durable:
-        last = last_seen.get(receiver.key)
+        # One query per receiver rather than one grouped query, on purpose.
+        # ``MAX`` over a single key is a single descent of ``dde_last_success``
+        # from the end of that key's range - Postgres rewrites it into a
+        # backward index scan under ``LIMIT 1`` - so each costs the same
+        # however many rows the receiver has ever had. Grouped by key, the
+        # same answer reads every one of those rows, which on a fan-out
+        # receiver is the whole table.
+        last = DeliveryRecord.objects.filter(receiver_key=receiver.key).aggregate(
+            last=models.Max("succeeded_at")
+        )["last"]
         if last is not None and last >= cutoff:
             continue
         # The event may be undeclared: registering a receiver for a class with

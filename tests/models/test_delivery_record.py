@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import secrets
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, models, transaction
 
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.types.delivery_status import DeliveryStatus
 
 pytestmark = pytest.mark.django_db
 
@@ -92,8 +94,8 @@ def test_a_row_written_without_a_target_has_the_blank_one() -> None:
     assert row.target == ""
 
 
-def _digest(target: str) -> str:
-    return hashlib.sha256(target.encode()).hexdigest()
+def _digest(target: str) -> bytes:
+    return hashlib.sha256(target.encode()).digest()
 
 
 def test_two_rows_with_the_same_long_target_are_refused() -> None:
@@ -181,3 +183,70 @@ def test_the_unique_constraint_covers_the_digest_and_no_index_holds_the_text() -
     assert tuple(constraint.fields) == ("event", "receiver_key", "target_digest")
     assert not any("target" in index.fields for index in DeliveryRecord._meta.indexes)
     assert DeliveryRecord._meta.get_field("target").db_index is False
+
+
+def test_a_stored_digest_is_found_by_the_one_target_digest_computes() -> None:
+    """Replay keys a dict by ``target_digest(target)`` and looks the stored
+    values up in it, so a stored value has to hash and compare equal to the
+    computed one. Asserted through a dict rather than ``==`` because that is
+    the operation replay performs; psycopg 2 returns a ``memoryview`` for a
+    binary column, which passes both only because a read-only buffer hashes
+    as its bytes."""
+    event = _event()
+    DeliveryRecord.objects.create(
+        event=event, receiver_key="probe.fan", target="endpoint-42", available_at=event.recorded_at
+    )
+    [stored] = DeliveryRecord.objects.values_list("target_digest", flat=True)
+    assert {_digest("endpoint-42"): "found"}[stored] == "found"
+
+
+def test_the_digest_column_is_binary_and_holds_exactly_a_sha256() -> None:
+    field = DeliveryRecord._meta.get_field("target_digest")
+    assert field.get_internal_type() == "BinaryField"
+    assert field.max_length == 32
+
+
+def test_mysql_gets_a_bounded_binary_column_it_can_index() -> None:
+    """MySQL maps a ``BinaryField`` to ``longblob``, which it refuses in a
+    unique index without a prefix length. Unverified against a real MySQL
+    server: the suite runs on SQLite and Postgres only."""
+    field = DeliveryRecord._meta.get_field("target_digest")
+    assert field.db_type(SimpleNamespace(vendor="mysql")) == "varbinary(32)"
+    assert field.db_type(connection) == connection.data_types["BinaryField"]
+
+
+def test_a_new_row_has_no_due_time_of_its_own() -> None:
+    """NULL is read as the event's ``recorded_at``, which is what lets the
+    column arrive on a populated table with nothing to backfill."""
+    event = _event()
+    row = DeliveryRecord.objects.create(
+        event=event, receiver_key="probe.fan", available_at=event.recorded_at
+    )
+    row.refresh_from_db()
+    assert row.due_at is None
+    assert DeliveryRecord._meta.get_field("due_at").null is True
+
+
+def test_no_index_duplicates_the_unique_constraint_on_its_leading_column() -> None:
+    """The unique index leads with ``event_id``, which is what the cascade from
+    an event and every per-event lookup filter on, so a second index on that
+    column alone is written on every insert and read by nothing."""
+    [constraint] = DeliveryRecord._meta.constraints
+    assert constraint.fields[0] == "event"
+    assert DeliveryRecord._meta.get_field("event").db_index is False
+
+
+def test_the_receiver_key_is_indexed_only_as_the_lead_of_the_last_success_index() -> None:
+    """No single-column index and no pattern-ops copy on Postgres: equality and
+    ``IN`` on the key are served by the composite, and the admin's search is
+    ``icontains``, which neither kind of btree can serve."""
+    assert DeliveryRecord._meta.get_field("receiver_key").db_index is False
+    [index] = [i for i in DeliveryRecord._meta.indexes if i.name == "dde_last_success"]
+    assert tuple(index.fields) == ("receiver_key", "succeeded_at")
+    assert index.condition is None
+
+
+def test_dead_letters_have_a_partial_index_of_their_own() -> None:
+    [index] = [i for i in DeliveryRecord._meta.indexes if i.name == "dde_dead_by_receiver"]
+    assert tuple(index.fields) == ("receiver_key",)
+    assert index.condition == models.Q(status=DeliveryStatus.DEAD)

@@ -7,7 +7,7 @@ from django.db import models
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.outbox_health import OutboxHealth
 from django_domain_events.types.receiver_backlog import ReceiverBacklog
-from django_domain_events.utils import TERMINAL
+from django_domain_events.utils import RETRYABLE
 
 
 def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
@@ -27,7 +27,19 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
     from django_domain_events.models.delivery_record import DeliveryRecord
 
     moment = now or datetime.now(timezone.utc)
-    owed = DeliveryRecord.objects.exclude(status__in=TERMINAL)
+    # Every predicate below is a partial index's own condition, word for word,
+    # because that is the only form Postgres matches a partial index to: "not
+    # terminal" means the same rows and implies neither condition, so it read
+    # the whole delivered history on every scrape. The OR of two conditions
+    # is answered by OR-ing the two indexes' bitmaps.
+    #
+    # Listing the owed statuses gives up the one thing "not terminal" had:
+    # it could not miss a status added later. That is held by a test instead
+    # (test_every_status_is_counted_owed_or_settled_exactly_once), which goes
+    # red the moment a status exists that is neither listed here nor terminal.
+    is_owed = models.Q(status__in=RETRYABLE) | models.Q(status=DeliveryStatus.CLAIMED)
+    is_dead = models.Q(status=DeliveryStatus.DEAD)
+    owed = DeliveryRecord.objects.filter(is_owed)
 
     totals = owed.aggregate(
         owed=models.Count("pk"),
@@ -38,20 +50,18 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
             filter=models.Q(status=DeliveryStatus.CLAIMED, lease_expires_at__lt=moment),
         ),
     )
-    dead_total = DeliveryRecord.objects.filter(status=DeliveryStatus.DEAD).count()
+    dead_total = DeliveryRecord.objects.filter(is_dead).count()
 
     # One grouped query for the per-receiver split rather than one per receiver:
     # this is meant to be scraped on a schedule, so its cost is paid forever.
     # Three in total: this, the aggregate above, and the dead count.
     per_receiver = (
-        DeliveryRecord.objects.filter(
-            models.Q(status=DeliveryStatus.DEAD) | ~models.Q(status__in=TERMINAL)
-        )
+        DeliveryRecord.objects.filter(is_dead | is_owed)
         .values("receiver_key")
         .annotate(
-            owed=models.Count("pk", filter=~models.Q(status__in=TERMINAL)),
-            dead=models.Count("pk", filter=models.Q(status=DeliveryStatus.DEAD)),
-            oldest=models.Min("event__recorded_at", filter=~models.Q(status__in=TERMINAL)),
+            owed=models.Count("pk", filter=is_owed),
+            dead=models.Count("pk", filter=is_dead),
+            oldest=models.Min("event__recorded_at", filter=is_owed),
         )
     )
     backlogs = [

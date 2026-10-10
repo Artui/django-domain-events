@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from django.db import transaction
+from django.db import connection, transaction
 
 from django_domain_events.declaration.any_event import AnyEvent
+from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
 from django_domain_events.introspection.quiet_receivers import quiet_receivers
@@ -20,6 +21,7 @@ from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
 from tests.conftest import receiver_registered
+from tests.introspection.conftest import Plans, delivery_table_access
 from tests.testapp.events import OrderPlaced
 
 pytestmark = pytest.mark.django_db
@@ -201,3 +203,78 @@ def test_a_quiet_wildcard_is_reported_under_the_name_it_was_declared_with() -> N
         quiet = {q.key: q for q in quiet_receivers()}
     assert quiet["testapp.everything"].event_name == "AnyEvent"
     assert quiet["testapp.everything"].last_succeeded_at is None
+
+
+def test_the_latest_success_wins_over_older_ones_and_failures() -> None:
+    """Several rows per receiver, so the answer depends on picking the newest
+    success rather than any one row: a lookup that read the first row it found,
+    or the oldest, passes every one-row test above."""
+    event = EventRecord.objects.create(
+        name="testapp.OrderPlaced",
+        version=1,
+        payload={},
+        occurred_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+    now = datetime.now(timezone.utc)
+    newest = now - timedelta(days=1)
+    for n, succeeded in enumerate(
+        (now - timedelta(days=200), newest, None, now - timedelta(days=50))
+    ):
+        DeliveryRecord.objects.create(
+            event=event,
+            receiver_key="testapp.durable_receiver",
+            target=f"t{n}",
+            available_at=event.recorded_at,
+            succeeded_at=succeeded,
+        )
+    assert "testapp.durable_receiver" not in _keys()
+    quiet = {q.key: q for q in quiet_receivers(within=timedelta(hours=1))}
+    assert quiet["testapp.durable_receiver"].last_succeeded_at == newest
+
+
+@pytest.mark.skipif(
+    connection.vendor != "postgresql",
+    reason="asserts Postgres query plans; SQLite's planner is not the one a scrape runs on",
+)
+def test_each_receiver_costs_one_probe_of_the_last_success_index(
+    plans_without_seqscan: Plans,
+) -> None:
+    """``MAX(succeeded_at)`` for one key is a single descent of the index on
+    ``(receiver_key, succeeded_at)``: the planner rewrites it into a backward
+    scan under ``LIMIT 1``. Grouped across keys it is not, and reads every row
+    the receivers ever had.
+
+    Populated and analyzed first, because the rewrite is chosen on cost: on an
+    empty table the planner expects one row per key and an ordinary aggregate
+    over the index costs the same, so the plan would not say which query was
+    sent."""
+    event = EventRecord.objects.create(
+        name="testapp.OrderPlaced",
+        version=1,
+        payload={},
+        occurred_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+    now = datetime.now(timezone.utc)
+    DeliveryRecord.objects.bulk_create(
+        DeliveryRecord(
+            event=event,
+            receiver_key="testapp.durable_receiver",
+            target=f"t{n}",
+            available_at=now,
+            succeeded_at=now - timedelta(seconds=n),
+        )
+        for n in range(5000)
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(f"ANALYZE {DeliveryRecord._meta.db_table}")
+    plans = plans_without_seqscan(quiet_receivers)
+    durable = [r for r in registry.receivers() if r.mode is DeliveryMode.DURABLE]
+    assert len(plans) == len(durable)
+    for plan in plans:
+        assert delivery_table_access(plan) == {"dde_last_success"}, plan
+    # The receivers with no rows are estimated at one entry, where an ordinary
+    # aggregate over it costs the same; the one with history is where the
+    # rewrite has to show.
+    [busy] = [p for p in plans if "'testapp.durable_receiver'" in p]
+    assert "Limit" in busy, busy
+    assert "Index Only Scan Backward using dde_last_success" in busy, busy

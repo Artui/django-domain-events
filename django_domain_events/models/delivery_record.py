@@ -4,6 +4,7 @@ from django.db import models
 
 from django_domain_events.models.target_digest_field import TargetDigestField
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.utils import RETRYABLE
 
 
 class DeliveryRecord(models.Model):
@@ -20,8 +21,23 @@ class DeliveryRecord(models.Model):
         "django_domain_events.EventRecord",
         on_delete=models.CASCADE,
         related_name="deliveries",
+        # No index of its own: the unique constraint below leads with this
+        # column, so it already serves the cascade from an event and every
+        # per-event lookup. A second one was written on every insert and read
+        # by nothing.
+        db_index=False,
     )
-    receiver_key = models.CharField(max_length=255, db_index=True)
+    receiver_key = models.CharField(max_length=255)
+    """Indexed only as the leading column of ``dde_last_success``.
+
+    Every lookup *by* key is an equality - the admin's receiver filter,
+    ``requeue_dead``, the quiet-receiver probe - and a composite serves those
+    through its leading column. The queries that group by key find their rows
+    through a status index first. The single-column index it replaced also
+    brought a ``varchar_pattern_ops`` copy on Postgres for ``LIKE 'prefix%'``,
+    which nothing here issues: the admin searches with ``icontains``, which no
+    btree can serve.
+    """
 
     target = models.TextField(blank=True, default="")
     """Which of a fan-out receiver's targets this delivery is for, or blank.
@@ -42,9 +58,9 @@ class DeliveryRecord(models.Model):
     """
 
     target_digest = TargetDigestField()
-    """SHA-256 of ``target``, derived on every write, and what the unique
-    constraint covers. The blank target has a digest like any other, so a row
-    from a receiver without ``targets=`` is not a special case."""
+    """SHA-256 of ``target`` as 32 raw bytes, derived on every write, and what
+    the unique constraint covers. The blank target has a digest like any other,
+    so a row from a receiver without ``targets=`` is not a special case."""
     status = models.CharField(
         max_length=16, choices=DeliveryStatus.choices, default=DeliveryStatus.PENDING
     )
@@ -64,6 +80,23 @@ class DeliveryRecord(models.Model):
     Never the primary key: a transaction holding a lower id can commit after one
     holding a higher id, so a row becomes visible "in the past" and a high-water
     mark skips it forever.
+    """
+
+    due_at = models.DateTimeField(null=True, blank=True)
+    """When this row is or becomes owed, and never rewritten by the backoff.
+
+    The other half of ``available_at``: that column moves on every failed
+    attempt, so it cannot say how long a delivery has been owed. This one is
+    set when a row becomes owed - by being written, or reopened by a replay or
+    a requeue - and a bound measured in time rather than attempts is measured
+    from it.
+
+    NULL is read as the event's ``recorded_at``, which is when a row nobody has
+    reopened became owed. That reading is what lets the column arrive on a
+    populated table with nothing to backfill, and lets a row written before it
+    existed mean exactly what it did.
+
+    No index: nothing filters or orders on it yet.
     """
 
     claimed_by = models.CharField(max_length=255, blank=True)
@@ -105,16 +138,38 @@ class DeliveryRecord(models.Model):
         # query on `status IN (pending, failed)`, so the planner falls back to a
         # full scan of the whole delivered history - which grows without bound,
         # because that is what an event log does.
+        #
+        # The same holds for the introspection queries, which are scraped on a
+        # schedule: outbox_health phrases "owed" as the first two conditions
+        # and "dead" as the third, word for word, so each of its queries reads
+        # only the rows these hold however much history the table carries.
         indexes = [
             models.Index(
                 fields=["available_at"],
-                condition=models.Q(status__in=[DeliveryStatus.PENDING, DeliveryStatus.FAILED]),
+                condition=models.Q(status__in=list(RETRYABLE)),
                 name="dde_owed_by_available_at",
             ),
             models.Index(
                 fields=["lease_expires_at"],
                 condition=models.Q(status=DeliveryStatus.CLAIMED),
                 name="dde_claimed_by_lease",
+            ),
+            # Dead letters are a backlog an operator works down, not history,
+            # so this stays as small as the dead-letter queue. Keyed by
+            # receiver because every reader asks per receiver: the per-receiver
+            # dead count, and requeue_dead(receiver_key=...).
+            models.Index(
+                fields=["receiver_key"],
+                condition=models.Q(status=DeliveryStatus.DEAD),
+                name="dde_dead_by_receiver",
+            ),
+            # Not partial: succeeded_at is never cleared, so the newest success
+            # can sit on a row in any status. With the key leading, the
+            # newest success of one receiver is a single descent from the end
+            # of its range, which is how quiet_receivers asks.
+            models.Index(
+                fields=["receiver_key", "succeeded_at"],
+                name="dde_last_success",
             ),
         ]
         verbose_name = "delivery record"

@@ -25,6 +25,17 @@ and the deploy that deleted its receiver read as settled until a relay
 happened to reclaim it.
 """
 
+RETRYABLE = (DeliveryStatus.PENDING, DeliveryStatus.FAILED)
+"""The owed statuses the claim's first partial index is conditioned on.
+
+Named so that the index and ``outbox_health``, which reads through it, spell
+the predicate from one place: Postgres uses a partial index only for a query
+whose WHERE clause implies the index's own condition, so a query that phrased
+"owed" any other way - ``status NOT IN (terminal)`` is the natural one - reads
+the whole table instead. CLAIMED is the other owed status, and has an index of
+its own.
+"""
+
 
 def label_for(module: str, fallback_name: str) -> str:
     """Build a ``<app_label>.<name>`` identity for a declaration.
@@ -187,12 +198,16 @@ def resolve_targets(
     return list(resolved)
 
 
-def target_digest(target: str) -> str:
+def target_digest(target: str) -> bytes:
     """The digest a delivery row's uniqueness is enforced on, for one target.
 
     The one place it is computed: the model field derives it from here on every
     write, and replay looks existing rows up by it. SHA-256 of the UTF-8 text,
-    as 64 hex characters, so every target - the blank one included - indexes as
+    as its 32 raw bytes, so every target - the blank one included - indexes as
     the same fixed width however long the text is.
+
+    Raw rather than hex because the unique index holds one per delivery row:
+    hex spelled the same value in twice the bytes, and on a large fan-out
+    table that was the largest single thing on disk after the rows themselves.
     """
-    return hashlib.sha256(target.encode()).hexdigest()
+    return hashlib.sha256(target.encode()).digest()
