@@ -108,9 +108,9 @@ their own are alive, and not with how much the tables have ever held:
 Measured on Postgres 17 (a laptop, synthetic data, single warm runs, so
 directional), with 55,000 such events alive - 50,000 with a window of their
 own, 5,000 `Retention.SUCCEEDED` events kept by a dead letter - and 445,000
-delivery rows, a prune with nothing to delete takes about 12 ms. Nearly all of
-it is the windows of their own: 50,000 index entries read and discarded. The
-dead letters cost about 3 ms, and the ordinary window nothing measurable.
+delivery rows, a prune with nothing to delete takes about 12 ms. The windows of
+their own take about 6 ms of it, 50,000 index entries read and discarded; the
+dead letters about 3 ms; the ordinary window nothing measurable.
 
 Before the per-policy queries and the delivery index, the same prune took about
 50 ms and read the delivery table in full on every run, a cost that grew with
