@@ -78,6 +78,20 @@ you can run as many as you like:
 - The acknowledgement is a **compare-and-set** on `(claimed_by, claimed_at)`, so
   a worker whose lease already lapsed and was stolen cannot overwrite the new
   owner's result.
+- A relay told to stop (`SIGTERM` or `SIGINT`) finishes the delivery in hand
+  and **hands back** the rest of its batch. Another relay can claim those rows at
+  once instead of waiting for the lease to lapse. See
+  [Stopping it](operations.md#stopping-it).
+- A relay whose database goes away **stays up**: it closes the dead connection,
+  backs off and claims again. See
+  [When the database goes away](operations.md#when-the-database-goes-away).
+
+A `DURABLE` receiver runs inside the transaction that carries its
+acknowledgement, so a call it makes outside the database holds that
+transaction open. See
+[A receiver holds a transaction open](operations.md#a-receiver-holds-a-transaction-open)
+for what that means behind pgbouncer and under
+`idle_in_transaction_session_timeout`.
 
 !!! warning "SKIP LOCKED is Postgres and MySQL 8"
     SQLite has neither the statement nor the concurrency model that would make
