@@ -29,9 +29,9 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
     moment = now or datetime.now(timezone.utc)
     # Every predicate below is a partial index's own condition, word for word,
     # because that is the only form Postgres matches a partial index to: "not
-    # terminal" means the same rows and implies none of the conditions, so it
-    # read the whole delivered history on every scrape. See ``owed`` for what
-    # holds the list of owed statuses complete.
+    # terminal" means the same rows but implies none of the owed or dead
+    # conditions, so it read the whole delivered history on every scrape. See
+    # ``owed`` for what holds the list of owed statuses complete.
     is_owed = owed()
     is_dead = models.Q(status=DeliveryStatus.DEAD)
     owed_rows = DeliveryRecord.objects.filter(is_owed)

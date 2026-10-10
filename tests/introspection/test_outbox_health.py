@@ -218,9 +218,14 @@ def test_no_query_outbox_health_sends_scans_the_delivery_table(
 ) -> None:
     """Each predicate is the partial indexes' own, so each query reads only
     the owed and dead rows however much delivered history the table holds.
-    ``status NOT IN (terminal)`` matches no partial index, and reads the whole
-    table on every scrape."""
+    A ``status NOT IN (terminal)`` predicate would match none of the owed or
+    dead indexes and read the whole table on every scrape."""
     owed = {"dde_owed_by_available_at", "dde_claimed_by_lease"}
     dead = {"dde_dead_by_receiver"}
     plans = plans_without_seqscan(outbox_health)
-    assert [delivery_table_access(plan) for plan in plans] == [owed, dead, owed | dead], plans
+    access = [delivery_table_access(plan) for plan in plans]
+    assert access[:2] == [owed, dead], plans
+    # Owed-or-dead implies "not succeeded", so the prune's index of unfinished
+    # rows serves the per-receiver split too, in one scan where the three
+    # above take a bitmap OR; it holds no succeeded row either.
+    assert access[2] in (owed | dead, {"dde_unfinished_by_event"}), plans
