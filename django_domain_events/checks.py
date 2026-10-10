@@ -10,7 +10,13 @@ from django.utils.module_loading import import_string
 
 from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.declaration.registry import registry
-from django_domain_events.settings import DEFAULTS, SETTINGS_NAME, get_codec, setting
+from django_domain_events.settings import (
+    DEFAULTS,
+    SETTINGS_NAME,
+    WAKE_MODES,
+    get_codec,
+    setting,
+)
 from django_domain_events.utils import TERMINAL, has_table
 
 # The names a reader reaches for instead: the app label, and the prose everyone
@@ -114,7 +120,8 @@ def check_declared_events_are_decodable(**kwargs: Any) -> list[Any]:
 
 
 def check_settings_keys_are_known(**kwargs: Any) -> list[Any]:
-    """The settings dict is named correctly and holds no unrecognised keys.
+    """The settings dict is named correctly, holds no unrecognised keys, and the
+    wake settings hold values the relay can act on.
 
     Both halves are silent by default. ``setting()`` reads only the keys this
     package asks for, so a typo sits in the settings looking effective; and the
@@ -147,6 +154,44 @@ def check_settings_keys_are_known(**kwargs: Any) -> list[Any]:
                 f"{SETTINGS_NAME} has unrecognised key(s): {', '.join(unknown)}. They are ignored.",
                 hint=f"Valid keys are: {', '.join(sorted(DEFAULTS))}.",
                 id="django_domain_events.W007",
+            )
+        )
+
+    # Folded in here rather than registered on its own: it is the same silent
+    # ineffective configuration, and the check is already wired.
+    problems.extend(_wake_setting_problems())
+    return problems
+
+
+def _wake_setting_problems() -> list[Any]:
+    """``WAKE`` and ``NOTIFY_COALESCE_SECONDS`` hold values the relay can use.
+
+    A misspelt ``WAKE`` would otherwise read as "not notify" and quietly turn
+    NOTIFY off, and a negative or NaN interval compares false against every
+    elapsed time, so it would silence every notification after the first.
+    ``bool`` is refused because ``True`` is an ``int`` and would read as a
+    one-second interval.
+    """
+    problems: list[Any] = []
+    wake = setting("WAKE")
+    if wake not in WAKE_MODES:
+        problems.append(
+            Error(
+                f"WAKE is {wake!r}, which is not a wake mode.",
+                hint=f"Use one of: {', '.join(repr(mode) for mode in WAKE_MODES)}.",
+                id="django_domain_events.E006",
+            )
+        )
+    interval = setting("NOTIFY_COALESCE_SECONDS")
+    # ``not interval >= 0`` rather than ``interval < 0``: NaN fails the first
+    # comparison and passes the second.
+    if isinstance(interval, bool) or not isinstance(interval, (int, float)) or not interval >= 0:
+        problems.append(
+            Error(
+                f"NOTIFY_COALESCE_SECONDS is {interval!r}, which is not a number of "
+                "seconds, zero or more.",
+                hint="Use 0 to send every notification, or a positive number of seconds.",
+                id="django_domain_events.E007",
             )
         )
     return problems

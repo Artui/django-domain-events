@@ -26,6 +26,49 @@ notification costs latency and never a delivery.
 `notify_relay()` is public, for the case where you moved rows into `pending`
 yourself.
 
+#### Coalescing
+
+A process sends at most one notification per `NOTIFY_COALESCE_SECONDS` (half a
+second by default) per database, however many events it fires in that time.
+That loses nothing: one wake makes the relay claim everything that is due, and
+the poll picks up whatever a skipped notification would have announced. The cost
+is that an event fired just after a notification, and committed after the relay
+had already claimed, waits for the next poll instead of being delivered at once.
+Set it to `0` to send every notification.
+
+`replay_events` and `requeue_dead` notify through the same function, so they are
+coalesced the same way.
+
+#### Turning NOTIFY off
+
+Set `WAKE` to `"poll"` and neither side uses it: `fire()` sends nothing, and the
+relay sleeps for `POLL_SECONDS` between passes instead of listening. Latency then
+is `POLL_SECONDS`, up to a second at the default.
+
+Why you might: in Postgres, a transaction that sends a `NOTIFY` takes a
+database-wide lock while it commits, so commits that send one queue behind each
+other. This package keeps the notification out of your business transaction and
+sends one per `fire()` rather than one per row, but a `fire()` with a durable
+receiver still ends in one such commit. Reports of this limiting throughput on
+busy databases exist, but whether the lock wait is the cause or a symptom is disputed upstream,
+and a change in Postgres itself may have removed it, so measure before you give
+up the latency.
+
+What makes polling cheap enough to lower `POLL_SECONDS`: the claim reads
+indexes that hold only rows still owed, so it does not slow down as history
+grows. It took 0.15 ms at 1.6 million delivery rows on Postgres 16 (a single
+warm run on synthetic data on a laptop, so directional). A relay polling every
+100 ms is a reasonable trade for dropping `NOTIFY`.
+
+#### Behind pgbouncer
+
+`LISTEN` is state on a database session. Through pgbouncer in transaction-pooling
+mode a relay's session is not its own between statements, so it never receives a
+notification, and it polls instead without saying so. Nothing is lost, because
+the poll is the floor, but the relay gets none of the benefit. Point the relay at
+a direct or session-pooled connection to have `NOTIFY` wake it, or set `WAKE` to
+`"poll"` and lower `POLL_SECONDS` to say what is happening.
+
 ## Pruning
 
 ```bash

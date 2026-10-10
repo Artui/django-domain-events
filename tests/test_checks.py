@@ -239,3 +239,38 @@ def test_a_wildcard_receiver_is_not_an_undeclared_event() -> None:
     listens to everything that is."""
     with _receiver_registered("testapp.everything", AnyEvent):
         assert checks.check_receivers_have_events() == []
+
+
+def test_the_default_wake_settings_are_clean() -> None:
+    assert checks.check_settings_keys_are_known() == []
+
+
+@pytest.mark.parametrize("mode", ["notify", "poll"])
+def test_a_known_wake_mode_is_clean(settings, mode: str) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"WAKE": mode}
+    assert checks.check_settings_keys_are_known() == []
+
+
+@pytest.mark.parametrize("mode", ["Notify", "listen", "", None])
+def test_a_misspelt_wake_mode_is_an_error(settings, mode: object) -> None:
+    """Anything but ``notify`` would otherwise quietly turn NOTIFY off."""
+    settings.DJANGO_DOMAIN_EVENTS = {"WAKE": mode}
+    problems = checks.check_settings_keys_are_known()
+    assert [p.id for p in problems] == ["django_domain_events.E006"]
+    assert repr(mode) in problems[0].msg
+    assert "'notify', 'poll'" in problems[0].hint
+
+
+@pytest.mark.parametrize("interval", [0, 0.0, 0.5, 2])
+def test_a_coalesce_interval_of_zero_or_more_is_clean(settings, interval: float) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"NOTIFY_COALESCE_SECONDS": interval}
+    assert checks.check_settings_keys_are_known() == []
+
+
+@pytest.mark.parametrize("interval", [-1, float("nan"), "0.5", None, True])
+def test_a_coalesce_interval_that_is_not_a_duration_is_an_error(settings, interval: object) -> None:
+    """One case per refusal: a negative, NaN (which compares false both ways), a
+    string, and a bool (an ``int``, so it would read as one second)."""
+    settings.DJANGO_DOMAIN_EVENTS = {"NOTIFY_COALESCE_SECONDS": interval}
+    problems = checks.check_settings_keys_are_known()
+    assert [p.id for p in problems] == ["django_domain_events.E007"]
