@@ -512,26 +512,29 @@ EVENT_TABLE = EventRecord._meta.db_table
     reason="asserts Postgres query plans; SQLite's planner is not the one a sweep runs on",
 )
 def test_each_kind_of_due_is_one_index_range(plans_without_seqscan: Plans) -> None:
-    """With nothing due, a sweep is three selects, none reading the event
-    history: the two policies through the partial index that holds only events
-    with one, the ordinary window through ``recorded_at``.
+    """With nothing due, a sweep is four selects, none reading history: each
+    policy through its own range of dde_consumed_by_policy, the windows of
+    their own through dde_own_window, the ordinary window through
+    ``recorded_at`` - and every one checks its events' deliveries through
+    dde_unfinished_by_event, which holds no succeeded row.
 
-    The partial index serves a query only if its WHERE clause implies the
-    index's condition, so this is what fails when the consumption filter is
-    phrased any other way - ``delete_when__in``, say. The window arm's
+    A partial index serves a query only if its WHERE clause implies the
+    index's condition, so this is what fails when a filter is phrased any
+    other way. Four plans, not three, is the policies' OR split in two: under
+    the OR, at 440,000 delivery rows, Postgres read the whole retention index
+    and hashed the entire delivery table on every sweep. The delivery access
+    is what fails without the unfinished index, the probe then walking every
+    row of the event through the unique one. The window arm's
     ``retention_seconds IS NOT NULL`` is not held here: Postgres 17 infers it
-    from the strict arithmetic beside it, and the test passes without it.
-
-    It pins the event side. The delivery-side assertion holds at this size
-    only: on a delivery table of hundreds of thousands of rows the planner
-    may hash the consumed check's subqueries over a full read of that table,
-    which ``docs/retention.md`` records as measured."""
+    from the strict arithmetic beside it."""
     now = datetime.now(timezone.utc)
     EventRecord.objects.bulk_create(
         EventRecord(name="testapp.OrderPlaced", payload={}, occurred_at=now) for _ in range(3000)
     )
     for n in range(50):
         _recorded(DeliveryStatus.PENDING, delete_when="succeeded")
+        _recorded(SUCCEEDED, DeliveryStatus.DEAD, delete_when="succeeded")
+        _recorded(DeliveryStatus.PENDING, delete_when="settled")
         _recorded(SUCCEEDED, retention_seconds=86400 * 30, age=timedelta(hours=n))
     with connection.cursor() as cursor:
         cursor.execute(f"ANALYZE {EVENT_TABLE}")
@@ -539,14 +542,21 @@ def test_each_kind_of_due_is_one_index_range(plans_without_seqscan: Plans) -> No
 
     plans = plans_without_seqscan(prune_events)
 
-    assert len(plans) == 3, plans
-    consumed, own_window, ordinary = plans
-    assert "dde_own_retention" in consumed, consumed
-    assert "dde_own_retention" in own_window, own_window
-    assert "recorded_at" in ordinary and "dde_own_retention" not in ordinary, ordinary
+    assert len(plans) == 4, plans
+    succeeded, settled, own_window, ordinary = plans
+    for plan, value in ((succeeded, "succeeded"), (settled, "settled")):
+        assert "Index Cond: ((delete_when)::text = " in plan, plan
+        assert f"'{value}'" in plan and "dde_consumed_by_policy" in plan, plan
+        assert "dde_own_window" not in plan, plan
+    assert "dde_own_window" in own_window and "dde_consumed_by_policy" not in own_window
+    assert "recorded_at" in ordinary, ordinary
+    assert "dde_own_window" not in ordinary and "dde_consumed_by_policy" not in ordinary
+    # The helper attributes a bitmap scan to the event table only by an index
+    # name carrying the table's, which these two named ones do not.
+    event_side = {"dde_consumed_by_policy", "dde_own_window"}
     for plan in plans:
         assert f"Seq Scan on {EVENT_TABLE}" not in plan, plan
-        assert "Seq Scan" not in delivery_table_access(plan), plan
+        assert delivery_table_access(plan) - event_side == {"dde_unfinished_by_event"}, plan
 
 
 def test_the_batch_size_defaults_to_a_setting_of_its_own(settings: Any) -> None:

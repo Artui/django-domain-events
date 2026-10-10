@@ -250,13 +250,17 @@ class Migration(migrations.Migration):
         migrations.AddIndex(
             model_name="eventrecord",
             index=models.Index(
-                condition=models.Q(
-                    ("retention_seconds__isnull", False),
-                    models.Q(("delete_when", ""), _negated=True),
-                    _connector="OR",
-                ),
+                condition=models.Q(("retention_seconds__isnull", False)),
                 fields=["recorded_at"],
-                name="dde_own_retention",
+                name="dde_own_window",
+            ),
+        ),
+        migrations.AddIndex(
+            model_name="eventrecord",
+            index=models.Index(
+                condition=models.Q(("delete_when", ""), _negated=True),
+                fields=["delete_when", "recorded_at"],
+                name="dde_consumed_by_policy",
             ),
         ),
     ]

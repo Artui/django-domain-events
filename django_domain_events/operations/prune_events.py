@@ -67,13 +67,13 @@ def prune_events(
     deletes, in the same transaction, which is what lets ``quiet_receivers()``
     still report a receiver whose events are all gone.
 
-    One query per kind of due, none of which reads the event history: the
-    ordinary window is a range on ``recorded_at``, the other two read the
-    partial index holding only events with a policy of their own. They read
-    all of it, every sweep, and check each event's delivery rows, so with
-    nothing due their cost grows with how many such events are alive - and
-    on a populated delivery table the planner may answer the consumed check
-    by reading that table in full. ``docs/retention.md`` has the measurement.
+    Four queries, one per policy and window, none of which reads history:
+    the ordinary window is a range on ``recorded_at``; each policy and the
+    windows of their own read a partial index holding only their own live
+    events, and check each against a partial index of unfinished delivery
+    rows. With nothing due, the cost grows with how many events with a
+    retention of their own are alive, and not with how much the tables have
+    ever held. ``docs/retention.md`` has the measurement.
     """
     from django_domain_events.models.event_record import EventRecord
 
@@ -87,20 +87,28 @@ def prune_events(
     unsettled = _deliveries_of_each().exclude(status__in=TERMINAL)
     unsucceeded = _deliveries_of_each().exclude(status=DeliveryStatus.SUCCEEDED)
     arms = [
-        # Equalities on the policy column, which is what lets Postgres answer
-        # this from dde_own_retention: each implies ``delete_when <> ''``, the
-        # index's condition. An unknown value matches neither and falls through
-        # to the ordinary window. Each conjunct is held by a test:
-        # the policy equalities by test_an_ordinary_event_is_not_deleted_on_
-        # consumption; the success-only test by test_a_fan_out_with_one_dead_
-        # row_is_kept_until_every_delivery_succeeded and test_an_orphaned_
-        # delivery_keeps_an_event_waiting_for_success; the settled test by
+        # One query per policy rather than their OR. An equality on the policy
+        # column is one range of dde_consumed_by_policy, and with no OR the
+        # NOT EXISTS becomes an anti-join probing dde_unfinished_by_event per
+        # event. Under the OR, Postgres could do neither: it read the whole
+        # retention index, and priced its per-event probes so high that it
+        # read the entire delivery table into a hash instead, on every sweep
+        # (test_each_kind_of_due_is_one_index_range holds the shape).
+        #
+        # An unknown policy value matches neither and falls through to the
+        # ordinary window. Each conjunct is held by a test: the policy
+        # equalities by test_an_ordinary_event_is_not_deleted_on_consumption;
+        # the success-only test by test_a_fan_out_with_one_dead_row_is_kept_
+        # until_every_delivery_succeeded and test_an_orphaned_delivery_keeps_
+        # an_event_waiting_for_success; the settled test by
         # test_an_owed_delivery_keeps_it_under_either_policy[...-settled].
-        EventRecord.objects.filter(
-            models.Q(delete_when=Retention.SUCCEEDED.value) & ~models.Exists(unsucceeded)
-            | models.Q(delete_when=Retention.SETTLED.value) & ~models.Exists(unsettled)
+        EventRecord.objects.filter(delete_when=Retention.SUCCEEDED.value).exclude(
+            models.Exists(unsucceeded)
         ),
-        # ``retention_seconds IS NOT NULL`` is the index's own condition,
+        EventRecord.objects.filter(delete_when=Retention.SETTLED.value).exclude(
+            models.Exists(unsettled)
+        ),
+        # ``retention_seconds IS NOT NULL`` is dde_own_window's own condition,
         # written out though the comparison implies it. No test holds it: the
         # Postgres the suite runs on proves the implication through the strict
         # arithmetic, and test_each_kind_of_due_is_one_index_range passes with

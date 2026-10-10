@@ -92,21 +92,31 @@ class EventRecord(models.Model):
         indexes = [
             models.Index(fields=["name", "recorded_at"]),
             # What the prune sweep reads to find events with a policy of
-            # their own. Partial, so the ordinary event - nearly every row -
-            # costs this index nothing, and it stays as small as the set of
-            # such events still alive; deleted-on-consumption events leave it
-            # within a sweep. The ordinary window keeps using the
-            # ``recorded_at`` index.
+            # their own: one partial index per kind, so the ordinary event -
+            # nearly every row - costs neither anything, and each stays as
+            # small as the set of such events still alive. The ordinary window
+            # keeps using the ``recorded_at`` index.
             #
-            # A query uses it only if its WHERE clause implies this condition,
-            # so the sweep has to filter on one of the two arms as written:
-            # ``delete_when <> ''`` (or an equality on a non-blank value), or
-            # ``retention_seconds IS NOT NULL``, each optionally with a
-            # ``recorded_at`` bound, which is the key so that bound is a range.
+            # A query uses a partial index only if its WHERE clause implies
+            # the index's condition. One index over both kinds, conditioned on
+            # their OR, served both sweeps only by having each read every
+            # entry of the other kind too; split, each sweep reads only its
+            # own.
+            #
+            # A window of its own is per row, so it filters this index rather
+            # than bounding a range of it: the sweep reads every live event
+            # with one.
             models.Index(
                 fields=["recorded_at"],
-                condition=models.Q(retention_seconds__isnull=False) | ~models.Q(delete_when=""),
-                name="dde_own_retention",
+                condition=models.Q(retention_seconds__isnull=False),
+                name="dde_own_window",
+            ),
+            # Policy first, so ``delete_when = 'succeeded'`` is one range and
+            # each policy's sweep reads only its own events, oldest first.
+            models.Index(
+                fields=["delete_when", "recorded_at"],
+                condition=~models.Q(delete_when=""),
+                name="dde_consumed_by_policy",
             ),
         ]
         verbose_name = "event record"

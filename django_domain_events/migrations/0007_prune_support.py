@@ -29,4 +29,12 @@ class Migration(migrations.Migration):
                 "verbose_name_plural": "receiver last successes",
             },
         ),
+        migrations.AddIndex(
+            model_name="deliveryrecord",
+            index=models.Index(
+                condition=models.Q(("status", "succeeded"), _negated=True),
+                fields=["event"],
+                name="dde_unfinished_by_event",
+            ),
+        ),
     ]

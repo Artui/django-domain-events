@@ -88,25 +88,33 @@ policy's latency. With `Retention` policies in use, run it often:
 * * * * *  manage.py prune_events
 ```
 
-A prune with nothing to delete runs three queries. The ordinary window is one
-index range on `recorded_at`, and costs nothing however long the history. The
-other two read a partial index holding only the events that declare a retention
-and are still alive - **all of it, every prune**, since nothing bounds how
-recently such an event can have become due - and check each of those events'
-delivery rows. So their cost grows with how many such events are alive:
+A prune with nothing to delete runs four queries, and none of them reads
+history. The ordinary window is one index range on `recorded_at`. Each policy,
+and the windows of their own, read a partial index holding only their own
+events still alive, and check each of those against a partial index of the
+delivery rows that have not succeeded - owed rows and dead letters, never the
+delivered history. So the cost grows with how many events with a retention of
+their own are alive, and not with how much the tables have ever held:
 
-- An event deleted on consumption leaves the index within a prune of being
+- An event deleted on consumption leaves its index within a prune of being
   consumed, so for those it is the backlog - except that a `Retention.SUCCEEDED`
-  event kept by a dead letter stays for `RETENTION_DAYS`.
-- An event with a window of its own stays in the index for that window, so a long
-  window on a frequent event makes every prune read every one of them.
+  event kept by a dead letter stays for `RETENTION_DAYS`, and every prune reads
+  it.
+- An event with a window of its own stays in its index for that window. The
+  window is per event, so it cannot bound a range of the index: every prune
+  reads every such event alive. A long window on a frequent event is the
+  expensive case.
 
 Measured on Postgres 17 (a laptop, synthetic data, single warm runs, so
-directional): with 55,000 such events alive and 440,000 delivery rows, a prune
-with nothing to delete took about 50 ms, and the planner chose to answer the
-consumed check by reading the delivery table in full rather than probing it per
-event. Measure on your own data before running it every minute against a large
-table.
+directional), with 55,000 such events alive - 50,000 with a window of their
+own, 5,000 `Retention.SUCCEEDED` events kept by a dead letter - and 445,000
+delivery rows, a prune with nothing to delete takes about 12 ms. Nearly all of
+it is the windows of their own: 50,000 index entries read and discarded. The
+dead letters cost about 3 ms, and the ordinary window nothing measurable.
+
+Before the per-policy queries and the delivery index, the same prune took about
+50 ms and read the delivery table in full on every run, a cost that grew with
+history rather than with the events still alive.
 
 It deletes in [batches of rows](operations.md#pruning), not of events, so a
 20,000-target fan-out does not become one 20,000-row transaction.
