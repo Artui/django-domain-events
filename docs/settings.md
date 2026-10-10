@@ -139,7 +139,9 @@ hold.
 
 An event with more delivery rows than this has them deleted this many at a time,
 each chunk in its own transaction, and goes with the last of them. Override it for
-one run with `prune_events --batch-size`. See [pruning](operations.md#pruning).
+one run with `prune_events --batch-size`. A value that is not a positive whole
+number fails the system check `E010`, rather than failing every sweep of an idle
+relay quietly. See [pruning](operations.md#pruning).
 
 ### `RELAY_PRUNE`
 

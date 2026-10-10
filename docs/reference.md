@@ -27,7 +27,6 @@ Everything below is exported from `django_domain_events` directly.
 ::: django_domain_events.delivery.permanent_failure.PermanentFailure
 ::: django_domain_events.delivery.retry_after.RetryAfter
 ::: django_domain_events.delivery.wake.notify_relay
-::: django_domain_events.delivery.hand_back.hand_back
 
 ## Operations
 

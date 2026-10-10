@@ -69,6 +69,18 @@ def replay_events(
         # any single event would otherwise discard the reopens for every other
         # event the operator asked for.
         with transaction.atomic(using=alias):
+            # The event row is locked for the transaction, which is what a prune
+            # about to delete this event waits on: it then re-reads that the
+            # event is owed again. Gone already means a prune got there first,
+            # and there is nothing left to replay
+            # (test_a_replay_in_flight_is_not_deleted_under).
+            if (
+                not EventRecord.objects.using(alias)
+                .select_for_update()
+                .filter(pk=record.pk)
+                .exists()
+            ):
+                continue
             entry = registry.event_for_name(record.name)
             if entry is None:
                 continue

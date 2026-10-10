@@ -210,6 +210,7 @@ Run with `python manage.py check`.
 | `E007` | Error | `NOTIFY_COALESCE_SECONDS` is not a non-negative number |
 | `E008` | Error | `RELAY_PRUNE` is not a bool |
 | `E009` | Error | `RELAY_PRUNE_SECONDS` is not a positive number |
+| `E010` | Error | `PRUNE_BATCH_ROWS` is not a positive whole number |
 | `W001` | Warning | Deliveries are owed to a receiver key the registry no longer has |
 | `W002` | Warning | Deliveries are owed for an event name the registry no longer has |
 | `W006` | Warning | A settings dict is named `DOMAIN_EVENTS` rather than `DJANGO_DOMAIN_EVENTS` |

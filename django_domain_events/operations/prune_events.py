@@ -251,13 +251,38 @@ def _delete_batch(due: models.QuerySet[Any], batch: list[int]) -> int:
     # in between is excluded by the next select, so the loop converges on its
     # own and needs no second way out.
     with transaction.atomic(using=write_alias()):
-        # Due is re-checked here, not only in the select. A replay landing in
-        # between makes rows owed again, and the cascade would take them with
-        # no record that anything was lost - after the operator was told they
-        # had been reopened (test_a_stale_selection_is_rechecked_at_the_delete).
-        still_due = list(due.filter(pk__in=batch).values_list("pk", flat=True))
+        # The event rows are locked in a statement of their own, before due is
+        # re-checked. A replay reopening deliveries holds that same lock for the
+        # length of its transaction (replay_events and requeue_dead take it
+        # first), so waiting here is what makes the re-check read what the
+        # replay committed. Without it the DELETE below waits on the replay's
+        # row locks, re-evaluates only the delivery table's own conditions, and
+        # takes the reopened rows with it - after the operator was told they
+        # had been reopened (test_a_replay_in_flight_is_not_deleted_under).
+        locked = _lock_events(batch)
+        # Due is re-checked here too, not only in the select: a replay that
+        # committed before the lock was taken is seen by this read.
+        still_due = list(due.filter(pk__in=locked).values_list("pk", flat=True))
         _record_last_successes(DeliveryRecord.objects.filter(event__in=still_due))
         return _delete_events(still_due)
+
+
+def _lock_events(ids: list[int]) -> list[int]:
+    """Lock these event rows, in primary key order, and return the ones still there.
+
+    Ordered so two sweeps locking overlapping batches queue rather than
+    deadlock. A no-op on a backend with no row locks, where writers already
+    serialise on the database.
+    """
+    from django_domain_events.models.event_record import EventRecord
+
+    return list(
+        EventRecord.objects.using(write_alias())
+        .select_for_update()
+        .filter(pk__in=ids)
+        .order_by("pk")
+        .values_list("pk", flat=True)
+    )
 
 
 def _delete_events(ids: list[int]) -> int:
@@ -287,6 +312,8 @@ def _delete_chunk(due: models.QuerySet[Any], event_id: int, size: int) -> int:
     from django_domain_events.models.delivery_record import DeliveryRecord
 
     with transaction.atomic(using=write_alias()):
+        # Locked before the due check, for the reason _delete_batch gives.
+        _lock_events([event_id])
         boundary = list(
             DeliveryRecord.objects.filter(event=event_id)
             .order_by("pk")

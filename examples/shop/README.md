@@ -47,7 +47,6 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
 | Two partners subscribe to orders | an `AnyEvent` receiver with `targets=`: one delivery row per partner, and none for an event nobody subscribed to |
 | The partners change, then a replay | `replay_events` asking for the targets again: a partner still subscribed is reopened, a new one added, one that left untouched |
 | A consumed event, then a prune | `Retention.SUCCEEDED` deleting `StockReserved` once delivered while the orders stay for `RETENTION_DAYS`, and `quiet_receivers` still knowing its receiver ran |
-
 | The receipt is replayed into its lane | `lane="mail"`: the default lane's pass leaves it alone and the mail lane's sends it; and the receipt's own retry curve, checked to last at most three hours and an hour and a half on average |
 
 ## The declarations

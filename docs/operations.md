@@ -244,7 +244,7 @@ relay runs `prune_events()` with its defaults, at most once per
 interval after it starts. Every relay does, whatever its `--lane`; a relay that
 is never idle does not; and `deliver_events --once` never does. A sweep that
 fails is logged and not retried before the next interval, and a stop request
-waits for a running sweep to return. Set
+waits for at most one prune batch of a running sweep. Set
 [`RELAY_PRUNE`](settings.md#relay_prune) to `False` if you schedule
 `prune_events` yourself, which is also what a `--once` deployment needs; what the
 sweep costs, and when to prefer the schedule, is in

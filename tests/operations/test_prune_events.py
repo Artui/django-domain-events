@@ -505,6 +505,7 @@ def test_postgres_is_given_an_interval_for_the_window() -> None:
 
 
 EVENT_TABLE = EventRecord._meta.db_table
+DELIVERY_TABLE = DeliveryRecord._meta.db_table
 
 
 @pytest.mark.skipif(
@@ -585,3 +586,110 @@ def test_a_stop_ends_the_prune_between_batches() -> None:
 
     assert deleted == 1
     assert EventRecord.objects.count() == 4
+
+
+postgres_only = pytest.mark.skipif(
+    connection.vendor != "postgresql",
+    reason="row locks are what is under test; SQLite serialises every writer already",
+)
+
+
+@postgres_only
+@pytest.mark.parametrize("batch_size", [None, 1], ids=["whole-events", "chunked"])
+def test_a_replay_in_flight_is_not_deleted_under(
+    order: OrderPlaced, record: list[str], batch_size: int | None
+) -> None:
+    """A prune that reaches an event while a replay of it is open waits for the
+    replay, then sees it owed again. Without the event-row lock the prune's
+    DELETE queued behind the replay's row locks, re-checked only the delivery
+    table's own conditions, and took the reopened rows: the operator was told
+    two were reopened and found none (chunked: one of the two)."""
+    import threading
+    from unittest import mock
+
+    from django_domain_events.operations import replay_events as replay_module
+
+    with transaction.atomic():
+        event_id = fire(order)
+    drain_outbox()
+    _age(365)
+
+    inside = threading.Event()
+    real = replay_module._targets_now
+    outcome: dict[str, Any] = {}
+
+    def slow(*args: Any, **kwargs: Any) -> Any:
+        inside.set()
+        # Long enough for the prune below to reach the event while this
+        # transaction is open.
+        threading.Event().wait(0.7)
+        return real(*args, **kwargs)
+
+    def replay() -> None:
+        try:
+            with mock.patch.object(replay_module, "_targets_now", slow):
+                outcome["replay"] = replay_module.replay_events([event_id])
+        finally:
+            connection.close()
+
+    thread = threading.Thread(target=replay)
+    thread.start()
+    assert inside.wait(5)
+
+    pruned = prune_events(batch_size=batch_size)
+    thread.join(10)
+
+    assert outcome["replay"]["reopened"] == 2
+    assert pruned == 0
+    assert DeliveryRecord.objects.filter(event=event_id, status=DeliveryStatus.PENDING).count() == 2
+
+
+def test_a_replay_of_an_event_pruned_in_the_meantime_skips_it(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The event is read, then a prune deletes it before the replay locks it.
+    Nothing is left to reopen, and the replay says so rather than raising."""
+    from django_domain_events.operations.replay_events import replay_events
+
+    with transaction.atomic():
+        event_id = fire(order)
+    drain_outbox()
+    seen = {"selects": 0, "busy": False}
+
+    def delete_after_the_read(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
+        if sql.startswith("SELECT") and EVENT_TABLE in sql and not seen["busy"]:
+            seen["selects"] += 1
+            if seen["selects"] == 2:
+                seen["busy"] = True
+                EventRecord.objects.filter(pk=event_id).delete()
+                seen["busy"] = False
+        return execute(sql, params, many, context)
+
+    with connection.execute_wrapper(delete_after_the_read):
+        assert replay_events([event_id]) == {"reopened": 0, "added": 0}
+    assert seen["selects"] >= 2
+
+
+@postgres_only
+def test_requeue_dead_locks_the_events_before_it_reopens_their_rows(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The lock a prune waits on, taken before the rows are reopened rather than
+    after: the statement order is what makes the wait mean anything."""
+    from django.test.utils import CaptureQueriesContext
+
+    from django_domain_events.operations.requeue_dead import requeue_dead
+
+    event = _recorded(DeliveryStatus.DEAD)
+
+    with CaptureQueriesContext(connection) as queries:
+        assert requeue_dead() == 1
+
+    statements = [q["sql"] for q in queries.captured_queries]
+    locked = next(i for i, sql in enumerate(statements) if "FOR UPDATE" in sql)
+    updated = next(
+        i for i, sql in enumerate(statements) if sql.startswith(f'UPDATE "{DELIVERY_TABLE}"')
+    )
+    assert locked < updated, statements
+    assert f'"{EVENT_TABLE}"' in statements[locked]
+    assert EventRecord.objects.filter(pk=event.pk).exists()

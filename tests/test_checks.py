@@ -296,6 +296,22 @@ def test_a_prune_interval_that_is_not_a_positive_duration_is_an_error(
     assert repr(interval) in problems[0].msg
 
 
+@pytest.mark.parametrize("size", [1, 500, 5000])
+def test_a_positive_prune_batch_is_clean(settings, size: int) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"PRUNE_BATCH_ROWS": size}
+    assert checks.check_settings_keys_are_known() == []
+
+
+@pytest.mark.parametrize("size", [0, -5, 2.5, "5000", None, True])
+def test_a_prune_batch_that_is_not_a_positive_count_is_an_error(settings, size: object) -> None:
+    """The bool test by ``True`` (an ``int``, so a batch of one), the type test
+    by ``2.5``, ``"5000"`` and ``None``, the sign test by ``0`` and ``-5``."""
+    settings.DJANGO_DOMAIN_EVENTS = {"PRUNE_BATCH_ROWS": size}
+    problems = checks.check_settings_keys_are_known()
+    assert [p.id for p in problems] == ["django_domain_events.E010"]
+    assert repr(size) in problems[0].msg
+
+
 @pytest.mark.parametrize("switch", [True, False])
 def test_the_prune_switch_is_clean_as_a_bool(settings, switch: bool) -> None:
     settings.DJANGO_DOMAIN_EVENTS = {"RELAY_PRUNE": switch}

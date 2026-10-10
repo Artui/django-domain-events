@@ -162,6 +162,7 @@ def check_settings_keys_are_known(**kwargs: Any) -> list[Any]:
     # ineffective configuration, and the check is already wired.
     problems.extend(_wake_setting_problems())
     problems.extend(_relay_prune_setting_problems())
+    problems.extend(_prune_batch_problems())
     return problems
 
 
@@ -217,9 +218,8 @@ def _relay_prune_setting_problems() -> list[Any]:
     The interval guard is one branch arc of several conditions, each held by a
     case of ``test_a_prune_interval_that_is_not_a_positive_duration_is_an_error``:
     the bool test by ``True``, the type test by ``"60"`` and ``None``, the sign
-    test by ``0`` and ``-1``, the finiteness test by ``inf``, and the spelling
-    ``interval > 0`` rather than ``interval <= 0`` by ``nan``, which is false
-    against both.
+    test by ``0`` and ``-1``, and the finiteness test by ``inf`` and ``nan``
+    (which is false against ``> 0`` too, so either conjunct refuses it).
     """
     problems: list[Any] = []
     switch = setting("RELAY_PRUNE")
@@ -246,6 +246,26 @@ def _relay_prune_setting_problems() -> list[Any]:
             )
         )
     return problems
+
+
+def _prune_batch_problems() -> list[Any]:
+    """``PRUNE_BATCH_ROWS`` is a positive whole number of rows.
+
+    ``prune_events`` refuses anything else with a ``ValueError``, which an idle
+    relay's sweep logs and swallows once an interval: the setting would be
+    wrong everywhere and the only sign a line in a log. The same bool-first
+    test as the prune's own, since ``True`` is an ``int``.
+    """
+    size = setting("PRUNE_BATCH_ROWS")
+    if isinstance(size, bool) or not isinstance(size, int) or size < 1:
+        return [
+            Error(
+                f"PRUNE_BATCH_ROWS is {size!r}, which is not a positive whole number of rows.",
+                hint="Use the number of rows one prune transaction may delete; the default is 5000.",
+                id="django_domain_events.E010",
+            )
+        ]
+    return []
 
 
 def check_no_orphaned_deliveries(
