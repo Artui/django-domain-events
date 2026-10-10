@@ -57,7 +57,10 @@ A receiver with a [curve of its own](delivery.md#a-curve-per-receiver) or in a
 named [lane](operations.md#lanes-a-relay-per-kind-of-work) gets a line under
 its table too - "retries on its own curve: base 120s, cap 1800s", "is served by
 relays started with `--lane mail`" - and the JSON carries
-`backoff_base_seconds`, `backoff_cap_seconds` and `lane` on every receiver.
+`backoff_base_seconds`, `backoff_cap_seconds` and `lane` on every receiver. So
+does a declared [`give_up_after`](delivery.md#give_up_after-keeps-every-delivery-ending):
+"dead-letters a deferral once its delivery has been owed for 172800s", and
+`give_up_after_seconds` in the JSON, null where none is declared.
 Lines rather than columns, so the tables a project has already committed do
 not change shape for properties most receivers do not have. A half of the curve
 left to its setting is named as the setting rather than resolved, because the

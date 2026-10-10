@@ -31,6 +31,13 @@ def replay_events(
     it to run again. A receiver with no row for the event is *added*: it did not
     exist when the event fired, and you are choosing to give it the backlog.
 
+    Both are owed *now*, so both get ``due_at`` set to the moment of the
+    replay. A receiver's ``give_up_after`` is measured from it, and measuring
+    from the event's own timestamp would dead-letter a replayed month-old event
+    on its first deferral
+    (``test_a_replayed_old_event_is_not_dead_lettered_on_its_first_deferral``
+    and ``test_a_row_a_replay_adds_is_owed_from_the_replay_too``).
+
     A delivery still in flight is left alone. Reopening a claimed row would hand
     the same work to two receivers, which is the one thing the lease exists to
     prevent.
@@ -101,6 +108,7 @@ def replay_events(
                     status=DeliveryStatus.PENDING,
                     attempts=0,
                     available_at=now,
+                    due_at=now,
                     claimed_by="",
                     claimed_at=None,
                     lease_expires_at=None,
@@ -121,6 +129,7 @@ def replay_events(
                                 target=targets[digest],
                                 max_attempts=receiver.max_attempts,
                                 available_at=now,
+                                due_at=now,
                             )
                             for digest in missing
                         ],

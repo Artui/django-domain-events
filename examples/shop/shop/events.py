@@ -7,6 +7,7 @@ something a real application would want.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from django.db.models import F
@@ -237,6 +238,28 @@ def book_customs_clearance(evt: ParcelDispatched) -> None:
     day by default - and logs a warning naming both numbers.
     """
     raise RetryAfter(seconds=2 * 86400, reason="the broker is closed for a two-day holiday")
+
+
+@receiver(
+    ParcelDispatched,
+    mode=DURABLE,
+    key="shop.email_dispatch_notice",
+    lane="mail",
+    give_up_after=timedelta(days=2),
+)
+def email_dispatch_notice(evt: ParcelDispatched) -> None:
+    """`RetryAfter(counts=False)`, because a spent quota is not this email's fault.
+
+    The mail provider's daily sending quota is gone until it resets in an hour.
+    That is a limit on the destination, not a failure of the row, so it spends
+    no attempt: the next one runs between one and two hours from now, and the
+    relay that heard it pauses the mail lane for the hour and hands back the
+    rest of its batch rather than paying a call per email to hear the same
+    answer. `give_up_after` is what still ends it - a notice owed for two days
+    is dead-lettered on its next deferral. Deliberately always over quota, so
+    the demo can show it.
+    """
+    raise RetryAfter(seconds=3600, reason="the daily sending quota is spent", counts=False)
 
 
 def partners_subscribed(evt: object, ctx: DeliveryContext) -> list[str]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from datetime import timedelta
 from typing import Literal, TypeVar, overload
 
 from django_domain_events.declaration.registry import registry
@@ -33,6 +34,7 @@ def receiver(
     backoff_base_seconds: float | None = None,
     backoff_cap_seconds: float | None = None,
     lane: str = DEFAULT_LANE,
+    give_up_after: timedelta | None = None,
 ) -> Callable[[Plain[E]], Plain[E]]: ...
 @overload
 def receiver(
@@ -50,6 +52,7 @@ def receiver(
     backoff_base_seconds: float | None = None,
     backoff_cap_seconds: float | None = None,
     lane: str = DEFAULT_LANE,
+    give_up_after: timedelta | None = None,
 ) -> Callable[[WithContext[E]], WithContext[E]]: ...
 def receiver(
     event_class: type[E],
@@ -66,6 +69,7 @@ def receiver(
     backoff_base_seconds: float | None = None,
     backoff_cap_seconds: float | None = None,
     lane: str = DEFAULT_LANE,
+    give_up_after: timedelta | None = None,
 ) -> Callable[[Callable[..., None]], Callable[..., None]]:
     """Register a callable to receive one event type, or every event.
 
@@ -164,6 +168,17 @@ def receiver(
     as relay flags because the default relay is the one that must exclude it,
     and an exclusion list kept in deployment manifests goes stale. An
     ``eager=True`` attempt still runs in the firing process, whatever the lane.
+
+    ``give_up_after`` is the bound that ends a delivery whose receiver defers
+    with ``RetryAfter(seconds, counts=False)``. That deferral spends no
+    attempt, so ``max_attempts`` cannot end it; this does. Once a row has been
+    owed for this long - since it was written, or since a replay or requeue
+    reopened it - the next deferral dead-letters it, as a spent budget would.
+    It is a ``timedelta`` because a bare number has no unit. Without it, a
+    deferral that does not count is counted after all, with a warning, so that
+    every delivery still ends. It bounds deferrals alone: an ordinary failure
+    or a counting ``RetryAfter`` is still ended by ``max_attempts``, however
+    long the row has been owed.
     """
 
     if site not in ("relay", "task"):
@@ -217,6 +232,17 @@ def receiver(
         # would be served by no relay at all. Each half has a case of
         # test_a_lane_must_be_a_non_empty_string: 3 for the type, "" for blank.
         raise ValueError(f"lane must be a non-empty string, got {lane!r}")
+    if give_up_after is not None and not (
+        isinstance(give_up_after, timedelta) and give_up_after > timedelta(0)
+    ):
+        # A bare number has no unit, and zero dead-letters every deferral on
+        # arrival. One arc, so each conjunct has a test that fails without it:
+        # ``is not None`` - every receiver declaring none, the test app's
+        # included, so without it the suite cannot even start; the type -
+        # test_a_give_up_after_that_is_not_a_timedelta_is_refused, where 3600
+        # would reach the comparison and raise TypeError; the sign -
+        # test_a_give_up_after_that_is_not_in_the_future_is_refused.
+        raise ValueError(f"give_up_after must be a positive timedelta, got {give_up_after!r}")
     if mode is not DeliveryMode.DURABLE:
         # Same reasoning as site=, applied to the rest of the row-shaped knobs.
         # Accepting them would let a declaration state a retry budget, an eager
@@ -231,6 +257,7 @@ def receiver(
             ("backoff_base_seconds", backoff_base_seconds, None),
             ("backoff_cap_seconds", backoff_cap_seconds, None),
             ("lane", lane, DEFAULT_LANE),
+            ("give_up_after", give_up_after, None),
         ):
             if value != default:
                 raise ValueError(
@@ -257,6 +284,7 @@ def receiver(
                 backoff_base_seconds=backoff_base_seconds,
                 backoff_cap_seconds=backoff_cap_seconds,
                 lane=lane,
+                give_up_after=give_up_after,
             )
         )
         return func

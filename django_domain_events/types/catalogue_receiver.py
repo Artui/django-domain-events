@@ -34,3 +34,9 @@ class CatalogueReceiver:
     lane: str = "default"
     """Which relay processes claim this receiver's rows: those started with
     ``--lane`` naming it, or, for ``"default"``, those started with none."""
+
+    give_up_after_seconds: float | None = None
+    """How long a delivery may stay owed while it defers without counting,
+    in seconds, or None where the receiver declares no bound. Seconds rather
+    than the declared ``timedelta`` so the JSON stays plain numbers, as the
+    curve does."""

@@ -68,8 +68,11 @@ and they share its rows through the same skipped locks as any other relays. At
 0.1 to 1 second per send, one process delivers 1 to 10 a second; a provider
 allowing 18 a second takes somewhere between two and eighteen mail relays. The
 package does not limit the rate across them - it is not a distributed rate
-limiter - so the number of processes is the limit, and a destination that
-throttles still answers with errors that cost attempts.
+limiter - so the number of processes is the limit. A destination that throttles
+anyway costs attempts unless the receiver
+[defers without counting](delivery.md#a-deferral-that-spends-no-attempt), which
+also pauses the lane in the relay that heard it and hands back the rest of its
+batch.
 
 A deployment with a mail lane, as Kubernetes Deployments:
 

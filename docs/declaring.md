@@ -65,11 +65,20 @@ def reserve_stock(evt: OrderPlaced) -> None: ...
 | `backoff_base_seconds` | `None` | Override `BACKOFF_BASE_SECONDS` for this receiver's retries. See [delivery](delivery.md#a-curve-per-receiver). |
 | `backoff_cap_seconds` | `None` | Override `BACKOFF_CAP_SECONDS` for this receiver's retries. |
 | `lane` | `"default"` | Which relay processes claim its rows. See [lanes](operations.md#lanes-a-relay-per-kind-of-work). |
+| `give_up_after` | `None` | A `timedelta`: how long a row may stay owed while it [defers without counting](delivery.md#a-deferral-that-spends-no-attempt). |
 
 `max_attempts`, `eager`, `site="task"`, `lease_seconds`, `targets`, the two
-backoff knobs and `lane` each describe a delivery row, so a receiver declaring
-any of them with `mode=INLINE` or `ON_COMMIT` is refused at the decorator: it
-has no row to retry, lease, fan out or claim.
+backoff knobs, `lane` and `give_up_after` each describe a delivery row, so a
+receiver declaring any of them with `mode=INLINE` or `ON_COMMIT` is refused at
+the decorator: it has no row to retry, lease, fan out or claim.
+
+`give_up_after` must be a positive `timedelta`; a bare number is refused,
+because it has no unit. It is what ends a delivery whose receiver raises
+`RetryAfter(seconds, counts=False)`, which spends no attempt: once the row has
+been owed that long - since it was written, or since a replay or requeue
+reopened it - the next deferral dead-letters it. A receiver that defers that way
+without declaring it has its deferrals counted like any `RetryAfter`, with a
+warning, so every delivery still ends.
 
 `takes_context` is the spelling `django.tasks.task` uses for the same idea. The
 overloads make a type checker enforce the arity it implies, so declaring one and
@@ -99,12 +108,13 @@ receives at fire time, and for `INLINE` and `ON_COMMIT` receivers.
     It is copied onto the delivery row when the event is fired, so lowering it
     later cannot retroactively dead-letter rows already in flight.
 
-!!! note "The curve and the lane are read live"
-    `backoff_base_seconds`, `backoff_cap_seconds` and `lane` are the opposite of
-    `max_attempts`: they are read from the declaration when they are needed -
-    the curve when an attempt fails, the lane when a relay claims - and never
-    copied onto the row. A deploy that changes either changes it for the
-    deliveries already owed.
+!!! note "The curve, the lane and the bound are read live"
+    `backoff_base_seconds`, `backoff_cap_seconds`, `lane` and `give_up_after`
+    are the opposite of `max_attempts`: they are read from the declaration when
+    they are needed - the curve when an attempt fails, the lane when a relay
+    claims, the bound when a deferral arrives - and never copied onto the row.
+    A deploy that changes any of them changes it for the deliveries already
+    owed.
 
 ## Every event: `AnyEvent`
 

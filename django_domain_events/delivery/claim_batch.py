@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from datetime import datetime, timedelta
 
 from django.db import connections, models, transaction
@@ -19,6 +20,7 @@ def claim_batch(
     only_ids: list[int] | None = None,
     ignore_backoff: bool = False,
     lane: str | None = None,
+    exclude_lanes: Collection[str] = (),
 ) -> list[int]:
     """Take ownership of up to ``limit`` deliveries and return their ids.
 
@@ -40,6 +42,16 @@ def claim_batch(
     every lane. The filter is applied to the whole of the owed condition, both
     arms, so a relay never takes over another lane's lapsed claims
     (``test_a_lapsed_claim_in_a_named_lane_stays_out_of_the_default_lane``).
+
+    ``exclude_lanes`` leaves lanes out of the claim, and is how a relay serving
+    every lane keeps the others flowing while one is paused after a deferral.
+    It is each lane's own condition negated, so it covers both arms as ``lane``
+    does - the rows a deferral handed back are lapsed claims, and exactly the
+    ones not to take straight back
+    (``test_a_paused_lane_covers_its_lapsed_claims_too``) - and excluding the
+    default lane leaves only the named ones, or nothing where none is declared
+    (``test_a_paused_default_lane_with_no_named_lanes_claims_nothing``). Empty,
+    the claim is the one it was without it.
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
 
@@ -48,6 +60,8 @@ def claim_batch(
         retryable &= models.Q(available_at__lte=now)
     owed = retryable | models.Q(status=DeliveryStatus.CLAIMED, lease_expires_at__lt=now)
     owed &= _in_lane(lane)
+    for paused in sorted(exclude_lanes):
+        owed &= ~_in_lane(paused)
 
     alias = write_alias()
     connection = connections[alias]

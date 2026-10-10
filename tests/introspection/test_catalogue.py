@@ -320,3 +320,14 @@ def test_a_declared_curve_and_lane_reach_the_catalogue() -> None:
         None,
         "default",
     )
+
+
+def test_give_up_after_reaches_the_catalogue_in_seconds() -> None:
+    """It decides when a deferred delivery is dead-lettered, so a diff of the
+    catalogue should show it, and as a number the JSON can carry."""
+    declared = _durable("testapp.bounded", AnyEvent, give_up_after=timedelta(hours=6))
+    with receiver_registered(declared):
+        [bounded] = catalogue().wildcard_receivers
+
+    assert bounded.give_up_after_seconds == 21600.0
+    assert _by_name("testapp.OrderPlaced").receivers[0].give_up_after_seconds is None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -17,6 +18,7 @@ from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.deliver import deliver_one, deliver_pending
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.settings import setting
@@ -864,6 +866,209 @@ def test_deliver_pending_with_no_lane_serves_every_lane(
         _fire(order)
 
         assert deliver_pending() == {DeliveryStatus.SUCCEEDED: 3}
+
+
+def _throttled_mail(seen: list[int]) -> RegisteredReceiver:
+    """A mail-lane receiver whose destination is throttling: every call defers
+    without counting. Stops with a BaseException past five calls, so a pass
+    that kept claiming its rows fails rather than hangs."""
+
+    def throttled(evt: OrderPlaced) -> None:
+        seen.append(evt.order_id)
+        if len(seen) > 5:
+            raise _Runaway("a throttled lane kept being claimed")
+        raise RetryAfter(30, reason="throttled", counts=False)
+
+    return RegisteredReceiver(
+        key="tests.throttled",
+        event_class=OrderPlaced,
+        func=throttled,
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=5,
+        eager=False,
+        site="relay",
+        lane="mail",
+        give_up_after=timedelta(days=1),
+    )
+
+
+class _Runaway(BaseException):
+    """A BaseException, so delivery does not record it as a failure."""
+
+
+def _given_back(key: str) -> list[int]:
+    """The rows of ``key`` handed back: still CLAIMED, with a lease in the past."""
+    return sorted(
+        DeliveryRecord.objects.filter(
+            receiver_key=key,
+            status=DeliveryStatus.CLAIMED,
+            lease_expires_at__lt=datetime.now(timezone.utc),
+        ).values_list("pk", flat=True)
+    )
+
+
+def test_a_deferral_sets_its_lane_aside_and_the_pass_delivers_the_rest(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Serving every lane, the claimed batch mixes them. The deferring lane's
+    unstarted rows are handed back rather than attempted, and the other lanes'
+    rows in the same batch are still delivered."""
+    seen: list[int] = []
+    with receiver_registered(_throttled_mail(seen)):
+        for _ in range(3):
+            _fire(order)
+
+        assert deliver_pending() == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 6}
+
+        assert len(seen) == 1, "the throttled lane's other rows were attempted"
+        handed_back = _given_back("tests.throttled")
+        assert len(handed_back) == 2
+        taken = claim_batch(
+            worker_id="w2",
+            now=datetime.now(timezone.utc),
+            lease=timedelta(minutes=5),
+            limit=10,
+            lane="mail",
+        )
+        assert sorted(taken) == handed_back, "another worker could not take them at once"
+
+
+def test_a_deferral_in_the_lane_a_pass_serves_ends_the_pass(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    seen: list[int] = []
+    with receiver_registered(_throttled_mail(seen)):
+        for _ in range(3):
+            _fire(order)
+
+        assert deliver_pending(lane="mail") == {DeliveryStatus.FAILED: 1}
+
+        assert len(seen) == 1
+        assert len(_given_back("tests.throttled")) == 2
+
+
+def test_a_deferral_is_reported_to_whoever_dispatched_it(order: OrderPlaced) -> None:
+    """With its lane and the delay the destination asked for, not the jittered
+    one: a pause longer than asked would hold back rows the destination is
+    ready for."""
+    paused: list[tuple[str, float]] = []
+    with receiver_registered(_throttled_mail([])):
+        _fire(order)
+        [row_id] = claim_batch(
+            worker_id="w1",
+            now=datetime.now(timezone.utc),
+            lease=timedelta(minutes=5),
+            limit=10,
+            lane="mail",
+        )
+        outcome = deliver_module.dispatch_one(
+            row_id, worker_id="w1", on_deferral=lambda lane, s: paused.append((lane, s))
+        )
+
+    assert outcome == DeliveryStatus.FAILED
+    assert paused == [("mail", 30.0)]
+
+
+def test_a_deferral_this_worker_could_not_record_pauses_nothing(
+    order: OrderPlaced, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker that lost the row has no say over its lane: whoever holds the
+    row now decides what its deferral means."""
+    paused: list[tuple[str, float]] = []
+    with receiver_registered(_throttled_mail([])):
+        _fire(order)
+        [row_id] = claim_batch(
+            worker_id="w1",
+            now=datetime.now(timezone.utc),
+            lease=timedelta(minutes=5),
+            limit=10,
+            lane="mail",
+        )
+        monkeypatch.setattr(deliver_module._Fence, "write", lambda self, **fields: None)
+        outcome = deliver_module.dispatch_one(
+            row_id, worker_id="w1", on_deferral=lambda lane, s: paused.append((lane, s))
+        )
+
+    assert outcome is None
+    assert paused == []
+
+
+def _claimed(lane: str) -> int:
+    [row_id] = claim_batch(
+        worker_id="w1",
+        now=datetime.now(timezone.utc),
+        lease=timedelta(minutes=5),
+        limit=10,
+        lane=lane,
+    )
+    return row_id
+
+
+def test_a_deferral_run_directly_is_recorded_and_pauses_nothing(order: OrderPlaced) -> None:
+    """``deliver_one`` holds no batch, so there is nothing to pause or hand
+    back; the deferral is still recorded as it is anywhere else."""
+    with receiver_registered(_throttled_mail([])):
+        _fire(order)
+        row_id = _claimed("mail")
+
+        assert deliver_one(row_id, worker_id="w1") == DeliveryStatus.FAILED
+
+    row = DeliveryRecord.objects.get(pk=row_id)
+    assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 0)
+
+
+def test_a_deferral_inside_a_task_is_recorded(order: OrderPlaced) -> None:
+    """A task runs ``deliver_one`` with the claim its message carried, in a
+    process holding no batch: nothing to pause, and the deferral recorded all
+    the same."""
+    with receiver_registered(_throttled_mail([])):
+        _fire(order)
+        row_id = _claimed("mail")
+        row = DeliveryRecord.objects.get(pk=row_id)
+
+        outcome = deliver_one(
+            row_id, claimed_by=row.claimed_by, claimed_at=row.claimed_at.isoformat()
+        )
+
+    assert outcome == DeliveryStatus.FAILED
+    row.refresh_from_db()
+    assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 0)
+
+
+def test_a_give_up_this_worker_could_not_record_tells_on_failure_nothing(
+    order: OrderPlaced, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """As with every other outcome: the worker holding the row now is the one
+    that will record it, and telling the hook twice would log it twice."""
+    heard: list[object] = []
+    bounded = dataclasses.replace(_throttled_mail([]), on_failure=heard.append)
+    with receiver_registered(bounded):
+        _fire(order)
+        EventRecord.objects.update(recorded_at=datetime.now(timezone.utc) - timedelta(days=2))
+        row_id = _claimed("mail")
+        monkeypatch.setattr(deliver_module._Fence, "write", lambda self, **fields: None)
+
+        assert deliver_one(row_id, worker_id="w1") is None
+
+    assert heard == []
+
+
+def test_a_deleted_receivers_row_is_in_the_default_lane(order: OrderPlaced) -> None:
+    """As the claim reads it: a row whose receiver is gone names no lane, and
+    it drains through the default one, so a default-lane deferral hands it back
+    with the rest."""
+    with receiver_registered(_laned_mail()):
+        _fire(order)
+    ids = list(DeliveryRecord.objects.order_by("pk").values_list("pk", flat=True))
+    gone = _delivery_id("tests.mail")
+
+    with receiver_deleted("testapp.durable_receiver"):
+        inside, rest = deliver_module.partition_by_lane(ids, "default")
+
+    assert inside == ids, "a row with no receiver was not counted in the default lane"
+    assert rest == []
+    assert gone in inside
 
 
 def test_deliver_pending_refuses_a_lane_nobody_declared(order: OrderPlaced) -> None:
