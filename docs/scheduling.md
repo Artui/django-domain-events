@@ -291,7 +291,10 @@ to are due after the real clock.
 Within one call, a row is attempted at most once if its receiver answers
 `NotYet`, and handed to a [task backend](operations.md#handing-delivery-to-a-task-queue)
 at most once if it declares `site="task"` - a handed-off row is not counted in
-the result, whether the backend runs it there and then or later.
+the result, whether the backend runs it there and then or later. The pass keeps
+the row out of its later claims only when it was given a `now`; on the real
+clock a rescheduled row's time and a handed-off row's lease are ahead of every
+later claim already, so nothing is excluded and no row is read back.
 
 ## Is it keeping up?
 

@@ -63,7 +63,9 @@ def claim_batch(
     done with from coming straight back when the pass was told a ``now`` beyond
     the real clock: one its receiver answered with ``NotYet``, moved to a time
     that ``now`` has passed, or one handed to a task backend under a lease the
-    real clock extended and ``now`` reads as lapsed. Empty, it adds nothing
+    real clock extended and ``now`` reads as lapsed. A pass on the real clock
+    passes none, since neither is claimable again there
+    (``test_a_row_rescheduled_in_place_on_the_real_clock_is_not_excluded``). Empty, it adds nothing
     to the claim: Django compiles a negated ``__in`` over no values to nothing
     at all, so the relay's claim is the one it was
     (``test_without_named_lanes_the_default_lane_sends_the_unfiltered_claim``).

@@ -34,6 +34,10 @@ def drain_outbox(
     ``NotYet``, and handed to a task backend at most once a call when its
     receiver declares ``site="task"``. A handed-off row is not counted in the
     result, since nothing has happened to it here, and that holds for a backend
-    that runs the task inside the hand-off too.
+    that runs the task inside the hand-off too. The pass keeps such a row out of
+    its later claims only when it was given ``now``: on the real clock the time
+    a ``NotYet`` moved a row to and the lease a hand-off extended are ahead of
+    every later claim already, so nothing is excluded and no row is read back
+    (``test_a_task_row_on_the_real_clock_is_not_read_back_or_excluded``).
     """
     return deliver_pending(limit=limit, ignore_backoff=not respect_backoff, now=now)

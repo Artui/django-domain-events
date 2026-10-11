@@ -755,7 +755,7 @@ def deliver_pending(
     paused: set[str] = set()
     deferred: list[str] = []
     # Rows this call is done with although the claim could still take them,
-    # left out of its later claims. Two kinds, and both are rows the claim
+    # left out of its later claims, when it was told a ``now``. Two kinds, and both are rows the claim
     # would not take again on the real clock but would when told a later
     # ``now``:
     #
@@ -795,15 +795,23 @@ def deliver_pending(
                 worker_id=worker_id,
                 on_deferral=lambda deferred_lane, _seconds: deferred.append(deferred_lane),
             )
-            if outcome is DeliveryStatus.PENDING:
-                set_aside.add(delivery_id)
-            elif outcome is None and _left_unfinished(delivery_id):
-                # Read back only where no outcome came back, so a row run in
-                # place costs the pass no query. ``outcome is None`` changes no
-                # result - a row run in place is never left CLAIMED or PENDING
-                # without saying so - only the query count, which is what
-                # test_a_row_delivered_in_place_is_never_read_back holds.
-                set_aside.add(delivery_id)
+            # Only where ``now`` was passed: on the real clock a rescheduled
+            # row's time and a handed-off row's lease are both ahead of every
+            # later claim, so there is nothing to exclude, and skipping the
+            # read-back spares a query per task hand-off and keeps the claim's
+            # NOT IN list empty. Held by
+            # test_a_task_row_on_the_real_clock_is_not_read_back_or_excluded and
+            # test_a_row_rescheduled_in_place_on_the_real_clock_is_not_excluded.
+            if now is not None:
+                if outcome is DeliveryStatus.PENDING:
+                    set_aside.add(delivery_id)
+                elif outcome is None and _left_unfinished(delivery_id):
+                    # Read back only where no outcome came back, so a row run in
+                    # place costs the pass no query. ``outcome is None`` changes
+                    # no result - a row run in place is never left CLAIMED or
+                    # PENDING without saying so - only the query count, which is
+                    # what test_a_row_delivered_in_place_is_never_read_back holds.
+                    set_aside.add(delivery_id)
             if outcome is not None:
                 counts[outcome] = counts.get(outcome, 0) + 1
             while deferred:

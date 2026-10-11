@@ -1238,6 +1238,65 @@ def test_a_task_that_failed_inside_the_hand_off_is_retried_within_the_drain(sett
     assert counts == {}
 
 
+def _spy_on_set_aside(monkeypatch: pytest.MonkeyPatch) -> tuple[list[int], list[set[int]]]:
+    """Record every read-back and every ``exclude_ids`` a pass hands its claims."""
+    read_back: list[int] = []
+    exclusions: list[set[int]] = []
+    real_claim = deliver_module.claim_batch
+
+    def spy_claim(**kwargs: Any) -> list[int]:
+        exclusions.append(set(kwargs["exclude_ids"]))
+        return real_claim(**kwargs)
+
+    monkeypatch.setattr(
+        deliver_module, "_left_unfinished", lambda pk: read_back.append(pk) or False
+    )
+    monkeypatch.setattr(deliver_module, "claim_batch", spy_claim)
+    return read_back, exclusions
+
+
+def test_a_task_row_on_the_real_clock_is_not_read_back_or_excluded(
+    settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The set-aside exists for a ``now`` beyond the real clock, which the real
+    clock's own claims never need: the lease a hand-off extends is ahead of it.
+    So a pass told no ``now`` - ``deliver_events --once`` - skips the read-back
+    that costs a query per task hand-off, and its claims carry no exclusion.
+    This holds the ``now is not None`` conjunct on the arm for a row handed to a
+    queue, which returns no outcome and so would be read back."""
+    read_back, exclusions = _spy_on_set_aside(monkeypatch)
+
+    with _task_site(settings, _QueueingBackend, lambda event: None):
+        deliver_pending(worker_id="w")
+
+    assert (read_back, exclusions) == ([], [set(), set()])
+    assert _delivery("probe.task_site").status == DeliveryStatus.CLAIMED
+
+
+def test_a_row_rescheduled_in_place_on_the_real_clock_is_not_excluded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other arm of the same conjunct: a row answering ``NotYet`` reports
+    PENDING, which a pass told a ``now`` beyond the clock excludes from its later
+    claims. On the real clock the time it was moved to is ahead of every later
+    claim, so there is nothing to exclude."""
+    read_back, exclusions = _spy_on_set_aside(monkeypatch)
+
+    def always_later(event: Unheard) -> None:
+        raise NotYet(datetime.now(timezone.utc) + timedelta(hours=1))
+
+    receiver(Unheard, key="probe.in_place")(always_later)
+    try:
+        with transaction.atomic():
+            fire(Unheard(value=1))
+        deliver_pending(worker_id="w")
+    finally:
+        registry._receivers.pop("probe.in_place", None)
+
+    assert (read_back, exclusions) == ([], [set(), set()])
+    assert _delivery("probe.in_place").status == DeliveryStatus.PENDING
+
+
 def test_give_up_after_measures_a_scheduled_row_from_its_due_time(order: OrderPlaced) -> None:
     """A scheduled row became owed at its due time, not when its event was
     recorded, so a receiver deferring right after it came due is not
@@ -1275,6 +1334,8 @@ def test_a_row_delivered_in_place_is_never_read_back(
     monkeypatch.setattr(deliver_module, "_left_unfinished", read_back.append)
     _fire(order)
 
-    deliver_pending(worker_id="w1")
+    # ``now=`` is passed because the read-back only happens when it is: without
+    # it this would hold vacuously, whatever the pass did with a row run in place.
+    deliver_pending(worker_id="w1", now=datetime.now(timezone.utc))
 
     assert read_back == []
