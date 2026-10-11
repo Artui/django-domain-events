@@ -13,6 +13,7 @@ from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.operations.cancel_deliveries import cancel_deliveries
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.testapp.events import OrderPlaced
 
@@ -130,3 +131,24 @@ def test_cancel_withdraws_every_owed_delivery_of_the_events_and_reports(
     assert not DeliveryRecord.objects.filter(event=other, status=DeliveryStatus.CANCELLED).exists()
     message = list(request._messages)[0].message
     assert message == "Cancelled 1 deliveries and left 1 in flight to run."
+
+
+def test_cancel_goes_through_the_operation(
+    order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The action calls cancel_deliveries rather than updating the rows itself:
+    the operation's event lock is what makes a cancel wait for an open replay,
+    which no single-connection outcome here would notice missing."""
+    with transaction.atomic():
+        chosen = fire(order)
+        fire(order)
+    calls: list[list[int]] = []
+
+    def spy(event_ids, *, receiver_key=None, delivery_ids=None):
+        calls.append(list(event_ids))
+        return cancel_deliveries(event_ids, receiver_key=receiver_key, delivery_ids=delivery_ids)
+
+    monkeypatch.setattr("django_domain_events.admin.event_record_admin.cancel_deliveries", spy)
+    _admin().cancel(_request(), EventRecord.objects.filter(pk=chosen))
+
+    assert calls == [[chosen]]

@@ -15,6 +15,7 @@ from django_domain_events.admin.delivery_record_admin import DeliveryRecordAdmin
 from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.operations.cancel_deliveries import cancel_deliveries
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.testapp.events import OrderPlaced
 
@@ -243,3 +244,24 @@ def test_the_detail_page_shows_the_digest_as_hex(admin_client) -> None:
     page = response.content.decode()
     assert hashlib.sha256(b"endpoint-42").hexdigest() in page
     assert "b&#x27;" not in page
+
+
+def test_cancel_goes_through_the_operation(
+    order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The action calls cancel_deliveries rather than updating the rows itself:
+    the operation's event lock is what makes a cancel wait for an open replay,
+    which no single-connection outcome here would notice missing."""
+    with transaction.atomic():
+        event_id = fire(order)
+    chosen = DeliveryRecord.objects.order_by("pk").first()
+    calls: list[tuple[list[int], list[int]]] = []
+
+    def spy(event_ids, *, receiver_key=None, delivery_ids=None):
+        calls.append((list(event_ids), list(delivery_ids)))
+        return cancel_deliveries(event_ids, receiver_key=receiver_key, delivery_ids=delivery_ids)
+
+    monkeypatch.setattr("django_domain_events.admin.delivery_record_admin.cancel_deliveries", spy)
+    _admin().cancel(_request(), DeliveryRecord.objects.filter(pk=chosen.pk))
+
+    assert calls == [([event_id], [chosen.pk])]
