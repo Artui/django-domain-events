@@ -457,6 +457,39 @@ class Command(BaseCommand):
             SentEmail.objects.filter(subject__startswith="Reminder:").count(),
             1,
         )
+        # The late case: the reminder is due, and the quiet period it was waiting
+        # out ended before the row ran at all. Comparing against `ctx.due_at`
+        # alone would raise `NotYet` with a time already come, which is refused
+        # and recorded as a failure on every retry; flooring the comparison at
+        # the clock sends the reminder.
+        with transaction.atomic():
+            from django_domain_events import fire
+
+            late_invoice = fire(InvoiceSent(order_id=second.pk))
+        [late] = DeliveryRecord.objects.filter(event=late_invoice, receiver_key=chase)
+        # As if the relay had been down: the row came due six days ago and has
+        # not been claimed since. (`fire` never writes a due time in the past,
+        # so a row can only be this late by waiting.) Its customer was last
+        # emailed four days ago, so the quiet period ended a day ago - after the
+        # row came due and before it ran.
+        six_days_ago = now() - timedelta(days=6)
+        DeliveryRecord.objects.filter(pk=late.pk).update(
+            available_at=six_days_ago, due_at=six_days_ago
+        )
+        SentEmail.objects.filter(to=user.email).update(sent_at=now() - timedelta(days=4))
+        emails = SentEmail.objects.count()
+        drain_outbox()
+        late.refresh_from_db()
+        print(
+            f"   late reminder: {late.status} after {late.attempts} attempt, "
+            f"error: {late.last_error or 'none'}"
+        )
+        check(
+            "a reminder that runs after its quiet period ended is sent, not failed",
+            (late.status, late.attempts, late.last_error),
+            ("succeeded", 1, ""),
+        )
+        check("and sends exactly one email", SentEmail.objects.count(), emails + 1)
         head("16. The invoice is paid, so its reminder is cancelled")
         # A new invoice for the open order, and its reminder due in a
         # fortnight. Then the customer pays: the billing code knows the

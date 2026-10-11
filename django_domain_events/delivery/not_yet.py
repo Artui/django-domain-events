@@ -35,7 +35,13 @@ class NotYet(Exception):
 
     ``DeliveryContext.due_at`` on the next run is ``until``, which is what the
     receiver compares against: recompute the due time from current state, and
-    go ahead once it is no later than the context's.
+    go ahead once it is no later than the context's. The comparison is
+    ``if moved > max(ctx.due_at, timezone.now()): raise NotYet(moved)``, with
+    the clock as a floor: a row that runs after the moved time has nothing to
+    wait for, and comparing against ``ctx.due_at`` alone would raise a time
+    already come, which is refused below and recorded as an ordinary failure
+    on every retry
+    (``test_the_documented_pattern_does_the_work_of_a_row_that_runs_after_the_moved_time``).
 
     ``until`` is an aware datetime, and in the future when this is
     constructed. A naive one is refused, as ``due=`` refuses one, and so is a

@@ -48,7 +48,7 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
 | The partners change, then a replay | `replay_events` asking for the targets again: a partner still subscribed is reopened, a new one added, one that left untouched |
 | A consumed event, then a prune | `Retention.SUCCEEDED` deleting `StockReserved` once delivered while the orders stay for `RETENTION_DAYS`, and `quiet_receivers` still knowing its receiver ran |
 | The receipt is replayed into its lane | `lane="mail"`: the default lane's pass leaves it alone and the mail lane's sends it; and the receipt's own retry curve, checked to last at most three hours and an hour and a half on average |
-| Invoice reminders due a fortnight later | `due=timedelta(days=14)` counted from the invoice's `occurred_at`: `drain_outbox()` leaves the reminders alone, `outbox_health()` counts them as `scheduled` rather than owed, and `drain_outbox(now=...)` runs them - the cancelled order's as moot work that succeeds and sends nothing, the open order's answering `NotYet` until three days after the customer's last email, then sending |
+| Invoice reminders due a fortnight later | `due=timedelta(days=14)` counted from the invoice's `occurred_at`: `drain_outbox()` leaves the reminders alone, `outbox_health()` counts them as `scheduled` rather than owed, and `drain_outbox(now=...)` runs them - the cancelled order's as moot work that succeeds and sends nothing, the open order's answering `NotYet` until three days after the customer's last email, then sending; one that runs after that quiet period has already ended is sent rather than failed on a past `NotYet` |
 | The invoice is paid before the reminder | `cancel_deliveries` withdrawing the reminder in the transaction that records the payment: it settles as `cancelled`, a drain past its due time never runs it, nothing is sent, and `outbox_health()` counts it nowhere |
 
 ## The declarations
@@ -108,7 +108,9 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
     almost every time. A cancelled order makes the reminder moot, and returning
     is an ordinary success. A customer emailed in the last three days makes it
     not due yet, and returning would lose it, so it raises `NotYet` with the end
-    of the quiet period - comparing against `ctx.due_at`, never the clock.
+    of the quiet period - comparing against `ctx.due_at` floored at the clock
+    (`max(ctx.due_at, timezone.now())`), so a reminder that runs after the quiet
+    period has ended is sent rather than failing on a past `NotYet`.
 
 ## Other things to try
 

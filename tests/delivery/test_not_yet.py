@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from django.db import transaction
+from django.utils import timezone as django_timezone
 
 import django_domain_events
 from django_domain_events.declaration.receiver import receiver
@@ -126,6 +127,34 @@ def test_an_early_run_moves_the_row_to_the_time_and_spends_no_attempt() -> None:
     assert (row.status, row.attempts) == (DeliveryStatus.PENDING, 0)
     assert (row.available_at, row.due_at) == (until, until)
     assert row.completed_at is None
+
+
+def test_the_documented_pattern_does_the_work_of_a_row_that_runs_after_the_moved_time() -> None:
+    """The comparison the docs teach is ``until > max(ctx.due_at, now)``, and the
+    clock term is what this holds: a row due two hours ago whose moved time is
+    already an hour gone has nothing left to wait for. Comparing against
+    ``ctx.due_at`` alone raises ``NotYet`` with a past time, which is refused
+    with a ``ValueError`` and recorded as an ordinary failure - and ``due_at``
+    never moves, so every retry would repeat it. Written exactly as documented,
+    the receiver does the work, the row succeeds and nothing fails."""
+    moved_to = _now() - timedelta(hours=1)
+    done: list[int] = []
+
+    def chase(event: Unheard, ctx: DeliveryContext) -> None:
+        if moved_to > max(ctx.due_at, django_timezone.now()):
+            raise NotYet(moved_to, reason="the quiet period was extended")
+        done.append(event.value)
+
+    receiver(Unheard, key=KEY, takes_context=True, due=timedelta(hours=1))(chase)
+    _fire(7)
+    overdue = _now() - timedelta(hours=2)
+    DeliveryRecord.objects.update(available_at=overdue, due_at=overdue)
+
+    assert drain_outbox() == {DeliveryStatus.SUCCEEDED: 1}
+
+    row = _row()
+    assert done == [7]
+    assert (row.status, row.attempts, row.last_error) == (DeliveryStatus.SUCCEEDED, 1, "")
 
 
 def test_the_row_is_not_claimed_again_before_the_time() -> None:

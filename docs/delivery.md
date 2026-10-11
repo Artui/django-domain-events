@@ -366,13 +366,15 @@ the future - typically a [scheduled receiver](scheduling.md) whose due time has
 moved since its row was written:
 
 ```python
+from django.utils import timezone
+
 from django_domain_events import DeliveryContext, NotYet, receiver
 
 
 @receiver(OfferMade, due=timedelta(hours=48), takes_context=True)
 def expire_offer(evt: OfferMade, ctx: DeliveryContext) -> None:
     offer = Offer.objects.get(pk=evt.offer_id)
-    if offer.expires_at > ctx.due_at:
+    if offer.expires_at > max(ctx.due_at, timezone.now()):
         raise NotYet(offer.expires_at, reason="the offer was extended")
     offer.expire()
 ```
@@ -420,5 +422,6 @@ def test_an_unanswered_offer_expires():
 ```
 
 Only the claims read `now`; the receiver runs on the real clock, so a scheduled
-receiver should compare against `ctx.due_at`. See
+receiver should compare against `ctx.due_at`, with the clock only as the floor
+that lets a late row proceed (`max(ctx.due_at, timezone.now())`). See
 [scheduled reactions](scheduling.md#in-tests).

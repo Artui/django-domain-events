@@ -11,6 +11,7 @@ from datetime import timedelta
 from typing import Any
 
 from django.db.models import F
+from django.utils import timezone
 
 from django_domain_events import (
     DURABLE,
@@ -354,9 +355,12 @@ def chase_unpaid_invoice(evt: InvoiceSent, ctx: DeliveryContext) -> None:
     the row settles as `cancelled` and the relay never claims it.
 
     The comparison is against `ctx.due_at`, the time the row came due with,
-    never against the clock: on the next run `ctx.due_at` is the time `NotYet`
+    floored at the clock: on the next run `ctx.due_at` is the time `NotYet`
     named, so the same comparison lets the reminder go, and a test moving
-    forward with `drain_outbox(now=...)` sees what production would.
+    forward with `drain_outbox(now=...)` sees what production would. The floor
+    is for a row that runs late: if the quiet period ended before the row
+    ran, `NotYet` would refuse a time already come, and the reminder would be
+    recorded as failing on every retry instead of being sent.
     """
     from shop.models import Order, SentEmail
 
@@ -367,6 +371,6 @@ def chase_unpaid_invoice(evt: InvoiceSent, ctx: DeliveryContext) -> None:
     last = SentEmail.objects.filter(to=to).order_by("-sent_at").first()
     if last is not None and ctx.due_at is not None:
         quiet_until = last.sent_at + REMINDER_QUIET_PERIOD
-        if quiet_until > ctx.due_at:
+        if quiet_until > max(ctx.due_at, timezone.now()):
             raise NotYet(quiet_until, reason="the customer heard from us in the last three days")
     SentEmail.objects.create(to=to, subject=f"Reminder: the invoice for order {order.pk} is unpaid")

@@ -16,6 +16,8 @@ its due time on.
 ```python
 from datetime import timedelta
 
+from django.utils import timezone
+
 from django_domain_events import DeliveryContext, NotYet, receiver
 
 
@@ -29,7 +31,7 @@ def expire_offer(evt: OfferMade, ctx: DeliveryContext) -> None:
     offer = Offer.objects.get(pk=evt.offer_id)
     if offer.accepted:
         return  # the world moved on: nothing to do, and that is a success
-    if offer.expires_at > ctx.due_at:
+    if offer.expires_at > max(ctx.due_at, timezone.now()):
         raise NotYet(offer.expires_at, reason="the offer was extended")
     offer.expire()
 ```
@@ -179,9 +181,14 @@ from current state, compares it with `DeliveryContext.due_at` - the time the row
 came due with - and raises when the work has moved later:
 
 ```python
-if offer.expires_at > ctx.due_at:
+if offer.expires_at > max(ctx.due_at, timezone.now()):
     raise NotYet(offer.expires_at, reason="the offer was extended")
 ```
+
+The clock term is there because a late run must proceed rather than fail: a
+row that runs after the moved time has nothing left to wait for, and
+`NotYet` refuses a time already come, so comparing against `ctx.due_at` alone
+would raise that refusal as an ordinary failure on every retry.
 
 The relay writes `until` to the row's `available_at` and `due_at` together, sets
 it back to `pending`, and does nothing else:
@@ -276,8 +283,10 @@ def test_an_unanswered_offer_expires():
 backoff has run out and which lease has lapsed are all read against it.
 `deliver_pending(now=)` takes the same. **The receiver still runs on the real
 clock**, since its acknowledgement is a fact about when it ran: compare against
-`ctx.due_at` rather than `timezone.now()`, and the receiver behaves the same
-under a test's `now=` as in production.
+`ctx.due_at`, with the real clock only as the floor that lets a late row
+proceed (`max(ctx.due_at, timezone.now())`), and the receiver behaves the same
+under a test's `now=` as in production, because the rows a test moves forward
+to are due after the real clock.
 
 Within one call, a row is attempted at most once if its receiver answers
 `NotYet`, and handed to a [task backend](operations.md#handing-delivery-to-a-task-queue)
