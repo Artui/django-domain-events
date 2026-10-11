@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `cancel_deliveries` management command: takes one or more event ids and an
   optional `--receiver`, prints `cancelled: n, in_flight: m`, and refuses a call
-  naming no events.
+  naming no events. One receiver per call: a second `--receiver` is refused
+  rather than silently replacing the first.
 - **Cancel selected deliveries**, an admin action on the delivery changelist:
   withdraws exactly the selected rows through `cancel_deliveries()`, scoped to
   their own events, so a sibling receiver's row of the same event stays owed. The
