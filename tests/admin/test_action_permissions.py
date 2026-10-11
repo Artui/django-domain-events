@@ -94,6 +94,51 @@ def test_change_permission_carries_requeue(order: OrderPlaced, record: list[str]
     assert DeliveryRecord.objects.filter(status=DeliveryStatus.PENDING).count() == 2
 
 
+def test_view_only_staff_are_not_offered_cancel_deliveries(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Not offered, which is the half a post cannot see: an action declared
+    without ``permissions=`` appears in a view-only changelist's dropdown."""
+    with transaction.atomic():
+        fire(order)
+    client = _staff("view_deliveryrecord")
+    assert b'value="cancel"' not in client.get(DELIVERIES_URL).content
+
+
+def test_change_permission_offers_cancel_deliveries(order: OrderPlaced, record: list[str]) -> None:
+    """The positive half, so the absence above is not a misspelt value."""
+    with transaction.atomic():
+        fire(order)
+    client = _staff("view_deliveryrecord", "change_deliveryrecord")
+    assert b'value="cancel"' in client.get(DELIVERIES_URL).content
+
+
+def test_view_only_staff_cannot_cancel_deliveries(order: OrderPlaced, record: list[str]) -> None:
+    """Cancelling withdraws work an application is owed. A view grant must not
+    carry it, even posted by hand."""
+    with transaction.atomic():
+        fire(order)
+
+    client = _staff("view_deliveryrecord")
+    _post(
+        client, DELIVERIES_URL, "cancel", list(DeliveryRecord.objects.values_list("pk", flat=True))
+    )
+
+    assert DeliveryRecord.objects.filter(status=DeliveryStatus.PENDING).count() == 2
+
+
+def test_change_permission_carries_cancel_deliveries(order: OrderPlaced, record: list[str]) -> None:
+    with transaction.atomic():
+        fire(order)
+
+    client = _staff("view_deliveryrecord", "change_deliveryrecord")
+    _post(
+        client, DELIVERIES_URL, "cancel", list(DeliveryRecord.objects.values_list("pk", flat=True))
+    )
+
+    assert DeliveryRecord.objects.filter(status=DeliveryStatus.CANCELLED).count() == 2
+
+
 def test_the_change_form_stays_refused_even_with_the_permission(
     order: OrderPlaced, record: list[str]
 ) -> None:

@@ -103,6 +103,81 @@ def test_a_selection_with_nothing_dead_says_so(order: OrderPlaced, record: list[
     )
 
 
+def test_cancel_withdraws_the_selected_rows_and_reports(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Through cancel_deliveries, scoped to the selected rows' own events: a
+    selection spanning two events cancels in both."""
+    with transaction.atomic():
+        fire(order)
+        fire(order)
+
+    request = _request()
+    _admin().cancel(request, DeliveryRecord.objects.all())
+
+    assert DeliveryRecord.objects.filter(status=DeliveryStatus.CANCELLED).count() == 4
+    assert all(row.completed_at for row in DeliveryRecord.objects.all())
+    assert list(request._messages)[0].message == "Cancelled 4 deliveries."
+
+
+def test_cancel_touches_only_the_selected_rows_of_an_event(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The rows are passed as ``delivery_ids``, not widened to their events:
+    selecting one delivery must not withdraw its sibling receiver's."""
+    with transaction.atomic():
+        fire(order)
+    chosen = DeliveryRecord.objects.order_by("pk").first()
+
+    request = _request()
+    _admin().cancel(request, DeliveryRecord.objects.filter(pk=chosen.pk))
+
+    assert list(DeliveryRecord.objects.order_by("pk").values_list("status", flat=True)) == [
+        DeliveryStatus.CANCELLED,
+        DeliveryStatus.PENDING,
+    ]
+    assert list(request._messages)[0].message == "Cancelled 1 deliveries."
+
+
+def test_cancel_reports_a_claimed_row_as_in_flight(order: OrderPlaced, record: list[str]) -> None:
+    with transaction.atomic():
+        fire(order)
+    claimed = DeliveryRecord.objects.order_by("pk").first()
+    DeliveryRecord.objects.filter(pk=claimed.pk).update(status=DeliveryStatus.CLAIMED)
+
+    request = _request()
+    _admin().cancel(request, DeliveryRecord.objects.all())
+
+    assert DeliveryRecord.objects.get(pk=claimed.pk).status == DeliveryStatus.CLAIMED
+    assert (
+        list(request._messages)[0].message
+        == "Cancelled 1 deliveries. 1 were in flight and were left to run."
+    )
+
+
+def test_cancel_reports_settled_rows_it_left_alone(order: OrderPlaced, record: list[str]) -> None:
+    """Counted from one list captured before the call, as requeue counts: asking
+    the queryset afterwards would count the rows this call just settled."""
+    with transaction.atomic():
+        fire(order)
+    dead, claimed, done = DeliveryStatus.DEAD, DeliveryStatus.CLAIMED, DeliveryStatus.SUCCEEDED
+    first = DeliveryRecord.objects.order_by("pk").first()
+    DeliveryRecord.objects.filter(pk=first.pk).update(status=dead)
+    with transaction.atomic():
+        fire(order)
+    rows = list(DeliveryRecord.objects.exclude(pk=first.pk).order_by("pk"))
+    DeliveryRecord.objects.filter(pk=rows[0].pk).update(status=claimed)
+    DeliveryRecord.objects.filter(pk=rows[1].pk).update(status=done)
+
+    request = _request()
+    _admin().cancel(request, DeliveryRecord.objects.all())
+
+    assert list(request._messages)[0].message == (
+        "Cancelled 1 deliveries. 1 were in flight and were left to run."
+        " 2 were already settled and were left alone."
+    )
+
+
 def test_cancelled_rows_can_be_listed_on_their_own(admin_client) -> None:
     """The status filter is the field's choices, so a cancelled row is one an
     operator can list by itself, labelled as such, the way dead letters are."""
