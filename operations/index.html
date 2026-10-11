@@ -1333,11 +1333,21 @@ was broken and now is not. From Python it is also scopeable by row:</p>
 <p><code>limit=0</code> requeues nothing. It is an operator asking for the smallest possible
 blast radius, and reading it as "no limit" would give them the largest one.</p>
 <h2 id="cancel-owed-work">Cancel owed work<a class="headerlink" href="#cancel-owed-work" title="Permanent link">&para;</a></h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">cancel_deliveries</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">cancel_deliveries</span><span class="p">([</span><span class="n">event_id</span><span class="p">])</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">cancel_deliveries</span><span class="p">([</span><span class="n">event_id</span><span class="p">],</span> <span class="n">receiver_key</span><span class="o">=</span><span class="s2">"offers.expire_offer"</span><span class="p">)</span>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="n">cancel_deliveries</span><span class="p">([</span><span class="n">event_id</span><span class="p">],</span> <span class="n">delivery_ids</span><span class="o">=</span><span class="p">[</span><span class="mi">41</span><span class="p">,</span> <span class="mi">42</span><span class="p">])</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>cancel_deliveries<span class="w"> </span><span class="m">41</span><span class="w"> </span><span class="m">42</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>cancel_deliveries<span class="w"> </span><span class="m">41</span><span class="w"> </span>--receiver<span class="w"> </span>offers.expire_offer
+</span></code></pre></div>
+<p>The command prints <code>cancelled: n, in_flight: m</code> and refuses a call naming no
+events, as <code>replay_events</code> does: the smallest command an operator can type is not
+the widest. It takes <strong>one receiver per call</strong>, as the function does, and refuses
+a second <code>--receiver</code> rather than keeping the last: <code>replay_events</code> repeats the
+flag and uses every value, and a habit carried over from it would otherwise leave
+the dropped receivers' work owed. From Python, which is where the transactional
+case lives:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">cancel_deliveries</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">cancel_deliveries</span><span class="p">([</span><span class="n">event_id</span><span class="p">])</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="n">cancel_deliveries</span><span class="p">([</span><span class="n">event_id</span><span class="p">],</span> <span class="n">receiver_key</span><span class="o">=</span><span class="s2">"offers.expire_offer"</span><span class="p">)</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="n">cancel_deliveries</span><span class="p">([</span><span class="n">event_id</span><span class="p">],</span> <span class="n">delivery_ids</span><span class="o">=</span><span class="p">[</span><span class="mi">41</span><span class="p">,</span> <span class="mi">42</span><span class="p">])</span>
 </span></code></pre></div>
 <p>Withdraws the owed deliveries of these events so they never run, and settles them
 as <code>cancelled</code>. It exists for <a href="../scheduling/#cancelling-work-known-to-be-moot">scheduled reactions</a>:
@@ -1391,7 +1401,10 @@ made the work moot, or not at all. A cancelled row writes <code>completed_at</co
   <a href="../retention/#the-three-forms">retention</a>.</li>
 <li><strong><a href="#replay">Replay</a></strong> reopens it like any other settled row - the way back for
   work withdrawn by mistake. <code>requeue_dead()</code> does not touch it.</li>
-<li><strong>The admin</strong> lists it under its own status filter.</li>
+<li><strong>The admin</strong> lists it under its own status filter, and cancels from both
+  changelists: <a href="../introspection/#the-admin">Cancel selected deliveries</a> withdraws
+  exactly the rows picked, and the event changelist's action every owed row of the
+  events picked.</li>
 </ul>
 <p>On Postgres each batch locks its events first, in primary key order, as replay,
 requeue and the prune do. A cancel issued while a replay of the same event is open
@@ -1400,21 +1413,21 @@ letting the replay make the work owed again. A relay's claim takes no event lock
 so the write itself is conditioned on the status: a row claimed between the lock
 and the write is left claimed.</p>
 <h2 id="handing-delivery-to-a-task-queue">Handing delivery to a task queue<a class="headerlink" href="#handing-delivery-to-a-task-queue" title="Permanent link">&para;</a></h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend"</span><span class="p">,</span>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="p">}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>    <span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend"</span><span class="p">,</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>or with options:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>    <span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="p">{</span>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>        <span class="s2">"BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend"</span><span class="p">,</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>        <span class="s2">"queue_name"</span><span class="p">:</span> <span class="s2">"events"</span><span class="p">,</span>
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="p">},</span>
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="p">}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>    <span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="p">{</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>        <span class="s2">"BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend"</span><span class="p">,</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>        <span class="s2">"queue_name"</span><span class="p">:</span> <span class="s2">"events"</span><span class="p">,</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="p">},</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>Then declare the receiver's execution site:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">site</span><span class="o">=</span><span class="s2">"task"</span><span class="p">)</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">call_the_slow_api</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">site</span><span class="o">=</span><span class="s2">"task"</span><span class="p">)</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">call_the_slow_api</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
 </span></code></pre></div>
 <p>The relay claims the row and enqueues its id with the claim it holds; the task
 takes the row under that claim, runs the receiver and acknowledges. The row is
@@ -1422,21 +1435,21 @@ still the debt, so a lost task is still owed.</p>
 <p><code>DjangoTasksBackend</code> targets <code>django.tasks</code> on Django 6.0+ and falls back to the
 <code>django_tasks</code> backport on 4.2-5.2.</p>
 <h3 id="celery">Celery<a class="headerlink" href="#celery" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"django-domain-events[celery]"</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"django-domain-events[celery]"</span>
 </span></code></pre></div>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>    <span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="p">{</span>
-</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>        <span class="s2">"BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.delivery.celery_backend.CeleryBackend"</span><span class="p">,</span>
-</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>        <span class="s2">"queue"</span><span class="p">:</span> <span class="s2">"events"</span><span class="p">,</span>  <span class="c1"># optional; without it Celery's own routing decides</span>
-</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>    <span class="p">},</span>
-</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="p">}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>    <span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="p">{</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>        <span class="s2">"BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.delivery.celery_backend.CeleryBackend"</span><span class="p">,</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>        <span class="s2">"queue"</span><span class="p">:</span> <span class="s2">"events"</span><span class="p">,</span>  <span class="c1"># optional; without it Celery's own routing decides</span>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>    <span class="p">},</span>
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>The worker has to import the task, because a Celery worker runs a message by
 finding its name in its own registry and <code>autodiscover_tasks()</code> only looks for a
 <code>tasks</code> module in each app. Add the module to Celery's <code>imports</code>:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">app</span><span class="o">.</span><span class="n">conf</span><span class="o">.</span><span class="n">imports</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"django_domain_events.delivery.celery_backend"</span><span class="p">]</span>
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="c1"># or, with app.config_from_object("django.conf:settings", namespace="CELERY"):</span>
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="n">CELERY_IMPORTS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"django_domain_events.delivery.celery_backend"</span><span class="p">]</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="n">app</span><span class="o">.</span><span class="n">conf</span><span class="o">.</span><span class="n">imports</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"django_domain_events.delivery.celery_backend"</span><span class="p">]</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="c1"># or, with app.config_from_object("django.conf:settings", namespace="CELERY"):</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="n">CELERY_IMPORTS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"django_domain_events.delivery.celery_backend"</span><span class="p">]</span>
 </span></code></pre></div>
 <p>A worker without it logs the message as an unregistered task and drops it. The
 row stays owed and the relay hands it off again when the lease lapses, so nothing
@@ -1448,7 +1461,7 @@ after an upgrade moves the code.</p>
 <p><code>TaskBackend</code> is a <code>Protocol</code> with one method,
 <code>enqueue(delivery_id, claimed_by, claimed_at)</code>. The relay passes the claim by
 keyword. Anything satisfying it works; the worker side has to call</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="n">deliver_one</span><span class="p">(</span><span class="n">delivery_id</span><span class="p">,</span> <span class="n">claimed_by</span><span class="o">=</span><span class="n">claimed_by</span><span class="p">,</span> <span class="n">claimed_at</span><span class="o">=</span><span class="n">claimed_at</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">deliver_one</span><span class="p">(</span><span class="n">delivery_id</span><span class="p">,</span> <span class="n">claimed_by</span><span class="o">=</span><span class="n">claimed_by</span><span class="p">,</span> <span class="n">claimed_at</span><span class="o">=</span><span class="n">claimed_at</span><span class="p">)</span>
 </span></code></pre></div>
 <p>with the three values exactly as it was given them. <code>claimed_at</code> is an ISO 8601
 string, so all three are JSON and any queue can carry them unchanged.</p>
@@ -1476,7 +1489,7 @@ the receivers that asked for one, so configuring no backend cannot break
 receivers that never wanted it. Neither case silently runs in the relay.</p>
 </div>
 <h2 id="knowing-it-is-working">Knowing it is working<a class="headerlink" href="#knowing-it-is-working" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>events_status
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>events_status
 </span></code></pre></div>
 <p>See <a href="../introspection/#is-the-outbox-keeping-up">introspection</a>. The age of
 <code>oldest_owed_at</code> is the number to alert on.</p>
@@ -1484,8 +1497,8 @@ receivers that never wanted it. Neither case silently runs in the relay.</p>
 running it, or after finishing work whose lease had already lapsed. The second
 names the receiver and suggests <code>lease_seconds=</code>, because that is the fix.</p>
 <h2 id="a-cron-that-works">A cron that works<a class="headerlink" href="#a-cron-that-works" title="Permanent link">&para;</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>*/5 * * * *  manage.py deliver_events --once
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>0    4 * * *  manage.py prune_events
+<div class="language-text highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>*/5 * * * *  manage.py deliver_events --once
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>0    4 * * *  manage.py prune_events
 </span></code></pre></div>
 <p>With a long-running relay instead, nothing needs a schedule: an idle relay
 runs the prune itself, every minute by default, so an event declared to be

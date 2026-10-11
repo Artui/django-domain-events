@@ -1051,6 +1051,12 @@ prune treats it as consumed under either retention policy, and
 <p>The event id is what <code>fire()</code> returned. Keep it where the work's subject lives -
 a column on the offer - or find it through the event log by name and payload,
 which is a query on the event table rather than on this package.</p>
+<p>An operator rather than the application has the same operation in two other
+places: <code>python manage.py cancel_deliveries &lt;event_id&gt; --receiver &lt;key&gt;</code>, and the
+admin's <strong>Cancel selected deliveries</strong> on the rows a status or receiver filter has
+already picked out. The command is covered in
+<a href="../operations/#cancel-owed-work">operations</a>, the admin actions in
+<a href="../introspection/#the-admin">the admin</a>.</p>
 <h2 id="when-the-work-is-not-due-yet-notyet">When the work is not due yet: <code>NotYet</code><a class="headerlink" href="#when-the-work-is-not-due-yet-notyet" title="Permanent link">&para;</a></h2>
 <p>The early case is the dangerous one, because it fails silently. An admin extends
 an offer from 48 hours to 72; the 48-hour row runs, finds the offer still open,
