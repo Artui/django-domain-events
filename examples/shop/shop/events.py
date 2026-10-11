@@ -348,6 +348,11 @@ def chase_unpaid_invoice(evt: InvoiceSent, ctx: DeliveryContext) -> None:
       would lose it - nothing would ever send the reminder. `NotYet` moves the
       row to the end of the quiet period, spending no attempt.
 
+    A third case never reaches this function: **the invoice was paid**, which
+    the billing code knows the moment it happens. It withdraws the reminder
+    with `cancel_deliveries`, in the transaction recording the payment, so
+    the row settles as `cancelled` and the relay never claims it.
+
     The comparison is against `ctx.due_at`, the time the row came due with,
     never against the clock: on the next run `ctx.due_at` is the time `NotYet`
     named, so the same comparison lets the reminder go, and a test moving

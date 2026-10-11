@@ -165,6 +165,7 @@ Dead is where a delivery stops **on its own**, not where it stops for good - see
 | `failed` | raised with attempts remaining, or deferred |
 | `dead` | out of attempts, or deferred past `give_up_after` |
 | `orphaned` | addressed to a receiver key the registry no longer has |
+| `cancelled` | withdrawn by [`cancel_deliveries`](operations.md#cancel-owed-work) before it ran |
 
 `failed` is distinct from `pending` so that "has this ever failed" is answerable
 without reading the attempt count.

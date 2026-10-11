@@ -15,6 +15,7 @@ from django_domain_events import (
     assert_fired,
     attributed,
     backoff,
+    cancel_deliveries,
     catalogue,
     deliver_pending,
     drain_outbox,
@@ -455,5 +456,40 @@ class Command(BaseCommand):
             "and is sent",
             SentEmail.objects.filter(subject__startswith="Reminder:").count(),
             1,
+        )
+        head("16. The invoice is paid, so its reminder is cancelled")
+        # A new invoice for the open order, and its reminder due in a
+        # fortnight. Then the customer pays: the billing code knows the
+        # reminder is moot ahead of time, so rather than leave it to run and
+        # find nothing to do, it withdraws it, in the transaction that records
+        # the payment.
+        with transaction.atomic():
+            from django_domain_events import fire
+
+            invoice = fire(InvoiceSent(order_id=second.pk))
+        [reminder] = DeliveryRecord.objects.filter(event=invoice, receiver_key=chase)
+        emails = SentEmail.objects.count()
+        with transaction.atomic():
+            counts = cancel_deliveries([invoice], receiver_key=chase)
+        print(f"   cancel_deliveries: {counts}")
+        check(
+            "the waiting reminder is cancelled, and none was in flight",
+            counts,
+            {"cancelled": 1, "in_flight": 0},
+        )
+        drain_outbox(now=reminder.due_at + timedelta(days=1))
+        reminder.refresh_from_db()
+        print(f"   drained past its due time: {reminder.status} after {reminder.attempts} attempts")
+        check(
+            "a drain past its due time never runs it",
+            (reminder.status, reminder.attempts, reminder.succeeded_at),
+            ("cancelled", 0, None),
+        )
+        check("and nothing is sent", SentEmail.objects.count(), emails)
+        health = outbox_health()
+        check(
+            "health counts it as neither scheduled nor owed",
+            (health.scheduled, [b.key for b in health.receivers if b.key == chase]),
+            (0, []),
         )
         print("\nEvery claim above was checked.")

@@ -49,6 +49,7 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
 | A consumed event, then a prune | `Retention.SUCCEEDED` deleting `StockReserved` once delivered while the orders stay for `RETENTION_DAYS`, and `quiet_receivers` still knowing its receiver ran |
 | The receipt is replayed into its lane | `lane="mail"`: the default lane's pass leaves it alone and the mail lane's sends it; and the receipt's own retry curve, checked to last at most three hours and an hour and a half on average |
 | Invoice reminders due a fortnight later | `due=timedelta(days=14)` counted from the invoice's `occurred_at`: `drain_outbox()` leaves the reminders alone, `outbox_health()` counts them as `scheduled` rather than owed, and `drain_outbox(now=...)` runs them - the cancelled order's as moot work that succeeds and sends nothing, the open order's answering `NotYet` until three days after the customer's last email, then sending |
+| The invoice is paid before the reminder | `cancel_deliveries` withdrawing the reminder in the transaction that records the payment: it settles as `cancelled`, a drain past its due time never runs it, nothing is sent, and `outbox_health()` counts it nowhere |
 
 ## The declarations
 

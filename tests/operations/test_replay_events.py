@@ -18,6 +18,7 @@ from django_domain_events.delivery.fire import fire
 from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.operations.cancel_deliveries import cancel_deliveries
 from django_domain_events.operations.replay_events import replay_events
 from django_domain_events.scope.attributed import attributed
 from django_domain_events.types.delivery_context import DeliveryContext
@@ -447,6 +448,22 @@ def test_a_replay_reopens_a_scheduled_row_at_its_due_time_when_that_is_ahead(
 
     assert replay_events([event_id]) == {"reopened": 1, "added": 0}
 
+    assert _when(EXPIRE) == (occurred + timedelta(hours=48),) * 2
+    assert drain_outbox() == {}
+    assert expiry == []
+
+
+def test_a_cancelled_scheduled_row_is_reopened_at_its_due_time(expiry: list[int]) -> None:
+    """The way back from a cancel made by mistake: the reopened row is due when
+    the schedule says, not at once, as any reopened scheduled row is."""
+    occurred = datetime.now(timezone.utc) - timedelta(hours=1)
+    with transaction.atomic():
+        event_id = fire(Unheard(value=1), occurred_at=occurred)
+    assert cancel_deliveries([event_id], receiver_key=EXPIRE)["cancelled"] == 1
+
+    assert replay_events([event_id]) == {"reopened": 1, "added": 0}
+
+    assert _status(EXPIRE) == DeliveryStatus.PENDING
     assert _when(EXPIRE) == (occurred + timedelta(hours=48),) * 2
     assert drain_outbox() == {}
     assert expiry == []

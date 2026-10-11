@@ -174,6 +174,10 @@ climbing, while one wedged receiver has a backlog and everything else fine.
 | `lapsed_leases` | Claimed rows whose lease has expired |
 | `receivers` | Per-receiver backlog, worst first, omitting the ones with nothing owed, dead or scheduled. Each carries its own `owed`, `scheduled`, `dead` and `oldest_owed_at`; one with only scheduled work sorts after every receiver that is behind |
 
+A [cancelled](operations.md#cancel-owed-work) delivery is settled, so it appears
+in none of these: not owed, not scheduled and not dead. An outbox holding only
+cancelled work reads as drained.
+
 **The age of `oldest_owed_at` is the number to alert on**, and it is measured
 from when the work *arrived*, not from when it next becomes available. That
 distinction is the whole point: the backoff pushes a failed delivery's
@@ -291,7 +295,8 @@ Add `django.contrib.admin` and both models appear, read-only, with actions.
 - **Event records** - filter by name and date, see how many deliveries are still
   owed per event, and **Replay selected events**.
 - **Delivery records** - the dead-letter queue, filterable by status and
-  receiver, with **Requeue selected dead deliveries**. Each row shows its
+  receiver - `cancelled` included, so withdrawn work can be listed on its own -
+  with **Requeue selected dead deliveries**. Each row shows its
   target, and the search covers the receiver key, the target and the last error,
   since the target is what an operator is holding when one destination of a
   fan-out says it never received something.

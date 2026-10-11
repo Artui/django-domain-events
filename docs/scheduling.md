@@ -120,11 +120,51 @@ def remind(evt: ActivityReminderDue, ctx: DeliveryContext) -> None: ...
 ## When the work turns out to be moot
 
 The world moves on between the fire and the due time: the offer was accepted,
-the invoice was paid, the activity was cancelled. The receiver finds nothing to
-do and **returns, which is an ordinary success**. There is no separate status
-for it, because every status runs through prune, retention, health, replay and
-the admin, and "nothing to do" is not a different outcome from the relay's point
-of view - the delivery ran and its work is done.
+the invoice was paid, the activity was cancelled. There are two cases, and they
+have different answers.
+
+**Found moot when it runs.** The receiver re-reads current state, finds nothing
+to do and **returns, which is an ordinary success**. "Nothing to do" is not a
+different outcome from the relay's point of view - the delivery ran and its work
+is done. This is the case nobody announced, and it is why a scheduled receiver
+always re-checks.
+
+**Known moot ahead of time.** The code that accepts the offer knows the expiry
+is pointless. Waiting for it to run and succeed records a success for work that
+was never done; cancelling it is the answer, below.
+
+## Cancelling work known to be moot
+
+```python
+from django.db import transaction
+from django_domain_events import cancel_deliveries
+
+with transaction.atomic():
+    offer.accept()
+    cancel_deliveries([offer.made_event_id], receiver_key="offers.expire_offer")
+```
+
+[`cancel_deliveries`](operations.md#cancel-owed-work) settles the event's owed
+rows for that receiver as `cancelled`, so the relay never claims them, at the due
+time or after it. Inside the transaction it commits with the change that made
+the work moot, or not at all. It returns how many it cancelled and how many it
+could not, as `{"cancelled": n, "in_flight": m}`.
+
+- **A pending row** - still waiting for its due time - is cancelled.
+- **A failed row** - it came due, failed, and is waiting out its backoff - is
+  cancelled too: "never runs" covers its retries.
+- **A claimed row is left alone.** A worker holds it and may be running the
+  receiver now. It is counted in `in_flight`, and the receiver's own re-check is
+  what stops it: cancelling does not replace the re-check, it saves the run.
+
+`cancelled` is a settled status of its own, distinct from a success (the receiver
+never ran) and from a dead letter (nothing failed). Health does not count it,
+prune treats it as consumed under either retention policy, and
+[replay](#replay) reopens it - the way back for work withdrawn by mistake.
+
+The event id is what `fire()` returned. Keep it where the work's subject lives -
+a column on the offer - or find it through the event log by name and payload,
+which is a query on the event table rather than on this package.
 
 ## When the work is not due yet: `NotYet`
 
@@ -211,6 +251,10 @@ the same terms as at fire time.
 
 `requeue_dead()` makes a row due at once, as it does for every receiver: it only
 touches dead rows, which were due when they died.
+
+A [cancelled](#cancelling-work-known-to-be-moot) row is reopened like any other
+settled one, at the later of its due time and now. `requeue_dead()` leaves it
+alone.
 
 ## In tests
 

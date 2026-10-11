@@ -33,6 +33,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `claim_batch(exclude_ids=...)`, which leaves those rows out of the claim.
 - The example shop sends an invoice reminder a fortnight after the invoice,
   with a moot run and a `NotYet`.
+- `cancel_deliveries(event_ids, *, receiver_key=None, delivery_ids=None)`,
+  exported from the package root: withdraws the pending and failed deliveries of
+  those events, optionally narrowed to one receiver and to named rows (which
+  intersect with the events), so they never run. It leaves a claimed row to its
+  worker, leaves a settled row with its outcome, and returns
+  `{"cancelled": n, "in_flight": m}`. Inside a transaction it commits with the
+  caller's change. On Postgres it locks the events first, in primary key order,
+  as replay, requeue and the prune do, so a cancel issued during a replay of the
+  same event cancels what the replay reopened.
+- `DeliveryStatus.CANCELLED` (`"cancelled"`), the settled status a cancelled
+  delivery takes. The relay never claims or runs it; `outbox_health()`,
+  `events_status` and the event changelist do not count it owed; `prune_events`
+  treats it as settled, and as consumed under `Retention.SUCCEEDED` as well as
+  `Retention.SETTLED`; `replay_events()` reopens it; `requeue_dead()` leaves it
+  alone; the admin's status filter lists it. Migration `0008` changes only the
+  field's choices and emits no SQL.
+- The example shop cancels the open order's next reminder when its invoice is
+  paid, and checks that a drain past its due time never runs it.
 
 ### Changed
 - **`owed` no longer counts a row whose due time has not come**, in
@@ -45,6 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`replay_events()` keeps a scheduled receiver's due time**: a reopened or
   added row is due at the later of its resolved due time and now, rather than at
   once, and a `due` callable is called again.
+- **`DeliveryStatus` has a seventh member**, `CANCELLED`. Code that maps every
+  status to something - a dashboard, a metrics label set - meets a value it has
+  not seen once anything calls `cancel_deliveries`.
 
 ### Fixed
 - The Markdown catalogue writes a duration of a million seconds or more out in

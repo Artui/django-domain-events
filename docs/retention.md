@@ -35,14 +35,20 @@ class NewsletterSent: ...
 | --- | --- | --- |
 | nothing (the default) | `RETENTION_DAYS` after it was recorded, once every delivery is terminal | everything, dead letters included |
 | `retention=timedelta(...)` | that long after it was recorded, once every delivery is terminal | the same, for its own window instead of the default |
-| `retention=Retention.SUCCEEDED` | at the first prune after **every delivery has succeeded** | a dead or orphaned delivery keeps the whole event for `RETENTION_DAYS`, so the dead letter stays inspectable and `requeue_dead` can still reopen it |
+| `retention=Retention.SUCCEEDED` | at the first prune after **every delivery has succeeded or been cancelled** | a dead or orphaned delivery keeps the whole event for `RETENTION_DAYS`, so the dead letter stays inspectable and `requeue_dead` can still reopen it |
 | `retention=Retention.SETTLED` | at the first prune after **every delivery is terminal**, dead letters included | nothing past consumption |
 
-"Terminal" is succeeded, dead or orphaned; a delivery pending, failed or claimed is
-still owed, and no form deletes an event that is still owed. An event with no
-durable deliveries - nothing durable listens, or it was recorded inside
+"Terminal" is succeeded, dead, orphaned or cancelled; a delivery pending, failed
+or claimed is still owed, and no form deletes an event that is still owed. An
+event with no durable deliveries - nothing durable listens, or it was recorded inside
 [`suppressed()`](scope.md) - is consumed as soon as it commits, so under either
 `Retention` policy its row goes at the next prune, suppression reason and all.
+
+A [cancelled](operations.md#cancel-owed-work) delivery counts as consumed under
+`Retention.SUCCEEDED` as well as under `Retention.SETTLED`. It is not a success -
+the receiver never ran - but it was withdrawn on purpose: nothing failed, nothing
+is left to inspect or requeue, and every row of the event is done, so holding the
+event for the window would keep it for no reader.
 
 A window of its own may be longer than `RETENTION_DAYS` as well as shorter: the
 default is a default, not a ceiling. It has to be a whole number of seconds, from
