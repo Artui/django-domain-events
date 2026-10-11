@@ -244,8 +244,9 @@ def _owed(delivery: Any, now: datetime) -> bool:
     The status set and the backoff are separate tests, because each guard here
     is one branch arc and coverage cannot see a deleted member:
     ``test_a_settled_row_delivered_again_does_not_run_its_receiver_twice``,
-    ``test_a_dead_row_is_not_run_or_resurrected`` and
-    ``test_an_orphaned_row_is_not_run`` hold one terminal status each;
+    ``test_a_dead_row_is_not_run_or_resurrected``,
+    ``test_an_orphaned_row_is_not_run`` and ``test_a_cancelled_row_is_not_run``
+    hold one terminal status each;
     ``test_a_failed_row_not_yet_due_is_not_run`` holds the backoff;
     ``test_a_failed_row_that_is_due_still_runs`` holds its ``available_at``
     half against a check that refuses every FAILED row, and

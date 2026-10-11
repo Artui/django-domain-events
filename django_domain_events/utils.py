@@ -16,14 +16,27 @@ from django_domain_events.payload_upgrade_failed import PayloadUpgradeFailed
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_status import DeliveryStatus
 
-TERMINAL = (DeliveryStatus.SUCCEEDED, DeliveryStatus.DEAD, DeliveryStatus.ORPHANED)
-"""Statuses a delivery does not come back from.
+TERMINAL = (
+    DeliveryStatus.SUCCEEDED,
+    DeliveryStatus.DEAD,
+    DeliveryStatus.ORPHANED,
+    DeliveryStatus.CANCELLED,
+)
+"""Statuses a delivery does not come back from on its own.
 
-Everything else is still owed. Named once because three callers ask the
-question and an explicit list of the owed statuses is what let two of them
-disagree: one omitted CLAIMED, so a row whose worker died between the claim
+Everything else is still owed. Named once because every reader of "settled"
+asks the question and an explicit list of the owed statuses is what let two of
+them disagree: one omitted CLAIMED, so a row whose worker died between the claim
 and the deploy that deleted its receiver read as settled until a relay
-happened to reclaim it.
+happened to reclaim it. Replay and the event changelist's owed count kept
+copies of their own until CANCELLED arrived, and now read this one.
+
+Each member is held per reader, because membership in a tuple is one branch
+arc: CANCELLED by test_a_cancelled_row_is_not_run (the relay's refusal),
+test_a_cancelled_delivery_is_reopened_like_any_settled_one (replay),
+test_a_cancelled_delivery_is_settled_for_the_ordinary_window (prune),
+test_a_cancelled_delivery_is_not_owed (the admin) and
+test_every_status_is_counted_owed_or_settled_exactly_once (health).
 """
 
 RETRYABLE = (DeliveryStatus.PENDING, DeliveryStatus.FAILED)

@@ -18,11 +18,14 @@ class Retention(Enum):
     """
 
     SUCCEEDED = "succeeded"
-    """Once every delivery has succeeded.
+    """Once every delivery has succeeded or been cancelled.
 
     A dead or orphaned delivery keeps its event under the ordinary
     ``RETENTION_DAYS`` window, so the dead letter stays inspectable and
-    ``requeue_dead`` still has a row to reopen.
+    ``requeue_dead`` still has a row to reopen. A cancelled one does not: it
+    was withdrawn on purpose by ``cancel_deliveries``, nothing failed and
+    nothing is left to requeue, so with every other row succeeded every row of
+    the event is done.
     """
 
     SETTLED = "settled"

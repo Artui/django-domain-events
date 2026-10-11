@@ -668,6 +668,24 @@ def test_an_orphaned_row_is_not_run(order: OrderPlaced, record: list[str]) -> No
     assert _delivery("testapp.durable_receiver").status == DeliveryStatus.ORPHANED
 
 
+def test_a_cancelled_row_is_not_run(order: OrderPlaced, record: list[str]) -> None:
+    """The fourth terminal status, and the one the refusal fails open on: a
+    status missing from the terminal set is not in the retryable one either, so
+    the backoff test below it reads as owed and the cancelled work runs."""
+    _fire(order)
+    delivery_id = _set(
+        "testapp.durable_receiver",
+        status=DeliveryStatus.CANCELLED,
+        completed_at=datetime.now(timezone.utc),
+    )
+    record.clear()
+
+    assert deliver_one(delivery_id) is None
+
+    assert record == []
+    assert _delivery("testapp.durable_receiver").status == DeliveryStatus.CANCELLED
+
+
 def test_a_failed_row_not_yet_due_is_not_run(order: OrderPlaced, record: list[str]) -> None:
     """``available_at`` is the backoff, and a ``RetryAfter`` the receiver raised
     writes it too. Running the row early ignores both - and for a destination

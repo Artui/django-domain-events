@@ -11,7 +11,7 @@ from django_domain_events.admin.event_name_filter import EventNameFilter
 from django_domain_events.admin.utils import may_change
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.operations.replay_events import replay_events
-from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.utils import TERMINAL
 
 
 @admin.register(EventRecord)
@@ -40,10 +40,11 @@ class EventRecordAdmin(admin.ModelAdmin):
 
     @admin.display(description="deliveries owed")
     def owed(self, obj: EventRecord) -> int:
-        settled = (DeliveryStatus.SUCCEEDED, DeliveryStatus.DEAD, DeliveryStatus.ORPHANED)
         # Counted in Python over the prefetch rather than with a second query
-        # per row: the changelist renders a hundred of these.
-        return sum(1 for d in obj.deliveries.all() if d.status not in settled)
+        # per row: the changelist renders a hundred of these. Settled is the
+        # package's one list, so a cancelled row is not counted as owed
+        # (test_a_cancelled_delivery_is_not_owed).
+        return sum(1 for d in obj.deliveries.all() if d.status not in TERMINAL)
 
     @admin.display(description="age")
     def age(self, obj: EventRecord) -> str:

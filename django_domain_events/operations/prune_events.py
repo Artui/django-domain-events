@@ -41,7 +41,8 @@ def prune_events(
     already recorded:
 
     - **Consumed**, for an event recorded under ``Retention.SUCCEEDED`` (every
-      delivery succeeded) or ``Retention.SETTLED`` (every delivery terminal).
+      delivery succeeded or was cancelled) or ``Retention.SETTLED`` (every
+      delivery terminal).
       No window: it goes at the first prune after it is consumed, and an event
       with no delivery rows at all is consumed as soon as it commits.
     - **Past its own window**, for an event declared with a ``timedelta``, and
@@ -87,7 +88,24 @@ def prune_events(
     window = older_than if older_than is not None else timedelta(days=setting("RETENTION_DAYS"))
 
     unsettled = _deliveries_of_each().exclude(status__in=TERMINAL)
-    unsucceeded = _deliveries_of_each().exclude(status=DeliveryStatus.SUCCEEDED)
+    # Not done under Retention.SUCCEEDED: neither succeeded nor cancelled. A
+    # cancelled row counts as consumed here too, because the work was withdrawn
+    # on purpose and nothing is left for an operator to inspect or requeue:
+    # every row of the event is done
+    # (test_a_cancelled_delivery_is_consumed_under_either_policy[succeeded]).
+    # Two exclusions rather than one NOT IN, so the first is the condition of
+    # dde_unfinished_by_event word for word. No test holds that choice: the
+    # Postgres the suite runs on proves a NOT IN implies the condition, and
+    # test_each_kind_of_due_is_one_index_range passes with either spelling. It
+    # stays for the reason the own-window arm gives below - this one does not
+    # depend on how far a given planner follows the implication. The second
+    # exclusion is held by the cancelled test above, the first by
+    # test_every_delivery_succeeded_deletes_it_at_once.
+    unsucceeded = (
+        _deliveries_of_each()
+        .exclude(status=DeliveryStatus.SUCCEEDED)
+        .exclude(status=DeliveryStatus.CANCELLED)
+    )
     arms = [
         # One query per policy rather than their OR. An equality on the policy
         # column is one range of dde_consumed_by_policy, and with no OR the

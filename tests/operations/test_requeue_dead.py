@@ -36,6 +36,19 @@ def test_it_leaves_everything_else_alone(order: OrderPlaced, record: list[str]) 
     assert set(DeliveryRecord.objects.values_list("status", flat=True)) == {DeliveryStatus.PENDING}
 
 
+def test_a_cancelled_row_is_not_requeued(order: OrderPlaced, record: list[str]) -> None:
+    """Requeue is for dead letters only. A cancelled row was withdrawn on
+    purpose, and the way back for it is a replay, which says so by name."""
+    with transaction.atomic():
+        fire(order)
+    DeliveryRecord.objects.update(status=DeliveryStatus.CANCELLED)
+
+    assert requeue_dead(delivery_ids=DeliveryRecord.objects.values_list("pk", flat=True)) == 0
+    assert set(DeliveryRecord.objects.values_list("status", flat=True)) == {
+        DeliveryStatus.CANCELLED
+    }
+
+
 def test_it_can_be_scoped_to_one_receiver(order: OrderPlaced, record: list[str]) -> None:
     """The usual reason to requeue is that one downstream was broken and now is
     not."""

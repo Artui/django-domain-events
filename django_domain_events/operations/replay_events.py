@@ -13,7 +13,13 @@ from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
-from django_domain_events.utils import decode_payload, resolve_due, resolve_targets, target_digest
+from django_domain_events.utils import (
+    TERMINAL,
+    decode_payload,
+    resolve_due,
+    resolve_targets,
+    target_digest,
+)
 
 
 def replay_events(
@@ -114,7 +120,7 @@ def replay_events(
                         event=record, receiver_key=receiver.key, target_digest__in=targets
                     ).values_list("target_digest", "status")
                 )
-                reopen = [d for d, status in existing.items() if status in _TERMINAL]
+                reopen = [d for d, status in existing.items() if status in TERMINAL]
                 # Now, or a scheduled receiver's due time where that is later:
                 # replaying a recent offer into its expiry must not expire it
                 # early, and one whose time has passed is owed from now.
@@ -128,7 +134,7 @@ def replay_events(
                     event=record,
                     receiver_key=receiver.key,
                     target_digest__in=reopen,
-                    status__in=_TERMINAL,
+                    status__in=TERMINAL,
                 ).update(
                     status=DeliveryStatus.PENDING,
                     attempts=0,
@@ -217,6 +223,3 @@ def _due_now(
         else decode_payload(event_class, record.payload, record.version)
     )
     return resolve_due(receiver.key, receiver.due, event, record.occurred_at, now)
-
-
-_TERMINAL = (DeliveryStatus.SUCCEEDED, DeliveryStatus.DEAD, DeliveryStatus.ORPHANED)

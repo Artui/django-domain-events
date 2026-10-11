@@ -372,3 +372,28 @@ def test_ignoring_the_backoff_still_claims_a_row_with_no_due_time(
     ids = claim_batch(worker_id="w1", now=_now(), lease=LEASE, limit=10, ignore_backoff=True)
 
     assert len(ids) == 2
+
+
+@pytest.mark.parametrize("ignore_backoff", [False, True], ids=["relay", "ignoring-backoff"])
+def test_a_cancelled_row_is_never_claimed(
+    order: OrderPlaced, record: list[str], ignore_backoff: bool
+) -> None:
+    """The claim names the statuses it takes, so a cancelled row is outside it
+    however far ahead ``now`` is, and with the backoff skipped, which drops the
+    time predicate the schedule otherwise rides on."""
+    with transaction.atomic():
+        fire(order)
+    DeliveryRecord.objects.update(status=DeliveryStatus.CANCELLED, available_at=_now())
+
+    ids = claim_batch(
+        worker_id="w1",
+        now=_now() + timedelta(days=365),
+        lease=LEASE,
+        limit=10,
+        ignore_backoff=ignore_backoff,
+    )
+
+    assert ids == []
+    assert set(DeliveryRecord.objects.values_list("status", flat=True)) == {
+        DeliveryStatus.CANCELLED
+    }

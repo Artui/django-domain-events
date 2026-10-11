@@ -83,6 +83,24 @@ def test_a_delivery_in_flight_is_left_alone(order: OrderPlaced, record: list[str
     assert replay_events([event_id]) == {"reopened": 0, "added": 0}
 
 
+def test_a_cancelled_delivery_is_reopened_like_any_settled_one(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """A cancel is not forever, any more than a dead letter is: replay is the
+    operator saying the work is wanted after all. Without cancelled among the
+    statuses replay reopens, the row has an existing status and is not missing
+    either, so it is neither reopened nor added and the replay does nothing."""
+    with transaction.atomic():
+        event_id = fire(order)
+    DeliveryRecord.objects.update(
+        status=DeliveryStatus.CANCELLED, completed_at=datetime.now(timezone.utc)
+    )
+
+    assert replay_events([event_id]) == {"reopened": 2, "added": 0}
+    assert _status("testapp.durable_receiver") == DeliveryStatus.PENDING
+    assert not DeliveryRecord.objects.filter(completed_at__isnull=False).exists()
+
+
 def test_it_can_be_narrowed_to_one_receiver(order: OrderPlaced, record: list[str]) -> None:
     with transaction.atomic():
         event_id = fire(order)
@@ -120,7 +138,7 @@ def test_it_will_not_wipe_a_live_claim(order: OrderPlaced, record: list[str]) ->
     drain_outbox()
     stolen_id = DeliveryRecord.objects.order_by("pk").values_list("pk", flat=True).first()
 
-    real_terminal = module._TERMINAL
+    real_terminal = module.TERMINAL
 
     class StealWhenAsked(tuple):
         def __contains__(self, item: object) -> bool:
@@ -129,7 +147,7 @@ def test_it_will_not_wipe_a_live_claim(order: OrderPlaced, record: list[str]) ->
             )
             return tuple.__contains__(self, item)
 
-    with mock.patch.object(module, "_TERMINAL", StealWhenAsked(real_terminal)):
+    with mock.patch.object(module, "TERMINAL", StealWhenAsked(real_terminal)):
         assert replay_events([event_id])["reopened"] == 1
 
     stolen = DeliveryRecord.objects.get(pk=stolen_id)

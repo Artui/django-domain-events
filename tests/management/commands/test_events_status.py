@@ -111,3 +111,19 @@ def test_json_carries_the_scheduled_counts(order: OrderPlaced, record: list[str]
     by_key = {r["key"]: r for r in parsed["receivers"]}
     assert by_key["testapp.durable_receiver"]["scheduled"] == 1
     assert by_key["testapp.with_context"]["scheduled"] == 0
+
+
+def test_cancelled_work_is_neither_owed_nor_dead(order: OrderPlaced, record: list[str]) -> None:
+    """Withdrawn work is done, so an outbox holding only cancelled rows reads
+    as drained, in the text an operator reads and the JSON a scraper does, and
+    no receiver is listed as behind."""
+    with transaction.atomic():
+        fire(order)
+    DeliveryRecord.objects.update(status=DeliveryStatus.CANCELLED)
+
+    output = _run()
+    assert "owed          0" in output
+    assert "nothing owed and nothing dead" in output
+    parsed = json.loads(_run("--format", "json"))
+    assert (parsed["owed"], parsed["dead"], parsed["scheduled"]) == (0, 0, 0)
+    assert parsed["receivers"] == []
