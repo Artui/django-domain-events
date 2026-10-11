@@ -65,3 +65,24 @@ def test_it_refuses_an_event_id_that_is_not_a_number() -> None:
     operation as a string and failing there as a database error."""
     with pytest.raises(CommandError, match="invalid int"):
         call_command("cancel_deliveries", "abc")
+
+
+def test_it_refuses_a_second_receiver(order: OrderPlaced, record: list[str]) -> None:
+    """One receiver per call, said out loud. ``replay_events`` repeats
+    ``--receiver`` and uses every value, so an operator carrying that habit
+    here would otherwise have all but the last silently dropped - and the
+    receivers dropped are the ones whose work stays owed."""
+    with transaction.atomic():
+        event_id = fire(order)
+
+    with pytest.raises(CommandError, match="one --receiver per call"):
+        call_command(
+            "cancel_deliveries",
+            str(event_id),
+            "--receiver",
+            "testapp.durable_receiver",
+            "--receiver",
+            "testapp.with_context",
+        )
+
+    assert not DeliveryRecord.objects.filter(status=DeliveryStatus.CANCELLED).exists()

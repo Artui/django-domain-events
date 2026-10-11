@@ -346,7 +346,11 @@ python manage.py cancel_deliveries 41 --receiver offers.expire_offer
 
 The command prints `cancelled: n, in_flight: m` and refuses a call naming no
 events, as `replay_events` does: the smallest command an operator can type is not
-the widest. From Python, which is where the transactional case lives:
+the widest. It takes **one receiver per call**, as the function does, and refuses
+a second `--receiver` rather than keeping the last: `replay_events` repeats the
+flag and uses every value, and a habit carried over from it would otherwise leave
+the dropped receivers' work owed. From Python, which is where the transactional
+case lives:
 
 ```python
 from django_domain_events import cancel_deliveries
