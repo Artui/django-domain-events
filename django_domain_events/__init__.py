@@ -21,6 +21,7 @@ from django_domain_events.introspection.outbox_health import outbox_health
 from django_domain_events.introspection.quiet_receivers import quiet_receivers
 from django_domain_events.introspection.render_catalogue import render_catalogue
 from django_domain_events.introspection.what_listens_to import what_listens_to
+from django_domain_events.operations.cancel_deliveries import cancel_deliveries
 from django_domain_events.operations.prune_events import prune_events
 from django_domain_events.operations.replay_events import replay_events
 from django_domain_events.operations.requeue_dead import requeue_dead
@@ -85,6 +86,7 @@ __all__ = [
     "assert_fired",
     "attributed",
     "backoff",
+    "cancel_deliveries",
     "catalogue",
     "caused_by",
     "causing_event_id",
