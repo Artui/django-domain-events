@@ -16,7 +16,7 @@
         <link rel="prev" href="../declaring/">
       
       
-        <link rel="next" href="../scope/">
+        <link rel="next" href="../scheduling/">
       
       
         
@@ -528,6 +528,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#when-the-work-is-not-due-yet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When the work is not due yet
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#in-tests" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -542,6 +553,33 @@
   
 </nav>
       
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scheduling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduled reactions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -885,6 +923,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#when-the-work-is-not-due-yet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When the work is not due yet
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#in-tests" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1105,6 +1154,10 @@ publish either.</p>
 <td><code>orphaned</code></td>
 <td>addressed to a receiver key the registry no longer has</td>
 </tr>
+<tr>
+<td><code>cancelled</code></td>
+<td>withdrawn by <a href="../operations/#cancel-owed-work"><code>cancel_deliveries</code></a> before it ran</td>
+</tr>
 </tbody>
 </table>
 <p><code>failed</code> is distinct from <code>pending</code> so that "has this ever failed" is answerable
@@ -1275,19 +1328,60 @@ receiver, so a rate-limited endpoint stops costing deliveries their budget.
 A receiver declared with <code>site="task"</code> keeps the unspent attempt and
 loses the pause, for the reason above.</p>
 </div>
-<h2 id="in-tests">In tests<a class="headerlink" href="#in-tests" title="Permanent link">&para;</a></h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">assert_fired</span><span class="p">,</span> <span class="n">drain_outbox</span>
+<h2 id="when-the-work-is-not-due-yet">When the work is not due yet<a class="headerlink" href="#when-the-work-is-not-due-yet" title="Permanent link">&para;</a></h2>
+<p><code>RetryAfter</code> is a destination saying when to come back. <code>NotYet(until)</code> is the
+receiver itself saying its work is not due until <code>until</code>, an aware <code>datetime</code> in
+the future - typically a <a href="../scheduling/">scheduled receiver</a> whose due time has
+moved since its row was written:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">timezone</span>
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_placing_an_order_reserves_stock</span><span class="p">():</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="n">place_order</span><span class="p">()</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>    <span class="n">assert_fired</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">times</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    <span class="n">drain_outbox</span><span class="p">()</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeliveryContext</span><span class="p">,</span> <span class="n">NotYet</span><span class="p">,</span> <span class="n">receiver</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OfferMade</span><span class="p">,</span> <span class="n">due</span><span class="o">=</span><span class="n">timedelta</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">48</span><span class="p">),</span> <span class="n">takes_context</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">expire_offer</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OfferMade</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DeliveryContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    <span class="n">offer</span> <span class="o">=</span> <span class="n">Offer</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">pk</span><span class="o">=</span><span class="n">evt</span><span class="o">.</span><span class="n">offer_id</span><span class="p">)</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>    <span class="k">if</span> <span class="n">offer</span><span class="o">.</span><span class="n">expires_at</span> <span class="o">&gt;</span> <span class="nb">max</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">due_at</span><span class="p">,</span> <span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">()):</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>        <span class="k">raise</span> <span class="n">NotYet</span><span class="p">(</span><span class="n">offer</span><span class="o">.</span><span class="n">expires_at</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"the offer was extended"</span><span class="p">)</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>    <span class="n">offer</span><span class="o">.</span><span class="n">expire</span><span class="p">()</span>
+</span></code></pre></div>
+<p>The relay moves the row's <code>available_at</code> and <code>due_at</code> to <code>until</code> and sets it back
+to <code>pending</code>. <strong>No attempt is spent</strong>, nothing is capped or jittered,
+<code>give_up_after</code> does not apply, <code>last_error</code> and <code>on_failure</code> are left alone, and
+no lane is paused: it is the application's own statement of when its work is
+due, not a destination's advice to be distrusted. On the next run,
+<code>ctx.due_at</code> is <code>until</code>. A naive or past <code>until</code> is refused when the exception
+is built, so raising one records an ordinary, counted failure instead.
+<a href="../scheduling/#when-the-work-is-not-due-yet-notyet">Scheduled reactions</a> covers
+it in full, with how it compares to <code>RetryAfter</code>.</p>
+<p>Like the other two, it is read by the relay and by nothing else: an <code>INLINE</code>
+receiver raising it fails the caller's transaction, and an <code>ON_COMMIT</code> one has
+it logged.</p>
+<h2 id="in-tests">In tests<a class="headerlink" href="#in-tests" title="Permanent link">&para;</a></h2>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">assert_fired</span><span class="p">,</span> <span class="n">drain_outbox</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_placing_an_order_reserves_stock</span><span class="p">():</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="n">place_order</span><span class="p">()</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="n">assert_fired</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">times</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    <span class="n">drain_outbox</span><span class="p">()</span>
 </span></code></pre></div>
 <p><code>drain_outbox()</code> runs the <strong>real</strong> delivery path to completion - the same claim,
 encode, decode and acknowledgement the relay performs - so a test exercising it
 exercises production. <code>assert_fired</code> reads the log rather than a mock, which
 means it also proves the row was written inside the transaction that committed.</p>
+<p>It skips the backoff, so a failing receiver is retried to its dead letter in one
+call, and <strong>never skips a receiver's <code>due=</code></strong>: a scheduled row is left alone
+until it is due. Pass <code>now=</code> to move the claims forward in time instead:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_an_unanswered_offer_expires</span><span class="p">():</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="n">make_offer</span><span class="p">()</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="n">drain_outbox</span><span class="p">()</span>  <span class="c1"># the expiry is not due yet, so it is left alone</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">drain_outbox</span><span class="p">(</span><span class="n">now</span><span class="o">=</span><span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">()</span> <span class="o">+</span> <span class="n">timedelta</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">48</span><span class="p">))</span>  <span class="c1"># now it is</span>
+</span></code></pre></div>
+<p>Only the claims read <code>now</code>; the receiver runs on the real clock, so a scheduled
+receiver should compare against <code>ctx.due_at</code>, with the clock only as the floor
+that lets a late row proceed (<code>max(ctx.due_at, timezone.now())</code>). See
+<a href="../scheduling/#in-tests">scheduled reactions</a>.</p>
 
 
 

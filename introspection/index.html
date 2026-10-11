@@ -345,6 +345,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../scheduling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduled reactions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../scope/" class="md-nav__link">
         
   
@@ -779,7 +806,14 @@ relays started with <code>--lane mail</code>" - and the JSON carries
 <code>backoff_base_seconds</code>, <code>backoff_cap_seconds</code> and <code>lane</code> on every receiver. So
 does a declared <a href="../delivery/#give_up_after-keeps-every-delivery-ending"><code>give_up_after</code></a>:
 "dead-letters a deferral once its delivery has been owed for 172800s", and
-<code>give_up_after_seconds</code> in the JSON, null where none is declared.
+<code>give_up_after_seconds</code> in the JSON, null where none is declared. A
+<a href="../scheduling/">scheduled receiver</a> says when it runs - "is due 172800s after
+the event occurred", or "is due at the time <code>waitlist.events.offer_expiry</code>
+returns for the event" - and the JSON carries <code>due_seconds</code> for a delay and
+<code>due_callable</code> for a callable, each null otherwise. Two fields rather than one
+that is sometimes a number and sometimes a path, so a JSON reader never switches
+on a value's type; a receiver with both null runs as soon as its event is
+recorded.
 Lines rather than columns, so the tables a project has already committed do
 not change shape for properties most receivers do not have. A half of the curve
 left to its setting is named as the setting rather than resolved, because the
@@ -862,7 +896,11 @@ climbing, while one wedged receiver has a backlog and everything else fine.</p>
 <tbody>
 <tr>
 <td><code>owed</code></td>
-<td>Deliveries not yet settled - pending, failed or claimed</td>
+<td>Deliveries due and not yet settled - pending, failed or claimed</td>
+</tr>
+<tr>
+<td><code>scheduled</code></td>
+<td>Deliveries not yet settled whose due time is still ahead - a <a href="../scheduling/">scheduled receiver</a> waiting. <strong>Not</strong> counted as owed</td>
 </tr>
 <tr>
 <td><code>claimed</code></td>
@@ -874,7 +912,7 @@ climbing, while one wedged receiver has a backlog and everything else fine.</p>
 </tr>
 <tr>
 <td><code>oldest_owed_at</code></td>
-<td>When the oldest still-owed delivery's event was <strong>recorded</strong>; <code>None</code> when nothing is owed</td>
+<td>When the oldest still-owed delivery <strong>became owed</strong>: its due time where it has one, its event's recording otherwise; <code>None</code> when nothing is owed</td>
 </tr>
 <tr>
 <td><code>lapsed_leases</code></td>
@@ -882,15 +920,24 @@ climbing, while one wedged receiver has a backlog and everything else fine.</p>
 </tr>
 <tr>
 <td><code>receivers</code></td>
-<td>Per-receiver backlog, worst first, omitting the ones with nothing owed or dead. Each carries its own <code>oldest_owed_at</code></td>
+<td>Per-receiver backlog, worst first, omitting the ones with nothing owed, dead or scheduled. Each carries its own <code>owed</code>, <code>scheduled</code>, <code>dead</code> and <code>oldest_owed_at</code>; one with only scheduled work sorts after every receiver that is behind</td>
 </tr>
 </tbody>
 </table>
+<p>A <a href="../operations/#cancel-owed-work">cancelled</a> delivery is settled, so it appears
+in none of these: not owed, not scheduled and not dead. An outbox holding only
+cancelled work reads as drained.</p>
 <p><strong>The age of <code>oldest_owed_at</code> is the number to alert on</strong>, and it is measured
-from when the work <em>arrived</em>, not from when it next becomes due. That
+from when the work <em>arrived</em>, not from when it next becomes available. That
 distinction is the whole point: the backoff pushes a failed delivery's
 <code>available_at</code> into the future on every attempt, so an alert written against
 that column reads a <strong>negative</strong> age exactly while a receiver is failing.</p>
+<p>Work arrives when it becomes due. For most rows that is when the event was
+recorded; for a replayed or requeued row, when it was reopened; and for a
+<a href="../scheduling/#is-it-keeping-up">scheduled receiver</a>, its due time. A row due in
+a fortnight is <code>scheduled</code> until then and does not age at all, so a five-minute
+backlog alert does not fire for work that is on time - and one failing after it
+came due ages from its due time, not from an event a fortnight older.</p>
 <p>It rises monotonically for as long as work sits undone - a relay that is down,
 a receiver that is failing its way through its retries, or a queue simply longer
 than the workers can drain.</p>
@@ -909,10 +956,26 @@ gives its unstarted rows back by expiring their leases, so a brief non-zero
 reading after a deploy is that, not a dying worker.</p>
 <p>Every figure here is answered from an index and none of them scans the
 delivery table, so the call is cheap enough to scrape on an interval.</p>
-<p><code>owed</code> means "not terminal", which is what the prune settles by and a superset
-of what the relay can claim at any given moment: a row inside its backoff window
-is owed and not yet claimable. The superset is the useful side - this cannot
-report an empty queue while work is still outstanding.</p>
+<p><code>owed</code> means "not terminal and due", a superset of what the relay can claim at
+any given moment: a row inside its backoff window is owed and not yet claimable.
+The superset is the useful side - this cannot report an empty queue while work
+is still outstanding. A row whose due time has not come is not outstanding yet,
+which is why it is <code>scheduled</code> instead; at exactly its due time it is owed, as
+the relay can claim it then. The prune settles by "not terminal", so it waits
+for <code>owed</code> and <code>scheduled</code> rows alike.</p>
+<p><code>events_status</code> prints the same figures, <code>scheduled</code> among them, and a line per
+receiver:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>owed          3
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>scheduled     120
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>claimed       1
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>dead          0
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>lapsed leases 0
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>oldest owed   42s ago
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>  billing.send_invoice  owed=3  dead=0  scheduled=0 oldest=42s
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>  waitlist.expire_offer owed=0  dead=0  scheduled=120   oldest=-
+</span></code></pre></div>
+<p><code>--format json</code> carries <code>scheduled</code> at the top level and on each receiver.</p>
 <h2 id="system-checks">System checks<a class="headerlink" href="#system-checks" title="Permanent link">&para;</a></h2>
 <p>Run with <code>python manage.py check</code>.</p>
 <table>
@@ -1019,7 +1082,8 @@ run teaches the reader to skip the output.</p>
 <li><strong>Event records</strong> - filter by name and date, see how many deliveries are still
   owed per event, and <strong>Replay selected events</strong>.</li>
 <li><strong>Delivery records</strong> - the dead-letter queue, filterable by status and
-  receiver, with <strong>Requeue selected dead deliveries</strong>. Each row shows its
+  receiver - <code>cancelled</code> included, so withdrawn work can be listed on its own -
+  with <strong>Requeue selected dead deliveries</strong>. Each row shows its
   target, and the search covers the receiver key, the target and the last error,
   since the target is what an operator is holding when one destination of a
   fan-out says it never received something.</li>

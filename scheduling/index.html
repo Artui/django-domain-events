@@ -1,0 +1,1292 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A Django domain-event log with in-process fan-out: typed events, a durable outbox, per-receiver retry and dead-letter.">
+      
+      
+      
+        <link rel="canonical" href="https://artui.github.io/django-domain-events/scheduling/">
+      
+      
+        <link rel="prev" href="../delivery/">
+      
+      
+        <link rel="next" href="../scope/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Scheduled reactions - django-domain-events</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#scheduled-reactions" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="django-domain-events" class="md-header__button md-logo" aria-label="django-domain-events" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            django-domain-events
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Scheduled reactions
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/Artui/django-domain-events" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    Artui/django-domain-events
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="django-domain-events" class="md-nav__button md-logo" aria-label="django-domain-events" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    django-domain-events
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/Artui/django-domain-events" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    Artui/django-domain-events
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../declaring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Declaring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../delivery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Delivery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduled reactions
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduled reactions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#declaring-a-due-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Declaring a due time
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Declaring a due time">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-is-refused-at-the-decorator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is refused at the decorator
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#unchanged-by-a-due-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unchanged by a due time
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-the-work-turns-out-to-be-moot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When the work turns out to be moot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cancelling-work-known-to-be-moot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cancelling work known to be moot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-the-work-is-not-due-yet-notyet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When the work is not due yet: NotYet
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="When the work is not due yet: NotYet">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#notyet-or-retryafter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NotYet or RetryAfter?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#replay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Replay
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#in-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#is-it-keeping-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Is it keeping up?
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scope/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scope and attribution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../operations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../retention/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retention
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../introspection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Introspection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#declaring-a-due-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Declaring a due time
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Declaring a due time">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-is-refused-at-the-decorator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is refused at the decorator
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#unchanged-by-a-due-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unchanged by a due time
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-the-work-turns-out-to-be-moot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When the work turns out to be moot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cancelling-work-known-to-be-moot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cancelling work known to be moot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-the-work-is-not-due-yet-notyet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When the work is not due yet: NotYet
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="When the work is not due yet: NotYet">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#notyet-or-retryafter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NotYet or RetryAfter?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#replay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Replay
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#in-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#is-it-keeping-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Is it keeping up?
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/Artui/django-domain-events/edit/main/docs/scheduling.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="scheduled-reactions">Scheduled reactions<a class="headerlink" href="#scheduled-reactions" title="Permanent link">&para;</a></h1>
+<p>"Because this committed, that must happen at a set time afterwards": an offer
+that expires 48 hours after it was made, an invoice reminder a fortnight after
+the invoice, a newsletter sent at the time chosen when it was scheduled. The
+usual answer is a beat job that polls every minute, finds nothing almost every
+time, keeps no record of the work it did and has no retries, dead letters or
+visibility - and two overlapping runs can do the same work twice.</p>
+<p>Here it is a receiver that runs later. <code>due=</code> on the declaration writes the
+delivery row when the event fires, inside the caller's transaction, and the
+relay claims it when it comes due. Everything a delivery already has - attempts,
+backoff, dead letters, replay, health, the admin - applies to it unchanged, from
+its due time on.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">timedelta</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">timezone</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeliveryContext</span><span class="p">,</span> <span class="n">NotYet</span><span class="p">,</span> <span class="n">receiver</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OfferMade</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="s2">"waitlist.send_offer"</span><span class="p">)</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="k">def</span><span class="w"> </span><span class="nf">send_offer</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OfferMade</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">mail_offer</span><span class="p">(</span><span class="n">evt</span><span class="o">.</span><span class="n">offer_id</span><span class="p">)</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OfferMade</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="s2">"waitlist.expire_offer"</span><span class="p">,</span> <span class="n">due</span><span class="o">=</span><span class="n">timedelta</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">48</span><span class="p">),</span> <span class="n">takes_context</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="k">def</span><span class="w"> </span><span class="nf">expire_offer</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OfferMade</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DeliveryContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    <span class="n">offer</span> <span class="o">=</span> <span class="n">Offer</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">pk</span><span class="o">=</span><span class="n">evt</span><span class="o">.</span><span class="n">offer_id</span><span class="p">)</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    <span class="k">if</span> <span class="n">offer</span><span class="o">.</span><span class="n">accepted</span><span class="p">:</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>        <span class="k">return</span>  <span class="c1"># the world moved on: nothing to do, and that is a success</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    <span class="k">if</span> <span class="n">offer</span><span class="o">.</span><span class="n">expires_at</span> <span class="o">&gt;</span> <span class="nb">max</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">due_at</span><span class="p">,</span> <span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">()):</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>        <span class="k">raise</span> <span class="n">NotYet</span><span class="p">(</span><span class="n">offer</span><span class="o">.</span><span class="n">expires_at</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"the offer was extended"</span><span class="p">)</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    <span class="n">offer</span><span class="o">.</span><span class="n">expire</span><span class="p">()</span>
+</span></code></pre></div>
+<p>The time belongs to the receiver rather than to <code>fire()</code> because one event
+drives reactions at different times: the same <code>OfferMade</code> sends the offer now
+and expires it in 48 hours. And it is a receiver rather than a separate
+<code>schedule()</code> call because every delivery row hangs off an event, and the event
+is the record of why the work exists.</p>
+<h2 id="declaring-a-due-time">Declaring a due time<a class="headerlink" href="#declaring-a-due-time" title="Permanent link">&para;</a></h2>
+<p><code>due=</code> takes one of two spellings:</p>
+<table>
+<thead>
+<tr>
+<th>Spelling</th>
+<th>Due at</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A <code>timedelta</code></td>
+<td>That long after the event's <code>occurred_at</code>, the domain's own time</td>
+</tr>
+<tr>
+<td>A callable of the event</td>
+<td>The aware <code>datetime</code> it returns, for a time the event itself names</td>
+</tr>
+</tbody>
+</table>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">NewsletterScheduled</span><span class="p">,</span> <span class="n">due</span><span class="o">=</span><span class="k">lambda</span> <span class="n">evt</span><span class="p">:</span> <span class="n">evt</span><span class="o">.</span><span class="n">send_at</span><span class="p">)</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">send_newsletter</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">NewsletterScheduled</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+</span></code></pre></div>
+<p>The row is written with its <code>available_at</code> and its <code>due_at</code> at the due time, so
+the relay claims it then and not before.</p>
+<p><strong>A due time is never earlier than the row.</strong> One already past - an event fired
+with an old <code>occurred_at</code>, say, in a backfill - is clamped to the moment the row
+is written, the event's <code>recorded_at</code>, and is owed from then. <code>due_at</code> is when a
+row became owed, which cannot be before it existed: without the clamp a
+backfilled event would read as a backlog that old the instant its row was
+written, and a <a href="../delivery/#give_up_after-keeps-every-delivery-ending"><code>give_up_after</code></a>
+measured from it would dead-letter its first deferral.</p>
+<div class="admonition danger">
+<p class="admonition-title">A callable runs inside the caller's transaction</p>
+<p>As a <a href="../declaring/#fan-out-one-delivery-per-target"><code>targets=</code></a> callable
+does: at fire time, beside the event row, seeing the business change's own
+uncommitted rows. <strong>If it raises, or returns anything but an aware
+<code>datetime</code>, <code>fire()</code> raises</strong> and the caller's change rolls back. A naive
+datetime is refused rather than read as UTC or as local time, either of
+which is wrong for somebody by hours. A reaction that silently never
+happened is the failure this package exists to rule out.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">The due time is frozen at fire time</p>
+<p>Like <code>max_attempts</code>, it is resolved once, when the event fires, and written
+onto the row. A deploy that changes the delay reaches the next event, not
+the rows already waiting. A replay resolves it afresh.</p>
+</div>
+<h3 id="what-is-refused-at-the-decorator">What is refused at the decorator<a class="headerlink" href="#what-is-refused-at-the-decorator" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Declared with <code>due=</code></th>
+<th>Refused because</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mode=INLINE</code> or <code>ON_COMMIT</code></td>
+<td>There is no delivery row to wait in</td>
+</tr>
+<tr>
+<td><code>eager=True</code></td>
+<td>An eager attempt runs at commit, and a scheduled delivery is not due then</td>
+</tr>
+<tr>
+<td><code>targets=</code></td>
+<td>A fan-out resolved at fire time would keep that recipient set until the row came due, weeks later, while a replay resolves targets when it runs - one receiver meaning two things</td>
+</tr>
+<tr>
+<td>A zero or negative <code>timedelta</code></td>
+<td>A delay that is not in the future is no schedule</td>
+</tr>
+<tr>
+<td>Anything but a <code>timedelta</code> or a callable</td>
+<td>Refused with <code>TypeError</code>, rather than at the first fire</td>
+</tr>
+</tbody>
+</table>
+<p><strong>A scheduled fan-out is a follow-up event.</strong> Declare the scheduled receiver
+without <code>targets=</code>, and have it fire an event of its own when it runs; a
+receiver of <em>that</em> event declares <code>targets=</code>, which are resolved when the work
+is due rather than when it was scheduled.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">ActivityPlanned</span><span class="p">,</span> <span class="n">due</span><span class="o">=</span><span class="k">lambda</span> <span class="n">evt</span><span class="p">:</span> <span class="n">evt</span><span class="o">.</span><span class="n">starts_at</span> <span class="o">-</span> <span class="n">timedelta</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">1</span><span class="p">))</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">remind_attendees</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">ActivityPlanned</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">fire</span><span class="p">(</span><span class="n">ActivityReminderDue</span><span class="p">(</span><span class="n">activity_id</span><span class="o">=</span><span class="n">evt</span><span class="o">.</span><span class="n">activity_id</span><span class="p">))</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">ActivityReminderDue</span><span class="p">,</span> <span class="n">targets</span><span class="o">=</span><span class="n">attendees_now</span><span class="p">,</span> <span class="n">takes_context</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">remind</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">ActivityReminderDue</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DeliveryContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+</span></code></pre></div>
+<h3 id="unchanged-by-a-due-time">Unchanged by a due time<a class="headerlink" href="#unchanged-by-a-due-time" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>site="task"</code> works as it does for every receiver.</strong> The relay claims the
+  row at its due time and then hands it to the task backend. Nothing relies on
+  a queue's own delayed delivery, so the schedule survives a queue that loses
+  messages and is visible where every other delivery is.</li>
+<li><strong>Attempts, backoff and dead letters start at the due time.</strong> A receiver
+  failing after it came due retries on its curve and dead-letters on its budget,
+  as any other does.</li>
+<li><strong><code>give_up_after</code> measures from the due time</strong>, which is when the row became
+  owed.</li>
+<li><strong>Lanes, leases and <code>on_failure</code></strong> are what the declaration says.</li>
+</ul>
+<h2 id="when-the-work-turns-out-to-be-moot">When the work turns out to be moot<a class="headerlink" href="#when-the-work-turns-out-to-be-moot" title="Permanent link">&para;</a></h2>
+<p>The world moves on between the fire and the due time: the offer was accepted,
+the invoice was paid, the activity was cancelled. There are two cases, and they
+have different answers.</p>
+<p><strong>Found moot when it runs.</strong> The receiver re-reads current state, finds nothing
+to do and <strong>returns, which is an ordinary success</strong>. "Nothing to do" is not a
+different outcome from the relay's point of view - the delivery ran and its work
+is done. This is the case nobody announced, and it is why a scheduled receiver
+always re-checks.</p>
+<p><strong>Known moot ahead of time.</strong> The code that accepts the offer knows the expiry
+is pointless. Waiting for it to run and succeed records a success for work that
+was never done; cancelling it is the answer, below.</p>
+<h2 id="cancelling-work-known-to-be-moot">Cancelling work known to be moot<a class="headerlink" href="#cancelling-work-known-to-be-moot" title="Permanent link">&para;</a></h2>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django.db</span><span class="w"> </span><span class="kn">import</span> <span class="n">transaction</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">cancel_deliveries</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="k">with</span> <span class="n">transaction</span><span class="o">.</span><span class="n">atomic</span><span class="p">():</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">offer</span><span class="o">.</span><span class="n">accept</span><span class="p">()</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="n">cancel_deliveries</span><span class="p">([</span><span class="n">offer</span><span class="o">.</span><span class="n">made_event_id</span><span class="p">],</span> <span class="n">receiver_key</span><span class="o">=</span><span class="s2">"offers.expire_offer"</span><span class="p">)</span>
+</span></code></pre></div>
+<p><a href="../operations/#cancel-owed-work"><code>cancel_deliveries</code></a> settles the event's owed
+rows for that receiver as <code>cancelled</code>, so the relay never claims them, at the due
+time or after it. Inside the transaction it commits with the change that made
+the work moot, or not at all. It returns how many it cancelled and how many it
+could not, as <code>{"cancelled": n, "in_flight": m}</code>.</p>
+<ul>
+<li><strong>A pending row</strong> - still waiting for its due time - is cancelled.</li>
+<li><strong>A failed row</strong> - it came due, failed, and is waiting out its backoff - is
+  cancelled too: "never runs" covers its retries.</li>
+<li><strong>A claimed row is left alone.</strong> A worker holds it and may be running the
+  receiver now. It is counted in <code>in_flight</code>, and the receiver's own re-check is
+  what stops it: cancelling does not replace the re-check, it saves the run.</li>
+</ul>
+<p><code>cancelled</code> is a settled status of its own, distinct from a success (the receiver
+never ran) and from a dead letter (nothing failed). Health does not count it,
+prune treats it as consumed under either retention policy, and
+<a href="#replay">replay</a> reopens it - the way back for work withdrawn by mistake.</p>
+<p>The event id is what <code>fire()</code> returned. Keep it where the work's subject lives -
+a column on the offer - or find it through the event log by name and payload,
+which is a query on the event table rather than on this package.</p>
+<h2 id="when-the-work-is-not-due-yet-notyet">When the work is not due yet: <code>NotYet</code><a class="headerlink" href="#when-the-work-is-not-due-yet-notyet" title="Permanent link">&para;</a></h2>
+<p>The early case is the dangerous one, because it fails silently. An admin extends
+an offer from 48 hours to 72; the 48-hour row runs, finds the offer still open,
+and returns - which succeeds, and leaves nothing that will ever expire the
+offer. Rescheduled activities, extended invoice dates and moved newsletters all
+have the same shape.</p>
+<p><code>NotYet(until, reason="")</code> is the answer. The receiver recomputes the due time
+from current state, compares it with <code>DeliveryContext.due_at</code> - the time the row
+came due with - and raises when the work has moved later:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">if</span> <span class="n">offer</span><span class="o">.</span><span class="n">expires_at</span> <span class="o">&gt;</span> <span class="nb">max</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">due_at</span><span class="p">,</span> <span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">()):</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="k">raise</span> <span class="n">NotYet</span><span class="p">(</span><span class="n">offer</span><span class="o">.</span><span class="n">expires_at</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"the offer was extended"</span><span class="p">)</span>
+</span></code></pre></div>
+<p>The clock term is there because a late run must proceed rather than fail: a
+row that runs after the moved time has nothing left to wait for, and
+<code>NotYet</code> refuses a time already come, so comparing against <code>ctx.due_at</code> alone
+would raise that refusal as an ordinary failure on every retry.</p>
+<p>The relay writes <code>until</code> to the row's <code>available_at</code> and <code>due_at</code> together, sets
+it back to <code>pending</code>, and does nothing else:</p>
+<ul>
+<li><strong>No attempt is spent</strong>, and the next run is handed the same attempt number.
+  <code>max_attempts</code> cannot end it.</li>
+<li><strong>It is not capped</strong> by <code>MAX_RECEIVER_RETRY_DELAY_SECONDS</code> and not bounded by
+  <code>give_up_after</code>. Those exist because a destination's advice about its own
+  readiness cannot be trusted to be sane; this is the application's own
+  declaration of when its work is due, as <code>due=</code> is.</li>
+<li><strong>It is not a failure</strong>: <code>last_error</code> is not written and <code>on_failure</code> is not
+  called.</li>
+<li><strong>It sets nothing else aside.</strong> The rest of the batch is delivered.</li>
+</ul>
+<p>On the next run <code>ctx.due_at</code> is <code>until</code>, so the same comparison now lets the
+work go ahead. A direct <code>deliver_one()</code> reschedules the same way and returns
+<code>PENDING</code>, and refuses a pending row whose time has not come, as it refuses one
+waiting out its backoff.</p>
+<p><code>until</code> must be an aware <code>datetime</code> in the future when the exception is built.
+A naive one is refused, and so is a time already come: spending no attempt, the
+row would be claimed straight back and answered the same way, a loop nothing
+would end. Both are refused where the exception is constructed, so a receiver
+raising either has raised an ordinary <code>TypeError</code> or <code>ValueError</code>, which the
+relay records as an ordinary failure, counted, with that message.</p>
+<p>Only a durable receiver can be rescheduled: <code>NotYet</code> is read by the relay and
+by nothing else. An <code>INLINE</code> receiver raising it fails the caller's transaction
+like any other exception, and an <code>ON_COMMIT</code> one has it logged. <code>NotYet</code> is not
+limited to receivers declared with <code>due=</code>, though: any durable receiver can
+answer "not until then", and its row is scheduled from that moment.</p>
+<div class="admonition tip">
+<p class="admonition-title">Firing an event is still the cleaner reschedule</p>
+<p>Where the application knows the moment a due time moves - the admin action
+extending the offer - firing an event there and reacting to it keeps the
+log honest about why the time changed. <code>NotYet</code> is what keeps the work from
+being lost when that is forgotten, so the package does not depend on every
+change that moves a due time remembering to.</p>
+</div>
+<h3 id="notyet-or-retryafter"><code>NotYet</code> or <code>RetryAfter</code>?<a class="headerlink" href="#notyet-or-retryafter" title="Permanent link">&para;</a></h3>
+<p>They rest on the same machinery and answer different questions.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><code>RetryAfter(seconds)</code></th>
+<th><code>NotYet(until)</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Whose knowledge</td>
+<td>The destination's: "come back in two minutes"</td>
+<td>The application's: "this work is due then"</td>
+</tr>
+<tr>
+<td>Takes</td>
+<td>A delay</td>
+<td>An absolute time</td>
+</tr>
+<tr>
+<td>Spends an attempt</td>
+<td>Yes by default; not with <code>counts=False</code></td>
+<td>Never</td>
+</tr>
+<tr>
+<td>Capped by <code>MAX_RECEIVER_RETRY_DELAY_SECONDS</code></td>
+<td>Yes</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Jittered</td>
+<td>With <code>counts=False</code></td>
+<td>No</td>
+</tr>
+<tr>
+<td>Bounded by <code>give_up_after</code></td>
+<td>With <code>counts=False</code></td>
+<td>No</td>
+</tr>
+<tr>
+<td>Pauses the lane</td>
+<td>With <code>counts=False</code></td>
+<td>No</td>
+</tr>
+<tr>
+<td>Recorded as</td>
+<td><code>failed</code>, with <code>last_error</code>, telling <code>on_failure</code></td>
+<td><code>pending</code>, with neither</td>
+</tr>
+</tbody>
+</table>
+<p>Use <code>RetryAfter</code> when something outside asked you to wait; use <code>NotYet</code> when the
+work itself is not due.</p>
+<h2 id="replay">Replay<a class="headerlink" href="#replay" title="Permanent link">&para;</a></h2>
+<p><a href="../operations/#replay"><code>replay_events</code></a> resolves a scheduled receiver's due time
+again, through the same resolver <code>fire()</code> uses, and writes <strong>the later of that
+and now</strong>. Replay is how a scheduled receiver is adopted - declare the expiry,
+replay the offers made this week - and writing now would expire every open
+offer at once. An offer whose time has already passed is expired by the replay,
+owed from it. A <code>due</code> callable is called again, and raises to the operator on
+the same terms as at fire time.</p>
+<p><code>requeue_dead()</code> makes a row due at once, as it does for every receiver: it only
+touches dead rows, which were due when they died.</p>
+<p>A <a href="#cancelling-work-known-to-be-moot">cancelled</a> row is reopened like any other
+settled one, at the later of its due time and now. <code>requeue_dead()</code> leaves it
+alone.</p>
+<h2 id="in-tests">In tests<a class="headerlink" href="#in-tests" title="Permanent link">&para;</a></h2>
+<p><code>drain_outbox()</code> skips the backoff, and <strong>never skips a schedule</strong>: a row whose
+due time has not come is left alone, so a test that makes an offer does not
+expire it in the same breath. Pass <code>now=</code> to move forward instead:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_an_unanswered_offer_expires</span><span class="p">():</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="n">offer</span> <span class="o">=</span> <span class="n">make_offer</span><span class="p">()</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="n">drain_outbox</span><span class="p">()</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="k">assert</span> <span class="ow">not</span> <span class="n">offer_expired</span><span class="p">(</span><span class="n">offer</span><span class="p">)</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">drain_outbox</span><span class="p">(</span><span class="n">now</span><span class="o">=</span><span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">()</span> <span class="o">+</span> <span class="n">timedelta</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">48</span><span class="p">))</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="k">assert</span> <span class="n">offer_expired</span><span class="p">(</span><span class="n">offer</span><span class="p">)</span>
+</span></code></pre></div>
+<p><code>now=</code> is the moment every claim of the call is made at - what is due, which
+backoff has run out and which lease has lapsed are all read against it.
+<code>deliver_pending(now=)</code> takes the same. <strong>The receiver still runs on the real
+clock</strong>, since its acknowledgement is a fact about when it ran: compare against
+<code>ctx.due_at</code>, with the real clock only as the floor that lets a late row
+proceed (<code>max(ctx.due_at, timezone.now())</code>), and the receiver behaves the same
+under a test's <code>now=</code> as in production, because the rows a test moves forward
+to are due after the real clock.</p>
+<p>Within one call, a row is attempted at most once if its receiver answers
+<code>NotYet</code>, and handed to a <a href="../operations/#handing-delivery-to-a-task-queue">task backend</a>
+at most once if it declares <code>site="task"</code> - a handed-off row is not counted in
+the result, whether the backend runs it there and then or later. The pass keeps
+the row out of its later claims only when it was given a <code>now</code>; on the real
+clock a rescheduled row's time and a handed-off row's lease are ahead of the
+clock when written, so a later claim takes the row again only once that time has
+really come, and nothing is excluded or read back.</p>
+<h2 id="is-it-keeping-up">Is it keeping up?<a class="headerlink" href="#is-it-keeping-up" title="Permanent link">&para;</a></h2>
+<p>A scheduled row is work that has not arrived. <a href="../introspection/#is-the-outbox-keeping-up"><code>outbox_health()</code></a>
+counts it as <strong><code>scheduled</code></strong>, not as <code>owed</code>, and never reads the backlog age from
+it: a reminder due in fourteen days would otherwise trip a five-minute backlog
+alert five minutes after it was written, and hold it open for the fortnight.</p>
+<p>Once it comes due, a row is owed like any other, and its age is measured <strong>from
+its due time</strong> rather than from its event: a reminder failing an hour after it
+came due is an hour behind, not a fortnight. <code>events_status</code> prints the
+<code>scheduled</code> total and a <code>scheduled=</code> figure per receiver beside <code>owed=</code>.</p>
+<p>The catalogue publishes a receiver's due time as <code>due_seconds</code> or
+<code>due_callable</code>, with a line under its table, so a reader sees that a reaction
+runs later. See <a href="../introspection/#the-catalogue">the catalogue</a>.</p>
+<div class="admonition note">
+<p class="admonition-title">A scheduled row holds its event</p>
+<p>A prune deletes only events with no unsettled delivery, so a row due in six
+weeks keeps its event for six weeks, whatever the event's
+<a href="../retention/">retention</a>. The work is owed, so that is the right answer;
+the event goes at the first prune after its last delivery settles.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">A scheduled receiver can look quiet</p>
+<p><a href="../introspection/#quiet-receivers"><code>quiet_receivers()</code></a> reports a receiver
+with no success inside its window, and a scheduled receiver has none on days
+nothing came due. Choose <code>within</code> for it from its schedule.</p>
+</div>
+<p>Nothing wakes the relay at a due time: an idle relay finds the row on its next
+poll, so within <code>POLL_SECONDS</code> of it. The <code>NOTIFY</code> a <code>fire()</code> sends on commit
+wakes the relay when the row is written, and it finds nothing due yet.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "search.highlight", "search.suggest", "content.code.copy", "content.code.annotate", "content.action.edit", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

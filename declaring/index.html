@@ -486,6 +486,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../scheduling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduled reactions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../scope/" class="md-nav__link">
         
   
@@ -899,12 +926,19 @@ orphaned.</p>
 <td><code>None</code></td>
 <td>A <code>timedelta</code>: how long a row may stay owed while it <a href="../delivery/#a-deferral-that-spends-no-attempt">defers without counting</a>.</td>
 </tr>
+<tr>
+<td><code>due</code></td>
+<td><code>None</code></td>
+<td>A <code>timedelta</code> after the event occurred, or a callable of the event returning an aware <code>datetime</code>: when the delivery runs. See <a href="../scheduling/">scheduled reactions</a>.</td>
+</tr>
 </tbody>
 </table>
 <p><code>max_attempts</code>, <code>eager</code>, <code>site="task"</code>, <code>lease_seconds</code>, <code>targets</code>, the two
-backoff knobs, <code>lane</code> and <code>give_up_after</code> each describe a delivery row, so a
-receiver declaring any of them with <code>mode=INLINE</code> or <code>ON_COMMIT</code> is refused at
-the decorator: it has no row to retry, lease, fan out or claim.</p>
+backoff knobs, <code>lane</code>, <code>give_up_after</code> and <code>due</code> each describe a delivery row, so
+a receiver declaring any of them with <code>mode=INLINE</code> or <code>ON_COMMIT</code> is refused at
+the decorator: it has no row to retry, lease, fan out, schedule or claim. <code>due</code>
+is also refused beside <code>eager=True</code> and beside <code>targets</code>; see
+<a href="../scheduling/#what-is-refused-at-the-decorator">what is refused</a>.</p>
 <p><code>give_up_after</code> must be a positive <code>timedelta</code>; a bare number is refused,
 because it has no unit. It is what ends a delivery whose receiver raises
 <code>RetryAfter(seconds, counts=False)</code>, which spends no attempt: once the row has
@@ -924,6 +958,12 @@ receiver that keeps its own record and wants to join it to the outbox's - an
 email log storing the provider's message id beside the delivery that sent it,
 say. It is <code>None</code> wherever no row exists: in the context a <code>targets=</code> callable
 receives at fire time, and for <code>INLINE</code> and <code>ON_COMMIT</code> receivers.</p>
+<p><code>ctx.due_at</code> is when the delivery became due: for a receiver declared with
+<code>due=</code>, the due time its row was written with - what a scheduled receiver
+compares against before answering an early run with
+<a href="../scheduling/#when-the-work-is-not-due-yet-notyet"><code>NotYet</code></a>. For any other
+row it is when the row became owed, the moment a replay or requeue reopened it
+or else when its event was recorded, and it is <code>None</code> wherever <code>delivery_id</code> is.</p>
 <div class="admonition note">
 <p class="admonition-title">A long receiver needs <code>lease_seconds</code>, not a heartbeat</p>
 <p>A receiver still working when its lease lapses has its row taken by another
@@ -934,9 +974,11 @@ Declare the lease it needs and the relay publishes it before the receiver
 starts.</p>
 </div>
 <div class="admonition note">
-<p class="admonition-title"><code>max_attempts</code> is frozen at fire time</p>
-<p>It is copied onto the delivery row when the event is fired, so lowering it
-later cannot retroactively dead-letter rows already in flight.</p>
+<p class="admonition-title"><code>max_attempts</code> and <code>due</code> are frozen at fire time</p>
+<p><code>max_attempts</code> is copied onto the delivery row when the event is fired, so
+lowering it later cannot retroactively dead-letter rows already in flight.
+<code>due</code> is resolved then too and written as the row's due time, so a deploy
+changing the delay reaches the next event and not the rows already waiting.</p>
 </div>
 <div class="admonition note">
 <p class="admonition-title">The curve, the lane and the bound are read live</p>
