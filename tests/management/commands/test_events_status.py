@@ -40,7 +40,7 @@ def test_it_names_the_receivers_that_are_behind(order: OrderPlaced, record: list
         fire(order)
     output = _run()
     assert "owed          2" in output
-    assert "testapp.durable_receiver\towed=1\tdead=0\toldest=" in output
+    assert "testapp.durable_receiver\towed=1\tdead=0\tscheduled=0\toldest=" in output
 
 
 def test_the_oldest_owed_is_reported_as_an_age(order: OrderPlaced, record: list[str]) -> None:
@@ -81,3 +81,33 @@ def test_json_is_parseable_and_carries_the_same_numbers(
 
 def test_json_reports_a_null_age_on_an_empty_outbox() -> None:
     assert json.loads(_run("--format", "json"))["oldest_owed_age_seconds"] is None
+
+
+def _schedule_one(key: str) -> None:
+    due = datetime.now(timezone.utc) + timedelta(days=14)
+    DeliveryRecord.objects.filter(receiver_key=key).update(available_at=due, due_at=due)
+
+
+def test_scheduled_work_is_reported_apart_from_what_is_owed(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The command is what CI and an operator read, so the split ``outbox_health``
+    makes has to reach it: a row due in a fortnight is neither owed nor aging."""
+    with transaction.atomic():
+        fire(order)
+    _schedule_one("testapp.durable_receiver")
+    output = _run()
+    assert "owed          1" in output
+    assert "scheduled     1" in output
+    assert "testapp.durable_receiver\towed=0\tdead=0\tscheduled=1\toldest=-" in output
+
+
+def test_json_carries_the_scheduled_counts(order: OrderPlaced, record: list[str]) -> None:
+    with transaction.atomic():
+        fire(order)
+    _schedule_one("testapp.durable_receiver")
+    parsed = json.loads(_run("--format", "json"))
+    assert (parsed["owed"], parsed["scheduled"]) == (1, 1)
+    by_key = {r["key"]: r for r in parsed["receivers"]}
+    assert by_key["testapp.durable_receiver"]["scheduled"] == 1
+    assert by_key["testapp.with_context"]["scheduled"] == 0

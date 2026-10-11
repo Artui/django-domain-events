@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 
@@ -45,3 +46,16 @@ class DeliveryContext:
     time, which is what decides the rows, and the one INLINE and ON_COMMIT
     receivers receive, which never have one. Optional and last for the same
     reason as ``target``."""
+
+    due_at: datetime | None = None
+    """When this delivery became due.
+
+    For a receiver declared with ``due=``, the due time its row was written
+    with - which is what a scheduled receiver compares against: recompute the
+    due time from current state, and if it has moved later since the row was
+    written (the offer was extended), answer with ``NotYet`` rather than doing
+    the work early. For any other row, when it became owed: the moment a
+    replay or requeue reopened it, or else when its event was recorded.
+
+    None where no row exists, as for ``delivery_id``. Optional and last for the
+    same reason as ``target``."""

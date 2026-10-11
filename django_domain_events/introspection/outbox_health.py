@@ -3,11 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from django.db import models
+from django.db.models.functions import Coalesce
 
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.outbox_health import OutboxHealth
 from django_domain_events.types.receiver_backlog import ReceiverBacklog
-from django_domain_events.utils import owed
+from django_domain_events.utils import not_yet_due, owed
 
 
 def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
@@ -19,10 +20,14 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
     receiver quiet and a backlog climbing, while a single wedged receiver has a
     backlog and everything else fine.
 
-    Owed means "not terminal", which is what the prune settles by and a
-    superset of what the relay can claim right now - a row inside its backoff
-    window is owed and not yet claimable. The superset is the useful side: this
-    cannot report an empty queue while work is still outstanding.
+    Owed means "not terminal and due", and a superset of what the relay can
+    claim right now - a row inside its backoff window is owed and not yet
+    claimable. The superset is the useful side: this cannot report an empty
+    queue while work is still outstanding. A row whose due time is still ahead
+    of ``now`` is not outstanding yet, so it is counted as ``scheduled``
+    instead, and is never what the backlog age is read from: a receiver
+    declared with ``due=`` fourteen days out would otherwise hold a five-minute
+    alert open for the fortnight.
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
 
@@ -32,14 +37,28 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
     # terminal" means the same rows but implies none of the owed or dead
     # conditions, so it read the whole delivered history on every scrape. See
     # ``owed`` for what holds the list of owed statuses complete.
+    #
+    # The split between due and scheduled is a filter on the aggregates, never
+    # on the WHERE clause, so the queries and the indexes that serve them are
+    # the ones they were before scheduling existed
+    # (test_no_query_outbox_health_sends_scans_the_delivery_table). Counting
+    # the scheduled rows costs reading them, through the owed index that holds
+    # them anyway.
     is_owed = owed()
     is_dead = models.Q(status=DeliveryStatus.DEAD)
+    waiting = not_yet_due(moment)
+    # The negation keeps NULL due_at, which is every row nobody scheduled.
+    due = ~waiting
+    # When a row became owed: its due time where it has one, and its event's
+    # recording otherwise, as give_up_after reads it.
+    owed_since = Coalesce("due_at", "event__recorded_at")
     owed_rows = DeliveryRecord.objects.filter(is_owed)
 
     totals = owed_rows.aggregate(
-        owed=models.Count("pk"),
+        owed=models.Count("pk", filter=due),
+        scheduled=models.Count("pk", filter=waiting),
         claimed=models.Count("pk", filter=models.Q(status=DeliveryStatus.CLAIMED)),
-        oldest=models.Min("event__recorded_at"),
+        oldest=models.Min(owed_since, filter=due),
         lapsed=models.Count(
             "pk",
             filter=models.Q(status=DeliveryStatus.CLAIMED, lease_expires_at__lt=moment),
@@ -54,9 +73,10 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
         DeliveryRecord.objects.filter(is_dead | is_owed)
         .values("receiver_key")
         .annotate(
-            owed=models.Count("pk", filter=is_owed),
+            owed=models.Count("pk", filter=is_owed & due),
             dead=models.Count("pk", filter=is_dead),
-            oldest=models.Min("event__recorded_at", filter=is_owed),
+            scheduled=models.Count("pk", filter=is_owed & waiting),
+            oldest=models.Min(owed_since, filter=is_owed & due),
         )
     )
     backlogs = [
@@ -65,9 +85,12 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
             owed=row["owed"],
             dead=row["dead"],
             oldest_owed_at=row["oldest"],
+            scheduled=row["scheduled"],
         )
         for row in per_receiver
     ]
+    # Scheduled work is not a backlog, so it does not rank: a receiver with
+    # only scheduled rows sorts after every receiver that is behind.
     backlogs.sort(key=lambda b: (-b.owed, -b.dead, b.key))
 
     return OutboxHealth(
@@ -77,4 +100,5 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
         oldest_owed_at=totals["oldest"],
         lapsed_leases=totals["lapsed"],
         receivers=tuple(backlogs),
+        scheduled=totals["scheduled"],
     )

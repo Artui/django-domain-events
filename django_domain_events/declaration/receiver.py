@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Literal, TypeVar, overload
 
 from django_domain_events.declaration.registry import registry
@@ -16,6 +16,7 @@ E = TypeVar("E")
 Plain = Callable[[E], None]
 WithContext = Callable[[E, DeliveryContext], None]
 Targets = Callable[[E, DeliveryContext], Iterable[str]]
+Due = Callable[[E], datetime]
 
 
 @overload
@@ -35,6 +36,7 @@ def receiver(
     backoff_cap_seconds: float | None = None,
     lane: str = DEFAULT_LANE,
     give_up_after: timedelta | None = None,
+    due: timedelta | Due[E] | None = None,
 ) -> Callable[[Plain[E]], Plain[E]]: ...
 @overload
 def receiver(
@@ -53,6 +55,7 @@ def receiver(
     backoff_cap_seconds: float | None = None,
     lane: str = DEFAULT_LANE,
     give_up_after: timedelta | None = None,
+    due: timedelta | Due[E] | None = None,
 ) -> Callable[[WithContext[E]], WithContext[E]]: ...
 def receiver(
     event_class: type[E],
@@ -70,6 +73,7 @@ def receiver(
     backoff_cap_seconds: float | None = None,
     lane: str = DEFAULT_LANE,
     give_up_after: timedelta | None = None,
+    due: timedelta | Due[E] | None = None,
 ) -> Callable[[Callable[..., None]], Callable[..., None]]:
     """Register a callable to receive one event type, or every event.
 
@@ -179,6 +183,38 @@ def receiver(
     every delivery still ends. It bounds deferrals alone: an ordinary failure
     or a counting ``RetryAfter`` is still ended by ``max_attempts``, however
     long the row has been owed.
+
+    ``due`` makes the receiver a **scheduled reaction**: its delivery of an
+    event is written now and runs later. A ``timedelta`` counts from the
+    event's ``occurred_at``, the domain's own time; a callable is handed the
+    event and returns an aware datetime, for a time the event itself names.
+    The time belongs to the receiver rather than to ``fire()`` because one
+    event drives reactions at different times - send the offer now, expire it
+    in 48 hours.
+
+    **The callable runs inside the caller's transaction, at fire time**, as a
+    ``targets`` callable does, and **if it raises, or returns anything but an
+    aware datetime, ``fire()`` raises**: a reaction that silently never
+    happened is the failure this package exists to rule out. A naive datetime
+    is refused rather than read as UTC or as local time, either of which is
+    wrong for somebody by hours. A due time already past - an event fired with
+    an old ``occurred_at`` - is due as soon as the row is written, and owed
+    from then.
+
+    The row is written with its ``available_at`` and its ``due_at`` at the due
+    time, so the relay claims it then and not before; ``DeliveryContext.due_at``
+    hands the time to the receiver, so it can recompute the due time from
+    current state and answer an early run with ``NotYet``. Everything else
+    about the delivery is unchanged - attempts, backoff, dead letters,
+    ``site="task"``, lanes - and starts at the due time. ``replay_events``
+    resolves it again and writes the later of then and now.
+
+    Refused beside a non-durable mode, which has no row to wait in; beside
+    ``eager=True``, which means "attempt it at commit"; and beside
+    ``targets``, because a fan-out resolved at fire time would keep that
+    recipient set until the delivery came due while a replay resolves it when
+    it runs. A scheduled receiver that needs a fan-out fires a follow-up event
+    whose ``targets`` resolve when it is due.
     """
 
     if site not in ("relay", "task"):
@@ -243,6 +279,43 @@ def receiver(
         # would reach the comparison and raise TypeError; the sign -
         # test_a_give_up_after_that_is_not_in_the_future_is_refused.
         raise ValueError(f"give_up_after must be a positive timedelta, got {give_up_after!r}")
+    if due is not None and not (isinstance(due, timedelta) or callable(due)):
+        # Refused here rather than at the first fire, as targets= is. One arc:
+        # ``is not None`` - every receiver declaring none, so without it the
+        # suite cannot start; each half of the type - the two cases of
+        # test_a_due_time_is_recorded_on_the_registration, one refused without
+        # each. test_a_due_that_is_neither_a_delay_nor_a_callable_is_refused
+        # holds the guard itself.
+        raise TypeError(
+            f"due must be a timedelta or a callable of the event returning a datetime, "
+            f"got {type(due).__name__}"
+        )
+    if isinstance(due, timedelta) and due <= timedelta(0):
+        # The type conjunct is held by the callable case of
+        # test_a_due_time_is_recorded_on_the_registration, which would reach
+        # the comparison and raise TypeError; the sign by its delay case.
+        raise ValueError(f"due must be a positive timedelta, got {due!r}")
+    if due is not None and eager:
+        # eager means "attempt it at commit, here", which a reaction due later
+        # cannot honour, and the eager claim would refuse the row anyway. One
+        # arc: ``is not None`` is held by every eager receiver the test app
+        # declares, eager by test_a_due_time_is_recorded_on_the_registration.
+        raise ValueError(
+            "due= cannot be combined with eager=True: an eager attempt runs at commit, "
+            "and a scheduled delivery is not due then."
+        )
+    if due is not None and targets is not None:
+        # A fan-out resolved at fire time would keep that recipient set until
+        # the row came due, weeks later, while replay_events resolves targets
+        # when it runs, so one receiver would mean two different things. One
+        # arc: ``is not None`` on due is held by every fan-out test in
+        # tests/delivery/test_fire.py, the targets half by
+        # test_a_due_time_is_recorded_on_the_registration.
+        raise ValueError(
+            "due= cannot be combined with targets=: a fan-out resolved when the event "
+            "fires would keep that recipient set until the delivery comes due. Fire a "
+            "follow-up event when it is due, and fan that out instead."
+        )
     if mode is not DeliveryMode.DURABLE:
         # Same reasoning as site=, applied to the rest of the row-shaped knobs.
         # Accepting them would let a declaration state a retry budget, an eager
@@ -258,13 +331,14 @@ def receiver(
             ("backoff_cap_seconds", backoff_cap_seconds, None),
             ("lane", lane, DEFAULT_LANE),
             ("give_up_after", give_up_after, None),
+            ("due", due, None),
         ):
             if value != default:
                 raise ValueError(
                     f"{name}={value!r} needs mode=DURABLE; a {mode.name} receiver "
                     f"has no delivery row, so it is never retried, never attempted "
-                    f"a second time, never leased, never fanned out and never "
-                    f"claimed by a relay."
+                    f"a second time, never leased, never fanned out, never "
+                    f"scheduled and never claimed by a relay."
                 )
 
     def decorate(func: Callable[..., None]) -> Callable[..., None]:
@@ -285,6 +359,7 @@ def receiver(
                 backoff_cap_seconds=backoff_cap_seconds,
                 lane=lane,
                 give_up_after=give_up_after,
+                due=due,
             )
         )
         return func

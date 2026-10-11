@@ -701,6 +701,22 @@ def test_a_failed_row_that_is_due_still_runs(order: OrderPlaced, record: list[st
     assert record == ["durable:7"]
 
 
+def test_a_pending_row_not_yet_due_is_not_run(order: OrderPlaced, record: list[str]) -> None:
+    """A scheduled row is PENDING with its ``available_at`` at the due time, and
+    running it early on a direct call is the expiry that lands while the offer
+    is still open. Holds PENDING's membership of the backoff check, beside
+    ``test_a_failed_row_not_yet_due_is_not_run`` holding FAILED's."""
+    _fire(order)
+    due = datetime.now(timezone.utc) + timedelta(hours=48)
+    delivery_id = _set("testapp.durable_receiver", available_at=due, due_at=due)
+    record.clear()
+
+    assert deliver_one(delivery_id) is None
+
+    assert record == []
+    assert _delivery("testapp.durable_receiver").status == DeliveryStatus.PENDING
+
+
 def test_half_a_claim_takes_nothing(order: OrderPlaced, record: list[str]) -> None:
     """Either half of a claim on its own still triggers the take, and the take
     cannot match a row with a missing half. Without that, a backend that dropped

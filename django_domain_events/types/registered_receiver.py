@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from django_domain_events.types.delivery_context import DeliveryContext
@@ -74,3 +74,13 @@ class RegisteredReceiver:
     next deferral dead-letters it. None means a deferral that does not count is
     counted after all, because nothing else would end the delivery. Read live,
     like the curve."""
+
+    due: timedelta | Callable[[Any], datetime] | None = None
+    """When this receiver's delivery of an event comes due, or None for at once.
+
+    A ``timedelta`` counts from the event's ``occurred_at``; a callable is
+    handed the event and returns an aware datetime. Resolved at fire time,
+    inside the caller's transaction, and written onto the row as both its
+    ``available_at`` and its ``due_at`` - never read again from here, so a
+    deploy changing the delay reaches the next event, not the rows already
+    waiting. ``replay_events`` resolves it afresh."""

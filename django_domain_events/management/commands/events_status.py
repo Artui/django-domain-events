@@ -24,6 +24,7 @@ class Command(BaseCommand):
                 json.dumps(
                     {
                         "owed": health.owed,
+                        "scheduled": health.scheduled,
                         "claimed": health.claimed,
                         "dead": health.dead,
                         "lapsed_leases": health.lapsed_leases,
@@ -33,6 +34,7 @@ class Command(BaseCommand):
                                 "key": r.key,
                                 "owed": r.owed,
                                 "dead": r.dead,
+                                "scheduled": r.scheduled,
                                 "oldest_owed_age_seconds": _age(r.oldest_owed_at),
                             }
                             for r in health.receivers
@@ -44,6 +46,7 @@ class Command(BaseCommand):
             return
 
         self.stdout.write(f"owed          {health.owed}")
+        self.stdout.write(f"scheduled     {health.scheduled}")
         self.stdout.write(f"claimed       {health.claimed}")
         self.stdout.write(f"dead          {health.dead}")
         self.stdout.write(f"lapsed leases {health.lapsed_leases}")
@@ -56,7 +59,7 @@ class Command(BaseCommand):
             oldest = _age(entry.oldest_owed_at)
             self.stdout.write(
                 f"  {entry.key}\towed={entry.owed}\tdead={entry.dead}"
-                f"\toldest={'-' if oldest is None else f'{oldest}s'}"
+                f"\tscheduled={entry.scheduled}\toldest={'-' if oldest is None else f'{oldest}s'}"
             )
 
 

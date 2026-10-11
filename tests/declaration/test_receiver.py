@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -269,3 +269,79 @@ def test_give_up_after_is_refused_without_a_row() -> None:
             key="tests.bad_bound",
             give_up_after=timedelta(hours=1),
         )
+
+
+def _when(evt: OrderPlaced) -> datetime:
+    return evt.placed_at
+
+
+@pytest.mark.parametrize("due", [timedelta(hours=48), _when])
+def test_a_due_time_is_recorded_on_the_registration(due: object) -> None:
+    """Both spellings are accepted, which is what holds each half of the type
+    check: without ``isinstance(due, timedelta)`` the delay is refused, and
+    without ``callable(due)`` the callable is; without the sign check's own
+    ``isinstance`` the callable reaches a comparison with a timedelta and
+    raises TypeError."""
+
+    @receiver(OrderPlaced, key="tests.scheduled", due=due)
+    def handler(evt: OrderPlaced) -> None: ...
+
+    try:
+        assert registry.receiver_for_key("tests.scheduled").due is due
+        assert registry.receiver_for_key("testapp.durable_receiver").due is None
+    finally:
+        registry._receivers.pop("tests.scheduled", None)
+
+
+@pytest.mark.parametrize("due", [3600, "48h", datetime(2026, 10, 1, tzinfo=timezone.utc)])
+def test_a_due_that_is_neither_a_delay_nor_a_callable_is_refused(due: object) -> None:
+    """A bare number has no unit, and a fixed datetime would be one moment for
+    every event the receiver is ever owed."""
+    with pytest.raises(TypeError, match="due must be a timedelta or a callable"):
+        receiver(OrderPlaced, key="tests.bad_due", due=due)
+    assert registry.receiver_for_key("tests.bad_due") is None
+
+
+@pytest.mark.parametrize("due", [timedelta(0), timedelta(hours=-1)])
+def test_a_delay_that_is_not_in_the_future_is_refused(due: timedelta) -> None:
+    """A delay of zero or less is a receiver that is not scheduled, declared in a
+    way that reads as though it were."""
+    with pytest.raises(ValueError, match="due must be a positive timedelta"):
+        receiver(OrderPlaced, key="tests.no_delay", due=due)
+
+
+def test_a_due_time_is_refused_without_a_row() -> None:
+    """A scheduled reaction is a delivery row waiting for its time, so a receiver
+    with no row has nothing to wait in."""
+    with pytest.raises(ValueError, match="due=.* needs mode=DURABLE"):
+        receiver(OrderPlaced, mode=DeliveryMode.ON_COMMIT, key="tests.inline_due", due=timedelta(1))
+
+
+def test_a_due_time_is_refused_beside_eager() -> None:
+    """``eager`` means "attempt it at commit, here", which a reaction due in two
+    days cannot honour."""
+    with pytest.raises(ValueError, match="due= cannot be combined with eager=True"):
+        receiver(OrderPlaced, key="tests.eager_due", eager=True, due=timedelta(hours=1))
+
+
+def test_a_due_time_is_refused_beside_targets() -> None:
+    """A fan-out resolved at fire time would keep that recipient set for weeks,
+    while a replay resolves targets when it runs, so one receiver would mean two
+    things."""
+    with pytest.raises(ValueError, match="due= cannot be combined with targets="):
+        receiver(
+            OrderPlaced, key="tests.fan_due", targets=lambda e, c: ["a"], due=timedelta(hours=1)
+        )
+
+
+def test_a_due_time_runs_through_a_task_as_through_the_relay() -> None:
+    """``site="task"`` is accepted: the relay claims the row at its due time and
+    hands it over then, relying on no queue's own delayed delivery."""
+
+    @receiver(OrderPlaced, key="tests.task_due", site="task", due=timedelta(hours=1))
+    def handler(evt: OrderPlaced) -> None: ...
+
+    try:
+        assert registry.receiver_for_key("tests.task_due").site == "task"
+    finally:
+        registry._receivers.pop("tests.task_due", None)

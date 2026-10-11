@@ -24,7 +24,7 @@ from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
-from django_domain_events.utils import TERMINAL, decode_payload, parse_datetime
+from django_domain_events.utils import RETRYABLE, TERMINAL, decode_payload, parse_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +178,8 @@ def _deliver_one(
         scope=delivery.event.scope,
         target=delivery.target,
         delivery_id=delivery.pk,
+        # NULL read as the event's recorded_at, as give_up_after reads it.
+        due_at=delivery.due_at if delivery.due_at is not None else delivery.event.recorded_at,
     )
     try:
         with (
@@ -242,13 +244,19 @@ def _owed(delivery: Any, now: datetime) -> bool:
     ``test_a_failed_row_claimed_early_on_purpose_still_runs`` its status half
     against one that reads ``available_at`` alone.
 
-    PENDING is owed whatever its ``available_at``, and a CLAIMED row is the
-    claimer's to run: ``deliver_pending(ignore_backoff=True)`` claims a FAILED
-    row early on purpose, and the claim is what makes that row CLAIMED.
+    PENDING is held to its ``available_at`` as FAILED is, because a PENDING row
+    is the one a receiver declared with ``due=`` writes, with its
+    ``available_at`` at the due time
+    (``test_a_pending_row_not_yet_due_is_not_run`` holds PENDING's membership,
+    which coverage cannot see). Every other PENDING row is available from the
+    moment it was written. A CLAIMED row is the claimer's to run:
+    ``deliver_pending(ignore_backoff=True)`` claims a FAILED row early on
+    purpose, and ``drain_outbox(now=...)`` a scheduled one, and the claim is
+    what makes that row CLAIMED.
     """
     if delivery.status in TERMINAL:
         return False
-    return not (delivery.status == DeliveryStatus.FAILED and delivery.available_at > now)
+    return not (delivery.status in RETRYABLE and delivery.available_at > now)
 
 
 def _take(delivery_id: int, claimed_by: str | None, claimed_at: str | None, worker_id: str) -> bool:
@@ -637,6 +645,7 @@ def deliver_pending(
     ignore_backoff: bool = False,
     lane: str | None = None,
     batch_size: int | None = None,
+    now: datetime | None = None,
 ) -> dict[DeliveryStatus, int]:
     """Claim and deliver what is owed, and report the outcome.
 
@@ -663,6 +672,13 @@ def deliver_pending(
     handed back rather than attempted, and later claims leave the lane out,
     while every other lane goes on being delivered
     (``test_a_deferral_sets_its_lane_aside_and_the_pass_delivers_the_rest``).
+
+    ``now`` is the moment every claim of the call is made at, in place of the
+    clock: what is due, which backoff has run out and which lease has lapsed
+    are all read against it. It is how ``drain_outbox(now=...)`` moves a test
+    forward to a receiver's due time. Only the claims read it; the attempt
+    itself runs and is recorded on the real clock, since a receiver's
+    acknowledgement is a fact about when it ran.
     """
     if limit is not None and batch_size is not None:
         raise ValueError(
@@ -682,7 +698,7 @@ def deliver_pending(
     paused: set[str] = set()
     deferred: list[str] = []
     while True:
-        claimed_at = datetime.now(timezone.utc)
+        claimed_at = now if now is not None else datetime.now(timezone.utc)
         ids = claim_batch(
             worker_id=worker_id,
             now=claimed_at,
