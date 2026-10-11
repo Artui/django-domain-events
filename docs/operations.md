@@ -339,6 +339,19 @@ blast radius, and reading it as "no limit" would give them the largest one.
 
 ## Cancel owed work
 
+```bash
+python manage.py cancel_deliveries 41 42
+python manage.py cancel_deliveries 41 --receiver offers.expire_offer
+```
+
+The command prints `cancelled: n, in_flight: m` and refuses a call naming no
+events, as `replay_events` does: the smallest command an operator can type is not
+the widest. It takes **one receiver per call**, as the function does, and refuses
+a second `--receiver` rather than keeping the last: `replay_events` repeats the
+flag and uses every value, and a habit carried over from it would otherwise leave
+the dropped receivers' work owed. From Python, which is where the transactional
+case lives:
+
 ```python
 from django_domain_events import cancel_deliveries
 
@@ -384,7 +397,10 @@ What else reads it:
   [retention](retention.md#the-three-forms).
 - **[Replay](#replay)** reopens it like any other settled row - the way back for
   work withdrawn by mistake. `requeue_dead()` does not touch it.
-- **The admin** lists it under its own status filter.
+- **The admin** lists it under its own status filter, and cancels from both
+  changelists: [Cancel selected deliveries](introspection.md#the-admin) withdraws
+  exactly the rows picked, and the event changelist's action every owed row of the
+  events picked.
 
 On Postgres each batch locks its events first, in primary key order, as replay,
 requeue and the prune do. A cancel issued while a replay of the same event is open

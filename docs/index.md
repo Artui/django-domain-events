@@ -100,8 +100,8 @@ python manage.py deliver_events
   moot before it runs.
 - [Scope and attribution](scope.md) - `attributed()`, `suppressed()`, causation
   chains, and the one rule that matters for threads.
-- [Operations](operations.md) - prune, replay, requeue, and running the relay
-  for a year without a DBA.
+- [Operations](operations.md) - prune, replay, requeue, cancel, and running the
+  relay for a year without a DBA.
 - [Introspection](introspection.md) - the catalogue, the queries, the system
   checks and the admin.
 - [Settings](settings.md) - every key, its default and what it costs.

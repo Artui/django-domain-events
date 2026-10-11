@@ -109,6 +109,7 @@ In tests, `drain_outbox()` runs the real delivery path to completion, and
 python manage.py prune_events                 # delete settled events past their retention
 python manage.py replay_events 41 42          # make those events owed again
 python manage.py requeue_dead --receiver k    # give dead deliveries their budget back
+python manage.py cancel_deliveries 41         # withdraw what those events are still owed
 ```
 
 Pruning only removes *settled* events: one with a delivery still owed is kept,
