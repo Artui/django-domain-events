@@ -1218,3 +1218,29 @@ def test_a_task_that_failed_inside_the_hand_off_is_retried_within_the_drain(sett
     row = _delivery("probe.task_site")
     assert (row.status, row.attempts, len(_ENQUEUED)) == (DeliveryStatus.DEAD, 2, 2)
     assert counts == {}
+
+
+def test_give_up_after_measures_a_scheduled_row_from_its_due_time(order: OrderPlaced) -> None:
+    """A scheduled row became owed at its due time, not when its event was
+    recorded, so a receiver deferring right after it came due is not
+    dead-lettered for the days it spent waiting for it. Three days scheduled
+    against a one-day bound: read from the event, the first deferral would end
+    it."""
+    entry = dataclasses.replace(_throttled_mail([]), due=timedelta(days=3))
+    with receiver_registered(entry):
+        _fire(order)
+        # Three days on: the event was recorded then, and the row came due a
+        # minute ago.
+        back = timedelta(days=3, minutes=1)
+        row = _delivery("tests.throttled")
+        EventRecord.objects.filter(pk=row.event.pk).update(
+            recorded_at=row.event.recorded_at - timedelta(days=3)
+        )
+        DeliveryRecord.objects.filter(pk=row.pk).update(
+            available_at=row.available_at - back, due_at=row.due_at - back
+        )
+
+        deliver_pending(worker_id="w1")
+
+    row = _delivery("tests.throttled")
+    assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 0)
