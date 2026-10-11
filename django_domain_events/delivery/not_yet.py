@@ -53,8 +53,12 @@ class NotYet(Exception):
     that class switching each of them off would be more to learn than a class
     with one behaviour.
 
-    Only a durable receiver can be rescheduled. An ``INLINE`` or ``ON_COMMIT``
-    receiver raising it raises an ordinary exception into its caller.
+    Only a durable receiver can be rescheduled: the relay reads it and nothing
+    else does. An ``INLINE`` receiver raising it fails the caller's transaction
+    like any other exception
+    (``test_an_inline_receiver_raising_it_fails_the_callers_change``), and an
+    ``ON_COMMIT`` one has it logged
+    (``test_an_on_commit_receiver_raising_it_has_it_logged``).
     """
 
     def __init__(self, until: datetime, reason: str = "") -> None:

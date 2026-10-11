@@ -1244,3 +1244,19 @@ def test_give_up_after_measures_a_scheduled_row_from_its_due_time(order: OrderPl
 
     row = _delivery("tests.throttled")
     assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 0)
+
+
+def test_a_row_delivered_in_place_is_never_read_back(
+    order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a row that came back with no outcome - one handed to a task backend
+    - is read back to see whether the pass is done with it. A row run in place
+    reports its outcome, so reading it again would be a query per row for
+    nothing."""
+    read_back: list[int] = []
+    monkeypatch.setattr(deliver_module, "_left_unfinished", read_back.append)
+    _fire(order)
+
+    deliver_pending(worker_id="w1")
+
+    assert read_back == []

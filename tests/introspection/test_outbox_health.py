@@ -339,3 +339,21 @@ def test_no_query_outbox_health_sends_scans_the_delivery_table(
     # rows serves the per-receiver split too, in one scan where the three
     # above take a bitmap OR; it holds no succeeded row either.
     assert access[2] in (owed | dead, {"dde_unfinished_by_event"}), plans
+
+
+def test_a_receiver_with_only_scheduled_work_sorts_after_one_that_is_behind(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Whatever the keys: here the scheduled receiver's key sorts first, so
+    only ranking by what is owed puts it last."""
+    with transaction.atomic():
+        fire(order)
+    DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").update(
+        available_at=datetime.now(timezone.utc) + timedelta(days=1),
+        due_at=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+
+    assert [(e.key, e.owed, e.scheduled) for e in outbox_health().receivers] == [
+        ("testapp.with_context", 1, 0),
+        ("testapp.durable_receiver", 0, 1),
+    ]

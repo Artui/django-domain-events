@@ -798,9 +798,10 @@ def deliver_pending(
                 set_aside.add(delivery_id)
             elif outcome is None and _left_unfinished(delivery_id):
                 # Read back only where no outcome came back, so a row run in
-                # place costs the pass no query: ``outcome is None`` is that
-                # economy and nothing else, since a row run in place is never
-                # left CLAIMED or PENDING without saying so.
+                # place costs the pass no query. ``outcome is None`` changes no
+                # result - a row run in place is never left CLAIMED or PENDING
+                # without saying so - only the query count, which is what
+                # test_a_row_delivered_in_place_is_never_read_back holds.
                 set_aside.add(delivery_id)
             if outcome is not None:
                 counts[outcome] = counts.get(outcome, 0) + 1

@@ -22,8 +22,10 @@ from django_domain_events.delivery.fire import fire
 from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.introspection.outbox_health import outbox_health
 from django_domain_events.models.delivery_record import DeliveryRecord
+from django_domain_events.models.event_record import EventRecord
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
+from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.testapp.events import Unheard
 
@@ -243,3 +245,36 @@ def test_a_direct_call_reschedules_the_row_too() -> None:
     assert deliver_one(_row().pk) is DeliveryStatus.PENDING
     assert _row().due_at == until
     assert deliver_one(_row().pk) is None
+
+
+def test_an_inline_receiver_raising_it_fails_the_callers_change() -> None:
+    """Read by the relay and by nothing else: an INLINE receiver has no row to
+    move, so ``NotYet`` is an ordinary exception there and rolls the change back
+    with the event."""
+
+    def early(event: Unheard) -> None:
+        raise NotYet(_now() + timedelta(hours=1))
+
+    receiver(Unheard, key="probe.inline", mode=DeliveryMode.INLINE)(early)
+
+    with pytest.raises(NotYet):
+        _fire()
+    assert EventRecord.objects.count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_an_on_commit_receiver_raising_it_has_it_logged(caplog) -> None:
+    """An ON_COMMIT receiver runs after the change committed, so ``NotYet`` is
+    logged as any exception it raises is, and moves nothing."""
+
+    def early(event: Unheard) -> None:
+        raise NotYet(_now() + timedelta(hours=1))
+
+    receiver(Unheard, key="probe.on_commit", mode=DeliveryMode.ON_COMMIT)(early)
+
+    with caplog.at_level("ERROR"):
+        _fire()
+
+    assert EventRecord.objects.count() == 1
+    assert DeliveryRecord.objects.count() == 0
+    assert [r.exc_info[0] for r in caplog.records if r.exc_info] == [NotYet]
