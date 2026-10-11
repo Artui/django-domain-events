@@ -66,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`DeliveryStatus` has a seventh member**, `CANCELLED`. Code that maps every
   status to something - a dashboard, a metrics label set - meets a value it has
   not seen once anything calls `cancel_deliveries`.
+- **During a rolling deploy, 0.10 processes read the new rows with the old
+  meaning**: they treat a `cancelled` row as unsettled, so their prune keeps its
+  event and their admin counts it owed, and they count a scheduled row as owed in
+  health. Both settle once every process is on this release; until then, avoid
+  calling `cancel_deliveries` and read health from a process already upgraded.
 
 ### Fixed
 - The Markdown catalogue writes a duration of a million seconds or more out in
