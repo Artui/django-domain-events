@@ -168,6 +168,11 @@ The event id is what `fire()` returned. Keep it where the work's subject lives -
 a column on the offer - or find it through the event log by name and payload,
 which is a query on the event table rather than on this package.
 
+An operator rather than the application has the same operation in two other
+places: `python manage.py cancel_deliveries <event_id> --receiver <key>`, and the
+admin's **Cancel selected deliveries** on the rows a status or receiver filter has
+already picked out. Both are covered in [operations](operations.md#cancel-owed-work).
+
 ## When the work is not due yet: `NotYet`
 
 The early case is the dangerous one, because it fails silently. An admin extends

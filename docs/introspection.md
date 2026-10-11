@@ -293,10 +293,12 @@ run teaches the reader to skip the output.
 Add `django.contrib.admin` and both models appear, read-only, with actions.
 
 - **Event records** - filter by name and date, see how many deliveries are still
-  owed per event, and **Replay selected events**.
+  owed per event, **Replay selected events**, and **Cancel owed deliveries of
+  selected events**.
 - **Delivery records** - the dead-letter queue, filterable by status and
   receiver - `cancelled` included, so withdrawn work can be listed on its own -
-  with **Requeue selected dead deliveries**. Each row shows its
+  with **Requeue selected dead deliveries** and **Cancel selected deliveries**.
+  Each row shows its
   target, and the search covers the receiver key, the target and the last error,
   since the target is what an operator is holding when one destination of a
   fan-out says it never received something.
@@ -314,12 +316,21 @@ The requeue action goes through `requeue_dead()` rather than a bulk update, so i
 resets the attempt budget, clears the stale lease and error, and wakes the relay.
 It reports what it skipped: a mixed selection requeues only the dead rows.
 
-!!! warning "Both actions need the model's **change** permission"
+Both cancel actions go through [`cancel_deliveries()`](operations.md#cancel-owed-work),
+so a row a worker claimed after the page loaded is left to run rather than
+settled under it, and a cancel issued while a replay of the same event is open
+waits for it. On the delivery changelist the selected rows are what is withdrawn
+and nothing else - a sibling receiver's row of the same event stays owed - and
+the message counts the rows cancelled, the ones in flight, and the ones already
+settled. On the event changelist it is every owed row of each selected event,
+reported as cancelled and in flight.
+
+!!! warning "Every action needs the model's **change** permission"
     Django offers an action with no declared permission to anyone who can reach
     the changelist, and `has_change_permission` gates the form alone. Replay
     re-runs every durable receiver - re-sent emails, re-called webhooks, and a
-    fan-out receiver's targets asked for again - so a
-    view-only grant must not carry it. Give `change_eventrecord` /
+    fan-out receiver's targets asked for again - and a cancel withdraws work the
+    application is owed, so a view-only grant must carry neither. Give `change_eventrecord` /
     `change_deliveryrecord` to whoever may run them; the edit form stays refused
     either way.
 

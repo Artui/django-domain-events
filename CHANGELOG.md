@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `cancel_deliveries` management command: takes one or more event ids and an
+  optional `--receiver`, prints `cancelled: n, in_flight: m`, and refuses a call
+  naming no events.
+- **Cancel selected deliveries**, an admin action on the delivery changelist:
+  withdraws exactly the selected rows through `cancel_deliveries()`, scoped to
+  their own events, so a sibling receiver's row of the same event stays owed. The
+  message counts the rows cancelled, those in flight and left to run, and those
+  already settled and left alone.
+- **Cancel owed deliveries of selected events**, an admin action on the event
+  changelist: withdraws every receiver's owed rows of the selected events and
+  reports the cancelled and in-flight counts.
+- Both actions need the model's change permission, as replay and requeue do: a
+  view-only user is neither offered them nor able to post them.
+
 ## [0.11.0] — 2026-10-11
 
 ### Added
