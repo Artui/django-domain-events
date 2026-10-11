@@ -58,3 +58,10 @@ def test_it_refuses_a_call_naming_no_events(order: OrderPlaced, record: list[str
         call_command("cancel_deliveries")
 
     assert not DeliveryRecord.objects.filter(status=DeliveryStatus.CANCELLED).exists()
+
+
+def test_it_refuses_an_event_id_that_is_not_a_number() -> None:
+    """Refused by the parser, naming the argument, rather than reaching the
+    operation as a string and failing there as a database error."""
+    with pytest.raises(CommandError, match="invalid int"):
+        call_command("cancel_deliveries", "abc")
