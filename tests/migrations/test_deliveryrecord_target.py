@@ -79,11 +79,22 @@ def test_a_row_from_before_the_column_reads_blank_and_still_delivers(
         event_id=event.pk, receiver_key="testapp.durable_receiver", available_at=event.recorded_at
     )
 
-    MigrationExecutor(connection).migrate(AFTER)
+    executor = MigrationExecutor(connection)
+    executor.migrate(AFTER)
 
+    # Read through the models of this migration's own state: the current ones
+    # carry columns later migrations added, which this schema does not have.
+    new = executor.loader.project_state(AFTER).apps
+    old_row = new.get_model(APP, "DeliveryRecord").objects.get()
+    assert old_row.target == ""
+    assert old_row.target_digest == hashlib.sha256(b"").hexdigest()
+
+    # And on to the latest schema, where the current code has to deliver it.
+    latest = MigrationExecutor(connection)
+    latest.migrate(latest.loader.graph.leaf_nodes(APP))
     row = DeliveryRecord.objects.get(receiver_key="testapp.durable_receiver")
     assert row.target == ""
-    assert row.target_digest == hashlib.sha256(b"").hexdigest()
+    assert row.target_digest == hashlib.sha256(b"").digest()
     assert deliver_pending() == {DeliveryStatus.SUCCEEDED: 1}
 
     # And the constraint that replaced the old one still refuses a second blank

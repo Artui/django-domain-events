@@ -2,11 +2,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_mode import DeliveryMode
+
+DEFAULT_LANE = "default"
+"""The lane of every receiver that names none, and of every row whose receiver
+no longer exists: a relay serving it claims everything no named lane takes."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,3 +48,29 @@ class RegisteredReceiver:
     callable writes one per string it returns, each with its own attempt count,
     backoff and dead-letter, and none when it returns nothing. It runs inside
     the caller's transaction; see ``receiver`` for what that obliges."""
+
+    backoff_base_seconds: float | None = None
+    """None means the BACKOFF_BASE_SECONDS setting.
+
+    Read from here when an attempt fails, never copied onto the row, so a
+    changed curve reaches deliveries already in flight. ``max_attempts`` is the
+    opposite on purpose: it is copied, so lowering it cannot dead-letter them."""
+
+    backoff_cap_seconds: float | None = None
+    """None means the BACKOFF_CAP_SECONDS setting. Read like the base."""
+
+    lane: str = DEFAULT_LANE
+    """Which relay processes claim this receiver's rows.
+
+    Read from here at claim time, never copied onto the row, so moving a
+    receiver to another lane moves the deliveries it is still owed with it."""
+
+    give_up_after: timedelta | None = None
+    """How long a delivery may stay owed while deferring, or None.
+
+    What ends a delivery whose receiver defers with ``RetryAfter(counts=False)``,
+    which spends no attempt: once the row has been owed this long - measured
+    from ``due_at``, or the event's ``recorded_at`` where that is NULL - the
+    next deferral dead-letters it. None means a deferral that does not count is
+    counted after all, because nothing else would end the delivery. Read live,
+    like the curve."""

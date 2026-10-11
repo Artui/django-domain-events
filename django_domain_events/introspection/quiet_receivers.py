@@ -34,11 +34,17 @@ def quiet_receivers(
     so a receiver whose every delivery failed still reads as never having
     succeeded without a predicate saying so.
 
-    The window defaults to RETENTION_DAYS, which is not a coincidence of
-    numbers: past that point the prune has deleted the evidence, so "quiet for
-    longer than retention" is the longest answer this can honestly give.
+    The rows are not the whole record: the prune deletes them, within a sweep
+    for an event declared to delete on consumption, and writes each receiver's
+    newest success among what it deleted to ``ReceiverLastSuccess`` as it goes.
+    The answer is the later of that and the live rows, so a receiver whose
+    every event has been pruned still reports when it last ran.
+
+    The window defaults to RETENTION_DAYS, the window an ordinary event's
+    deliveries are kept for.
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
+    from django_domain_events.models.receiver_last_success import ReceiverLastSuccess
 
     window = within if within is not None else timedelta(days=setting("RETENTION_DAYS"))
     cutoff = (now or datetime.now(timezone.utc)) - window
@@ -47,16 +53,26 @@ def quiet_receivers(
         (r for r in registry.receivers() if r.mode is DeliveryMode.DURABLE),
         key=lambda r: r.key,
     )
-    rows = (
-        DeliveryRecord.objects.filter(receiver_key__in=[r.key for r in durable])
-        .values("receiver_key")
-        .annotate(last=models.Max("succeeded_at"))
+    # One query for every receiver: the table holds a row per receiver key the
+    # prune has ever deleted a delivery of, so it is the size of the registry.
+    pruned = dict(
+        ReceiverLastSuccess.objects.filter(receiver_key__in=[r.key for r in durable]).values_list(
+            "receiver_key", "last_succeeded_at"
+        )
     )
-    last_seen = {row["receiver_key"]: row["last"] for row in rows}
-
     quiet = []
     for receiver in durable:
-        last = last_seen.get(receiver.key)
+        # One query per receiver rather than one grouped query, on purpose.
+        # ``MAX`` over a single key is a single descent of ``dde_last_success``
+        # from the end of that key's range - Postgres rewrites it into a
+        # backward index scan under ``LIMIT 1`` - so each costs the same
+        # however many rows the receiver has ever had. Grouped by key, the
+        # same answer reads every one of those rows, which on a fan-out
+        # receiver is the whole table.
+        live = DeliveryRecord.objects.filter(receiver_key=receiver.key).aggregate(
+            last=models.Max("succeeded_at")
+        )["last"]
+        last = max((at for at in (live, pruned.get(receiver.key)) if at is not None), default=None)
         if last is not None and last >= cutoff:
             continue
         # The event may be undeclared: registering a receiver for a class with

@@ -73,4 +73,15 @@ class DeliveryRecordAdmin(admin.ModelAdmin):
         return False
 
     def get_readonly_fields(self, request: HttpRequest, obj: Any = None) -> tuple[str, ...]:
-        return tuple(field.name for field in self.model._meta.fields)
+        # The digest is swapped for its hex rendering: stored as raw bytes,
+        # which the admin would print as a Python bytes literal.
+        return tuple(
+            "digest" if field.name == "target_digest" else field.name
+            for field in self.model._meta.fields
+        )
+
+    @admin.display(description="target digest")
+    def digest(self, obj: DeliveryRecord) -> str:
+        """SHA-256 of the target in hex, the form a digest computed anywhere
+        else is compared in."""
+        return obj.target_digest.hex()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 
@@ -220,3 +221,102 @@ def test_json_carries_the_wildcards_and_the_targets() -> None:
     assert [r["key"] for r in parsed["wildcard_receivers"]] == ["hooks.deliver"]
     assert parsed["wildcard_receivers"][0]["targets"] == "hooks.targets.owed"
     assert parsed["events"][0]["receivers"][0]["targets"] is None
+
+
+def _kept(retention_seconds: int | None = None, delete_when: str = "") -> CatalogueEvent:
+    return CatalogueEvent(
+        name="tests.kept",
+        version=1,
+        class_path="tests.Kept",
+        doc="",
+        fields=(),
+        receivers=(),
+        retention_seconds=retention_seconds,
+        delete_when=delete_when,
+    )
+
+
+@pytest.mark.parametrize(
+    ("event", "prose"),
+    [
+        (_kept(retention_seconds=7 * 86400), "Kept for 7 days rather"),
+        (_kept(retention_seconds=86400), "Kept for 1 day rather"),
+        (_kept(retention_seconds=2 * 3600), "Kept for 2 hours rather"),
+        (_kept(retention_seconds=90), "Kept for 90 seconds rather"),
+        (_kept(delete_when="succeeded"), "Deleted once every delivery has succeeded"),
+        (_kept(delete_when="settled"), "Deleted once every delivery is terminal"),
+    ],
+    ids=["days", "one-day", "hours", "seconds", "succeeded", "settled"],
+)
+def test_a_retention_of_its_own_is_called_out_in_prose(event: CatalogueEvent, prose: str) -> None:
+    assert prose in render_catalogue(Catalogue(events=(event,)))
+
+
+def test_the_ordinary_window_is_not_mentioned() -> None:
+    """Every event has it unless it says otherwise, and a line saying so under
+    each would bury the ones that do."""
+    document = render_catalogue(Catalogue(events=(_kept(),)))
+    assert "Kept for" not in document
+    assert "Deleted once" not in document
+
+
+def test_json_carries_the_retention() -> None:
+    document = render_catalogue(Catalogue(events=(_kept(delete_when="settled"),)), format="json")
+    [event] = json.loads(document)["events"]
+    assert (event["retention_seconds"], event["delete_when"]) == (None, "settled")
+
+
+def _with(**fields: object) -> str:
+    """The Markdown of one event whose one receiver declares ``fields``."""
+    receiver = dataclasses.replace(_receiver("shop.mail"), **fields)
+    return render_catalogue(Catalogue(events=(_event("shop.Sent", receiver),)))
+
+
+def test_a_named_lane_is_said_in_prose_under_the_table() -> None:
+    """Prose rather than a column, for the reason the targets line gives: a
+    column would change every committed catalogue for a property most receivers
+    do not have."""
+    assert "`shop.mail` is served by relays started with `--lane mail`." in _with(lane="mail")
+    assert "--lane" not in _with()
+
+
+def test_a_declared_curve_is_said_in_prose_under_the_table() -> None:
+    both = _with(backoff_base_seconds=60.0, backoff_cap_seconds=1200.0)
+    assert "`shop.mail` retries on its own curve: base 60s, cap 1200s." in both
+    base_only = _with(backoff_base_seconds=0.5)
+    assert "base 0.5s, cap `BACKOFF_CAP_SECONDS`." in base_only
+    cap_only = _with(backoff_cap_seconds=300)
+    assert "base `BACKOFF_BASE_SECONDS`, cap 300s." in cap_only
+    assert "own curve" not in _with()
+
+
+def test_json_carries_the_curve_and_the_lane() -> None:
+    receiver = dataclasses.replace(
+        _receiver("shop.mail"), backoff_base_seconds=60.0, backoff_cap_seconds=1200.0, lane="mail"
+    )
+    parsed = json.loads(
+        render_catalogue(Catalogue(events=(_event("shop.Sent", receiver),)), format="json")
+    )
+    [published] = parsed["events"][0]["receivers"]
+    assert (
+        published["backoff_base_seconds"],
+        published["backoff_cap_seconds"],
+        published["lane"],
+    ) == (60.0, 1200.0, "mail")
+
+
+def test_give_up_after_is_said_in_prose_under_the_table() -> None:
+    assert "`shop.mail` dead-letters a deferral once its delivery has been owed for 21600s." in (
+        _with(give_up_after_seconds=21600.0)
+    )
+    assert "dead-letters a deferral" not in _with()
+
+
+def test_json_carries_give_up_after_in_seconds() -> None:
+    """Seconds, as the curve is published, so the JSON stays plain numbers."""
+    receiver = dataclasses.replace(_receiver("shop.mail"), give_up_after_seconds=21600.0)
+    parsed = json.loads(
+        render_catalogue(Catalogue(events=(_event("shop.Sent", receiver),)), format="json")
+    )
+    [published] = parsed["events"][0]["receivers"]
+    assert published["give_up_after_seconds"] == 21600.0

@@ -4,7 +4,9 @@ import dataclasses
 import json
 
 from django_domain_events.types.catalogue import Catalogue
+from django_domain_events.types.catalogue_event import CatalogueEvent
 from django_domain_events.types.catalogue_receiver import CatalogueReceiver
+from django_domain_events.types.retention import Retention
 
 
 def render_catalogue(catalogue: Catalogue, *, format: str = "markdown") -> str:
@@ -51,6 +53,9 @@ def _markdown(catalogue: Catalogue) -> str:
                 "are migrated before they are decoded.",
                 "",
             ]
+        retention = _retention(event)
+        if retention:
+            lines += [retention, ""]
         lines += ["| Field | Type | Required | Default |", "| --- | --- | --- | --- |"]
         for field in event.fields:
             required = "yes" if field.required else "no"
@@ -107,7 +112,72 @@ def _receiver_table(receivers: tuple[CatalogueReceiver, ...]) -> list[str]:
                 f"`{receiver.targets}`.",
                 "",
             ]
+        if receiver.backoff_base_seconds is not None or receiver.backoff_cap_seconds is not None:
+            # Either half alone is a curve of its own; the other half is named
+            # as the setting it comes from rather than resolved, because the
+            # catalogue describes declarations and a setting can differ between
+            # the machine that builds it and the ones that run the relay. Each
+            # half of the condition is held by one case of
+            # test_a_declared_curve_is_said_in_prose_under_the_table.
+            base = _seconds(receiver.backoff_base_seconds, "BACKOFF_BASE_SECONDS")
+            cap = _seconds(receiver.backoff_cap_seconds, "BACKOFF_CAP_SECONDS")
+            lines += [
+                f"`{_cell(receiver.key)}` retries on its own curve: base {base}, cap {cap}.",
+                "",
+            ]
+        if receiver.lane != "default":
+            lines += [
+                f"`{_cell(receiver.key)}` is served by relays started with "
+                f"`--lane {_cell(receiver.lane)}`.",
+                "",
+            ]
+        if receiver.give_up_after_seconds is not None:
+            lines += [
+                f"`{_cell(receiver.key)}` dead-letters a deferral once its delivery has "
+                f"been owed for {receiver.give_up_after_seconds:g}s.",
+                "",
+            ]
     return lines
+
+
+_POLICIES = {
+    Retention.SUCCEEDED.value: (
+        "Deleted once every delivery has succeeded. A dead letter keeps it for "
+        "`RETENTION_DAYS`, so it can still be requeued."
+    ),
+    Retention.SETTLED.value: (
+        "Deleted once every delivery is terminal, dead letters included, rather "
+        "than after `RETENTION_DAYS`."
+    ),
+}
+
+
+def _retention(event: CatalogueEvent) -> str:
+    """A sentence for an event kept other than for ``RETENTION_DAYS``, or blank.
+
+    Said in prose, as the upgrade hook is, because it changes what an operator
+    will find in the table: an event deleted on consumption is not there to
+    replay an hour later.
+    """
+    if event.retention_seconds is not None:
+        return f"Kept for {_duration(event.retention_seconds)} rather than `RETENTION_DAYS`."
+    return _POLICIES.get(event.delete_when, "")
+
+
+def _duration(seconds: int) -> str:
+    """The largest whole unit, since a window is declared as a timedelta and
+    ``604800 seconds`` is not how anyone wrote ``timedelta(days=7)``."""
+    unit, count = "second", seconds
+    for name, size in (("day", 86400), ("hour", 3600)):
+        if seconds % size == 0:
+            unit, count = name, seconds // size
+            break
+    return f"{count} {unit}{'' if count == 1 else 's'}"
+
+
+def _seconds(value: float | None, setting: str) -> str:
+    """A declared duration as ``60s``, or the setting that supplies it."""
+    return f"`{setting}`" if value is None else f"{value:g}s"
 
 
 def _cell(value: str) -> str:

@@ -52,6 +52,7 @@ Everything below is exported from `django_domain_events` directly.
 
 ::: django_domain_events.types.delivery_mode.DeliveryMode
 ::: django_domain_events.types.delivery_status.DeliveryStatus
+::: django_domain_events.types.retention.Retention
 ::: django_domain_events.types.delivery_context.DeliveryContext
 ::: django_domain_events.types.delivery_failure.DeliveryFailure
 ::: django_domain_events.types.scope.Scope
@@ -67,3 +68,12 @@ Everything below is exported from `django_domain_events` directly.
 ::: django_domain_events.types.task_backend.TaskBackend
 ::: django_domain_events.codecs.payload_codec.PayloadCodec
 ::: django_domain_events.payload_upgrade_failed.PayloadUpgradeFailed
+
+## Task backends
+
+Not exported from the package root. Each is named by its dotted path in
+[`TASK_BACKEND`](settings.md#task_backend), so the framework it wraps is imported
+only by a project that chose it.
+
+::: django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend
+::: django_domain_events.delivery.celery_backend.CeleryBackend

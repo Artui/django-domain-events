@@ -39,6 +39,8 @@ def catalogue() -> Catalogue:
                 class_path=f"{cls.__module__}.{cls.__qualname__}",
                 doc=_doc(cls),
                 migrates_older_rows=hasattr(cls, "upgrade"),
+                retention_seconds=entry.retention_columns[0],
+                delete_when=entry.retention_columns[1],
                 fields=_fields(cls),
                 receivers=receivers,
             )
@@ -62,6 +64,12 @@ def _described(receivers: Iterable[RegisteredReceiver]) -> tuple[CatalogueReceiv
             takes_context=r.takes_context,
             lease_seconds=r.lease_seconds,
             targets=None if r.targets is None else _callable_path(r.targets),
+            backoff_base_seconds=r.backoff_base_seconds,
+            backoff_cap_seconds=r.backoff_cap_seconds,
+            lane=r.lane,
+            give_up_after_seconds=(
+                None if r.give_up_after is None else r.give_up_after.total_seconds()
+            ),
         )
         for r in sorted(receivers, key=lambda r: r.key)
     )

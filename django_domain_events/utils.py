@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any, cast
 
 from django.apps import apps
-from django.db import connections
+from django.db import connections, models
 
 from django_domain_events.declaration.registry import registry
 from django_domain_events.payload_upgrade_failed import PayloadUpgradeFailed
@@ -24,6 +24,35 @@ disagree: one omitted CLAIMED, so a row whose worker died between the claim
 and the deploy that deleted its receiver read as settled until a relay
 happened to reclaim it.
 """
+
+RETRYABLE = (DeliveryStatus.PENDING, DeliveryStatus.FAILED)
+"""The owed statuses the claim's first partial index is conditioned on.
+
+Named so that the index and ``outbox_health``, which reads through it, spell
+the predicate from one place: Postgres uses a partial index only for a query
+whose WHERE clause implies the index's own condition, so a query that phrased
+"owed" any other way - ``status NOT IN (terminal)`` is the natural one - reads
+the whole table instead. CLAIMED is the other owed status, and has an index of
+its own.
+"""
+
+
+def owed() -> models.Q:
+    """Not terminal, phrased as the two owed partial indexes' own conditions.
+
+    The rows ``exclude(status__in=TERMINAL)`` means, in the one form Postgres
+    matches to those indexes: each arm implies one index's condition, and the
+    OR is answered by OR-ing the two indexes' bitmaps, so a query filtering on
+    this reads the owed rows and nothing of the delivered history.
+
+    Listing the owed statuses gives up what "not terminal" had: it could not
+    miss a status added later, and a hand-written list once omitted CLAIMED.
+    Both are held by tests rather than by the phrasing - one row in every
+    status, owed exactly when not terminal
+    (test_every_status_is_counted_owed_or_settled_exactly_once, and
+    test_the_orphan_warning_counts_every_owed_status_and_no_other).
+    """
+    return models.Q(status__in=RETRYABLE) | models.Q(status=DeliveryStatus.CLAIMED)
 
 
 def label_for(module: str, fallback_name: str) -> str:
@@ -187,12 +216,16 @@ def resolve_targets(
     return list(resolved)
 
 
-def target_digest(target: str) -> str:
+def target_digest(target: str) -> bytes:
     """The digest a delivery row's uniqueness is enforced on, for one target.
 
     The one place it is computed: the model field derives it from here on every
     write, and replay looks existing rows up by it. SHA-256 of the UTF-8 text,
-    as 64 hex characters, so every target - the blank one included - indexes as
+    as its 32 raw bytes, so every target - the blank one included - indexes as
     the same fixed width however long the text is.
+
+    Raw rather than hex because the unique index holds one per delivery row:
+    hex spelled the same value in twice the bytes, and on a large fan-out
+    table that was the largest single thing on disk after the rows themselves.
     """
-    return hashlib.sha256(target.encode()).hexdigest()
+    return hashlib.sha256(target.encode()).digest()

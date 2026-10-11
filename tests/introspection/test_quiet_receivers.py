@@ -6,20 +6,23 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from django.db import transaction
+from django.db import connection, transaction
 
 from django_domain_events.declaration.any_event import AnyEvent
+from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
 from django_domain_events.introspection.quiet_receivers import quiet_receivers
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.models.receiver_last_success import ReceiverLastSuccess
+from django_domain_events.operations.prune_events import prune_events
 from django_domain_events.operations.replay_events import replay_events
 from django_domain_events.operations.requeue_dead import requeue_dead
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
-from tests.conftest import receiver_registered
+from tests.conftest import Plans, delivery_table_access, receiver_registered
 from tests.testapp.events import OrderPlaced
 
 pytestmark = pytest.mark.django_db
@@ -35,6 +38,63 @@ def test_a_receiver_that_has_never_run_is_reported_as_never() -> None:
     quiet = {q.key: q for q in quiet_receivers()}
     assert quiet["testapp.durable_receiver"].last_succeeded_at is None
     assert quiet["testapp.durable_receiver"].event_name == "testapp.OrderPlaced"
+
+
+def _pruned_after_running(order: OrderPlaced, *, skip: str | None = None) -> None:
+    """Fire, deliver, and prune the event and its delivery rows away.
+
+    ``skip`` deletes one receiver's row before delivery, so that receiver has
+    never run when the prune does."""
+    with transaction.atomic():
+        fire(order)
+    if skip is not None:
+        DeliveryRecord.objects.filter(receiver_key=skip).delete()
+    drain_outbox()
+    EventRecord.objects.update(recorded_at=datetime.now(timezone.utc) - timedelta(days=365))
+    assert prune_events() == 1
+    assert not DeliveryRecord.objects.exists()
+
+
+def test_a_receiver_whose_deliveries_were_pruned_still_reports_its_last_success(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """An event deleted on consumption takes its delivery rows within a sweep,
+    so a receiver that ran a minute ago would otherwise read as never having
+    run at all."""
+    _pruned_after_running(order)
+
+    assert "testapp.durable_receiver" not in _keys()
+    assert "testapp.with_context" not in _keys()
+
+
+def test_a_receiver_that_never_ran_is_still_quiet_after_a_prune(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    _pruned_after_running(order, skip="testapp.durable_receiver")
+
+    quiet = {q.key: q for q in quiet_receivers()}
+    assert quiet["testapp.durable_receiver"].last_succeeded_at is None
+    assert "testapp.with_context" not in quiet
+
+
+@pytest.mark.parametrize("pruned_is_later", [True, False])
+def test_the_later_of_the_pruned_record_and_the_live_rows_is_reported(
+    pruned_is_later: bool,
+) -> None:
+    now = datetime.now(timezone.utc)
+    live, pruned = now - timedelta(days=3), now - timedelta(days=2)
+    if not pruned_is_later:
+        live, pruned = pruned, live
+    event = EventRecord.objects.create(name="testapp.OrderPlaced", payload={}, occurred_at=now)
+    DeliveryRecord.objects.create(
+        event=event, receiver_key="testapp.durable_receiver", available_at=now, succeeded_at=live
+    )
+    ReceiverLastSuccess.objects.create(
+        receiver_key="testapp.durable_receiver", last_succeeded_at=pruned
+    )
+
+    quiet = {q.key: q for q in quiet_receivers(within=timedelta(days=1))}
+    assert quiet["testapp.durable_receiver"].last_succeeded_at == max(live, pruned)
 
 
 def test_only_durable_receivers_are_considered() -> None:
@@ -201,3 +261,83 @@ def test_a_quiet_wildcard_is_reported_under_the_name_it_was_declared_with() -> N
         quiet = {q.key: q for q in quiet_receivers()}
     assert quiet["testapp.everything"].event_name == "AnyEvent"
     assert quiet["testapp.everything"].last_succeeded_at is None
+
+
+def test_the_latest_success_wins_over_older_ones_and_failures() -> None:
+    """Several rows per receiver, so the answer depends on picking the newest
+    success rather than any one row: a lookup that read the first row it found,
+    or the oldest, passes every one-row test above."""
+    event = EventRecord.objects.create(
+        name="testapp.OrderPlaced",
+        version=1,
+        payload={},
+        occurred_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+    now = datetime.now(timezone.utc)
+    newest = now - timedelta(days=1)
+    for n, succeeded in enumerate(
+        (now - timedelta(days=200), newest, None, now - timedelta(days=50))
+    ):
+        DeliveryRecord.objects.create(
+            event=event,
+            receiver_key="testapp.durable_receiver",
+            target=f"t{n}",
+            available_at=event.recorded_at,
+            succeeded_at=succeeded,
+        )
+    assert "testapp.durable_receiver" not in _keys()
+    quiet = {q.key: q for q in quiet_receivers(within=timedelta(hours=1))}
+    assert quiet["testapp.durable_receiver"].last_succeeded_at == newest
+
+
+@pytest.mark.skipif(
+    connection.vendor != "postgresql",
+    reason="asserts Postgres query plans; SQLite's planner is not the one a scrape runs on",
+)
+def test_each_receiver_costs_one_probe_of_the_last_success_index(
+    plans_without_seqscan: Plans,
+) -> None:
+    """``MAX(succeeded_at)`` for one key is a single descent of the index on
+    ``(receiver_key, succeeded_at)``: the planner rewrites it into a backward
+    scan under ``LIMIT 1``. Grouped across keys it is not, and reads every row
+    the receivers ever had.
+
+    Populated and analyzed first, because the rewrite is chosen on cost: on an
+    empty table the planner expects one row per key and an ordinary aggregate
+    over the index costs the same, so the plan would not say which query was
+    sent."""
+    event = EventRecord.objects.create(
+        name="testapp.OrderPlaced",
+        version=1,
+        payload={},
+        occurred_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+    now = datetime.now(timezone.utc)
+    DeliveryRecord.objects.bulk_create(
+        DeliveryRecord(
+            event=event,
+            receiver_key="testapp.durable_receiver",
+            target=f"t{n}",
+            available_at=now,
+            succeeded_at=now - timedelta(seconds=n),
+        )
+        for n in range(5000)
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(f"ANALYZE {DeliveryRecord._meta.db_table}")
+    plans = plans_without_seqscan(quiet_receivers)
+    durable = [r for r in registry.receivers() if r.mode is DeliveryMode.DURABLE]
+    # One read of the pruned receivers' record, for every receiver at once: it
+    # holds a row per receiver key, so it is as small as the registry.
+    [pruned] = [p for p in plans if ReceiverLastSuccess._meta.db_table in p]
+    assert DeliveryRecord._meta.db_table not in pruned, pruned
+    plans.remove(pruned)
+    assert len(plans) == len(durable)
+    for plan in plans:
+        assert delivery_table_access(plan) == {"dde_last_success"}, plan
+    # The receivers with no rows are estimated at one entry, where an ordinary
+    # aggregate over it costs the same; the one with history is where the
+    # rewrite has to show.
+    [busy] = [p for p in plans if "'testapp.durable_receiver'" in p]
+    assert "Limit" in busy, busy
+    assert "Index Only Scan Backward using dde_last_success" in busy, busy

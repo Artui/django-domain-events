@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import pytest
-from django.db import transaction
+from django.db import connection, transaction
 
 from django_domain_events import checks
 from django_domain_events.declaration.any_event import AnyEvent
@@ -15,7 +17,7 @@ from django_domain_events.delivery.fire import fire
 from django_domain_events.scope.suppressed import suppressed
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_receiver import RegisteredReceiver
-from tests.conftest import event_deleted, receiver_deleted
+from tests.conftest import Plans, delivery_table_access, event_deleted, receiver_deleted
 from tests.testapp.events import OrderPlaced
 
 
@@ -239,3 +241,170 @@ def test_a_wildcard_receiver_is_not_an_undeclared_event() -> None:
     listens to everything that is."""
     with _receiver_registered("testapp.everything", AnyEvent):
         assert checks.check_receivers_have_events() == []
+
+
+def test_the_default_wake_settings_are_clean() -> None:
+    assert checks.check_settings_keys_are_known() == []
+
+
+@pytest.mark.parametrize("mode", ["notify", "poll"])
+def test_a_known_wake_mode_is_clean(settings, mode: str) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"WAKE": mode}
+    assert checks.check_settings_keys_are_known() == []
+
+
+@pytest.mark.parametrize("mode", ["Notify", "listen", "", None])
+def test_a_misspelt_wake_mode_is_an_error(settings, mode: object) -> None:
+    """Anything but ``notify`` would otherwise quietly turn NOTIFY off."""
+    settings.DJANGO_DOMAIN_EVENTS = {"WAKE": mode}
+    problems = checks.check_settings_keys_are_known()
+    assert [p.id for p in problems] == ["django_domain_events.E006"]
+    assert repr(mode) in problems[0].msg
+    assert "'notify', 'poll'" in problems[0].hint
+
+
+@pytest.mark.parametrize("interval", [0, 0.0, 0.5, 2])
+def test_a_coalesce_interval_of_zero_or_more_is_clean(settings, interval: float) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"NOTIFY_COALESCE_SECONDS": interval}
+    assert checks.check_settings_keys_are_known() == []
+
+
+@pytest.mark.parametrize("interval", [-1, float("nan"), "0.5", None, True])
+def test_a_coalesce_interval_that_is_not_a_duration_is_an_error(settings, interval: object) -> None:
+    """One case per refusal: a negative, NaN (which compares false both ways), a
+    string, and a bool (an ``int``, so it would read as one second)."""
+    settings.DJANGO_DOMAIN_EVENTS = {"NOTIFY_COALESCE_SECONDS": interval}
+    problems = checks.check_settings_keys_are_known()
+    assert [p.id for p in problems] == ["django_domain_events.E007"]
+
+
+@pytest.mark.parametrize("interval", [1, 0.5, 60, 3600.0])
+def test_a_positive_prune_interval_is_clean(settings, interval: float) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_PRUNE_SECONDS": interval}
+    assert checks.check_settings_keys_are_known() == []
+
+
+@pytest.mark.parametrize("interval", [0, -1, float("nan"), float("inf"), "60", None, True])
+def test_a_prune_interval_that_is_not_a_positive_duration_is_an_error(
+    settings, interval: object
+) -> None:
+    """One case per refusal: zero and a negative, NaN (false against everything),
+    infinity, a string, ``None`` and a bool (an ``int``, so it would read as one second)."""
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_PRUNE_SECONDS": interval}
+    problems = checks.check_settings_keys_are_known()
+    assert [p.id for p in problems] == ["django_domain_events.E009"]
+    assert repr(interval) in problems[0].msg
+
+
+@pytest.mark.parametrize("size", [1, 500, 5000])
+def test_a_positive_prune_batch_is_clean(settings, size: int) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"PRUNE_BATCH_ROWS": size}
+    assert checks.check_settings_keys_are_known() == []
+
+
+@pytest.mark.parametrize("size", [0, -5, 2.5, "5000", None, True])
+def test_a_prune_batch_that_is_not_a_positive_count_is_an_error(settings, size: object) -> None:
+    """The bool test by ``True`` (an ``int``, so a batch of one), the type test
+    by ``2.5``, ``"5000"`` and ``None``, the sign test by ``0`` and ``-5``."""
+    settings.DJANGO_DOMAIN_EVENTS = {"PRUNE_BATCH_ROWS": size}
+    problems = checks.check_settings_keys_are_known()
+    assert [p.id for p in problems] == ["django_domain_events.E010"]
+    assert repr(size) in problems[0].msg
+
+
+@pytest.mark.parametrize("switch", [True, False])
+def test_the_prune_switch_is_clean_as_a_bool(settings, switch: bool) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_PRUNE": switch}
+    assert checks.check_settings_keys_are_known() == []
+
+
+@pytest.mark.parametrize("switch", ["false", 0, 1, None])
+def test_a_prune_switch_that_is_not_a_bool_is_an_error(settings, switch: object) -> None:
+    """``"false"`` is the case the check exists for: truthy, so the operator who
+    meant the sweep off would have it on."""
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_PRUNE": switch}
+    problems = checks.check_settings_keys_are_known()
+    assert [p.id for p in problems] == ["django_domain_events.E008"]
+    assert repr(switch) in problems[0].msg
+
+
+def _one_row_in_every_status(name_for: Callable[[str], str], key_for: Callable[[str], str]) -> None:
+    from django_domain_events.models.delivery_record import DeliveryRecord
+    from django_domain_events.models.event_record import EventRecord
+    from django_domain_events.types.delivery_status import DeliveryStatus
+
+    for status in DeliveryStatus:
+        event = EventRecord.objects.create(
+            name=name_for(status.value),
+            version=1,
+            payload={},
+            occurred_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+        )
+        DeliveryRecord.objects.create(
+            event=event,
+            receiver_key=key_for(status.value),
+            status=status,
+            available_at=event.recorded_at,
+        )
+
+
+def _owed_statuses() -> list[str]:
+    from django_domain_events.types.delivery_status import DeliveryStatus
+    from django_domain_events.utils import TERMINAL
+
+    return sorted(s.value for s in DeliveryStatus if s not in TERMINAL)
+
+
+@pytest.mark.django_db
+def test_the_orphan_warning_counts_every_owed_status_and_no_other() -> None:
+    """Owed is phrased as the partial indexes' conditions, which lists the owed
+    statuses; ``exclude(status__in=TERMINAL)`` could not miss one. One orphaned
+    row in every status there is, so a status added later and left out of the
+    phrasing - or CLAIMED dropped again - turns this red."""
+    _one_row_in_every_status(lambda s: "testapp.OrderPlaced", lambda s: f"gone.{s}")
+
+    [problem] = checks.check_no_orphaned_deliveries(databases=["default"])
+
+    assert problem.msg.endswith(": " + ", ".join(f"gone.{s}" for s in _owed_statuses()) + ".")
+
+
+@pytest.mark.django_db
+def test_the_undeclared_event_warning_counts_every_owed_status_and_no_other() -> None:
+    _one_row_in_every_status(lambda s: f"gone.{s}", lambda s: "testapp.durable_receiver")
+
+    [problem] = checks.check_recorded_events_are_declared(databases=["default"])
+
+    assert problem.msg.endswith(": " + ", ".join(f"gone.{s}" for s in _owed_statuses()) + ".")
+
+
+postgres_only = pytest.mark.skipif(
+    connection.vendor != "postgresql",
+    reason="asserts Postgres query plans; SQLite's planner is not the one migrate runs on",
+)
+OWED_INDEXES = {"dde_owed_by_available_at", "dde_claimed_by_lease"}
+
+
+@postgres_only
+@pytest.mark.django_db
+def test_the_orphan_check_reads_only_the_owed_partial_indexes(
+    plans_without_seqscan: Plans,
+) -> None:
+    """It runs on every ``migrate`` and ``check``. ``status NOT IN (terminal)``
+    matches neither partial index, so it walked every delivery ever made."""
+    plans = plans_without_seqscan(
+        lambda: checks.check_no_orphaned_deliveries(databases=["default"])
+    )
+    reads = [delivery_table_access(p) for p in plans if "deliveryrecord" in p]
+    assert reads == [OWED_INDEXES], plans
+
+
+@postgres_only
+@pytest.mark.django_db
+def test_the_undeclared_event_check_reads_only_the_owed_partial_indexes(
+    plans_without_seqscan: Plans,
+) -> None:
+    plans = plans_without_seqscan(
+        lambda: checks.check_recorded_events_are_declared(databases=["default"])
+    )
+    reads = [delivery_table_access(p) for p in plans if "deliveryrecord" in p]
+    assert reads == [OWED_INDEXES], plans

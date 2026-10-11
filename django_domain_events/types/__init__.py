@@ -10,6 +10,7 @@ from django_domain_events.types.quiet_receiver import QuietReceiver
 from django_domain_events.types.receiver_backlog import ReceiverBacklog
 from django_domain_events.types.registered_event import RegisteredEvent
 from django_domain_events.types.registered_receiver import RegisteredReceiver
+from django_domain_events.types.retention import Retention
 
 __all__ = [
     "Catalogue",
@@ -24,4 +25,5 @@ __all__ = [
     "ReceiverBacklog",
     "RegisteredEvent",
     "RegisteredReceiver",
+    "Retention",
 ]

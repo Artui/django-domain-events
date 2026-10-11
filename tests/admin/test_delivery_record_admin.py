@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 
 import pytest
@@ -42,7 +43,9 @@ def test_deliveries_cannot_be_added_changed_or_deleted() -> None:
     assert site.has_add_permission(request) is False
     assert site.has_change_permission(request) is False
     assert site.has_delete_permission(request) is False
-    assert set(site.get_readonly_fields(request)) == {f.name for f in DeliveryRecord._meta.fields}
+    # Every column, with the digest swapped for its hex rendering.
+    columns = {f.name for f in DeliveryRecord._meta.fields}
+    assert set(site.get_readonly_fields(request)) == columns - {"target_digest"} | {"digest"}
 
 
 def test_requeue_resets_the_budget_rather_than_only_the_status(
@@ -120,3 +123,25 @@ def test_a_fan_out_delivery_can_be_found_by_its_target(admin_client) -> None:
     rows = list(response.context["cl"].result_list)
     assert [row.target for row in rows] == ["endpoint-42"]
     assert "endpoint-42" in response.content.decode()
+
+
+def test_the_detail_page_shows_the_digest_as_hex(admin_client) -> None:
+    """Stored as raw bytes, which Django renders as a Python ``b'...'`` literal
+    full of escapes. Hex is what an operator can compare against a digest
+    computed anywhere else."""
+    event = EventRecord.objects.create(
+        name="testapp.Unheard",
+        version=1,
+        payload={"value": 1},
+        occurred_at=datetime(2026, 9, 16, tzinfo=timezone.utc),
+    )
+    row = DeliveryRecord.objects.create(
+        event=event, receiver_key="probe.fan", target="endpoint-42", available_at=event.recorded_at
+    )
+
+    response = admin_client.get(f"/admin/django_domain_events/deliveryrecord/{row.pk}/change/")
+
+    assert response.status_code == 200
+    page = response.content.decode()
+    assert hashlib.sha256(b"endpoint-42").hexdigest() in page
+    assert "b&#x27;" not in page

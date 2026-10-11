@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 
 from django_domain_events.declaration.any_event import AnyEvent
@@ -147,3 +149,123 @@ def test_a_wildcard_can_be_declared() -> None:
         assert registry.receiver_for_key("tests.everything").event_class is AnyEvent
     finally:
         registry._receivers.pop("tests.everything", None)
+
+
+def test_a_backoff_curve_is_recorded_on_the_registration() -> None:
+    @receiver(OrderPlaced, key="tests.curve", backoff_base_seconds=60, backoff_cap_seconds=1200)
+    def handler(evt: OrderPlaced) -> None: ...
+
+    try:
+        entry = registry.receiver_for_key("tests.curve")
+        assert (entry.backoff_base_seconds, entry.backoff_cap_seconds) == (60, 1200)
+        default = registry.receiver_for_key("testapp.durable_receiver")
+        assert (default.backoff_base_seconds, default.backoff_cap_seconds) == (None, None)
+    finally:
+        registry._receivers.pop("tests.curve", None)
+
+
+@pytest.mark.parametrize("name", ["backoff_base_seconds", "backoff_cap_seconds"])
+@pytest.mark.parametrize("value", [0, -1.5])
+def test_a_non_positive_backoff_is_refused(name: str, value: float) -> None:
+    """A zero base retries at once on every attempt, spending the whole budget
+    in the time it takes to fail that many times; a zero cap does the same from
+    the attempt it is reached."""
+    with pytest.raises(ValueError, match=f"{name} must be positive"):
+        receiver(OrderPlaced, key="tests.zero_curve", **{name: value})
+    assert registry.receiver_for_key("tests.zero_curve") is None
+
+
+def test_a_cap_below_the_base_is_refused() -> None:
+    """Both declared, and contradicting each other: the cap would win on every
+    attempt, so the declared base is a number nothing ever reads."""
+    with pytest.raises(ValueError, match="backoff_cap_seconds=30 is below backoff_base_seconds=60"):
+        receiver(OrderPlaced, key="tests.inverted", backoff_base_seconds=60, backoff_cap_seconds=30)
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{"backoff_base_seconds": 7200}, {"backoff_cap_seconds": 1}], ids=["base", "cap"]
+)
+def test_either_half_of_the_curve_may_be_declared_alone(kwargs: dict[str, float]) -> None:
+    """The other half is the setting, read when an attempt fails rather than
+    here, so the comparison is made only when both are declared. Holds both
+    ``is not None`` conjuncts of that check: without either, comparing a number
+    with None raises."""
+
+    @receiver(OrderPlaced, key="tests.half_curve", **kwargs)
+    def handler(evt: OrderPlaced) -> None: ...
+
+    registry._receivers.pop("tests.half_curve", None)
+
+
+def test_a_lane_is_recorded_and_defaults_to_the_default_lane() -> None:
+    @receiver(OrderPlaced, key="tests.mail", lane="mail")
+    def handler(evt: OrderPlaced) -> None: ...
+
+    try:
+        assert registry.receiver_for_key("tests.mail").lane == "mail"
+        assert registry.receiver_for_key("testapp.durable_receiver").lane == "default"
+    finally:
+        registry._receivers.pop("tests.mail", None)
+
+
+@pytest.mark.parametrize("value", ["", None, 3])
+def test_a_lane_must_be_a_non_empty_string(value: object) -> None:
+    """A blank lane cannot be named on the command line, so a receiver declared
+    in one would be served by no relay at all."""
+    with pytest.raises(ValueError, match="lane must be a non-empty string"):
+        receiver(OrderPlaced, key="tests.blank_lane", lane=value)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "needle"),
+    [
+        ({"backoff_base_seconds": 60}, "backoff_base_seconds=60 needs mode=DURABLE"),
+        ({"backoff_cap_seconds": 60}, "backoff_cap_seconds=60 needs mode=DURABLE"),
+        ({"lane": "mail"}, "lane='mail' needs mode=DURABLE"),
+    ],
+)
+def test_the_curve_and_the_lane_are_refused_without_a_row(kwargs, needle) -> None:
+    """The same rule as the other row knobs: only a row is retried, and only a
+    row is claimed by a relay serving a lane."""
+    with pytest.raises(ValueError, match=needle):
+        receiver(OrderPlaced, mode=DeliveryMode.ON_COMMIT, key="tests.bad_curve", **kwargs)
+
+
+# --- give_up_after ------------------------------------------------------------
+
+
+def test_give_up_after_is_recorded_and_defaults_to_none() -> None:
+    @receiver(OrderPlaced, key="tests.bounded", give_up_after=timedelta(hours=6))
+    def handler(evt: OrderPlaced) -> None: ...
+
+    try:
+        assert registry.receiver_for_key("tests.bounded").give_up_after == timedelta(hours=6)
+        assert registry.receiver_for_key("testapp.durable_receiver").give_up_after is None
+    finally:
+        registry._receivers.pop("tests.bounded", None)
+
+
+@pytest.mark.parametrize("value", [timedelta(0), timedelta(seconds=-1)])
+def test_a_give_up_after_that_is_not_in_the_future_is_refused(value: timedelta) -> None:
+    """Zero would dead-letter every deferral on arrival, which is a receiver
+    that cannot be deferred at all, declared in a way that reads as patience."""
+    with pytest.raises(ValueError, match="give_up_after must be a positive timedelta"):
+        receiver(OrderPlaced, key="tests.no_patience", give_up_after=value)
+
+
+@pytest.mark.parametrize("value", [3600, 3600.0, "1h"])
+def test_a_give_up_after_that_is_not_a_timedelta_is_refused(value: object) -> None:
+    """A bare number has no unit, and reading it as seconds or as days would
+    each be the wrong guess for somebody."""
+    with pytest.raises(ValueError, match="give_up_after must be a positive timedelta"):
+        receiver(OrderPlaced, key="tests.no_unit", give_up_after=value)
+
+
+def test_give_up_after_is_refused_without_a_row() -> None:
+    with pytest.raises(ValueError, match="give_up_after=.* needs mode=DURABLE"):
+        receiver(
+            OrderPlaced,
+            mode=DeliveryMode.ON_COMMIT,
+            key="tests.bad_bound",
+            give_up_after=timedelta(hours=1),
+        )

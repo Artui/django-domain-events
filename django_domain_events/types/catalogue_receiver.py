@@ -23,3 +23,20 @@ class CatalogueReceiver:
     what a delivery *is* for this receiver - one per target rather than one per
     event - and a reader diffing catalogues should see that change. Defaulted
     for the same reason as ``lease_seconds``."""
+
+    backoff_base_seconds: float | None = None
+    """The receiver's own retry curve, or None where it uses the setting.
+    Defaulted, like every field after ``lease_seconds``."""
+
+    backoff_cap_seconds: float | None = None
+    """The ceiling of that curve, or None where it uses the setting."""
+
+    lane: str = "default"
+    """Which relay processes claim this receiver's rows: those started with
+    ``--lane`` naming it, or, for ``"default"``, those started with none."""
+
+    give_up_after_seconds: float | None = None
+    """How long a delivery may stay owed while it defers without counting,
+    in seconds, or None where the receiver declares no bound. Seconds rather
+    than the declared ``timedelta`` so the JSON stays plain numbers, as the
+    curve does."""

@@ -14,14 +14,19 @@ from django.utils.timezone import now
 from django_domain_events import (
     assert_fired,
     attributed,
+    backoff,
+    catalogue,
     deliver_pending,
     outbox_health,
+    prune_events,
+    quiet_receivers,
     replay_events,
     requeue_dead,
     suppressed,
 )
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.models.receiver_last_success import ReceiverLastSuccess
 from shop.events import OrderCancelled, OrderPlaced, ParcelDispatched
 from shop.models import (
     Order,
@@ -92,6 +97,9 @@ class Command(BaseCommand):
 
     def handle(self, *args: Any, **options: Any) -> None:
         EventRecord.objects.all().delete()
+        # Else a second run inherits the first run's record of who succeeded,
+        # and step 13 would pass whether or not its own prune wrote one.
+        ReceiverLastSuccess.objects.all().delete()
         Order.objects.all().delete()
         SentEmail.objects.all().delete()
         PartnerSubscription.objects.all().delete()
@@ -240,6 +248,23 @@ class Command(BaseCommand):
             before + timedelta(days=1) <= closed.available_at <= after + timedelta(days=1),
             True,
         )
+        quota = DeliveryRecord.objects.get(receiver_key="shop.email_dispatch_notice")
+        deferred = quota.available_at - before
+        print(
+            f"   {quota.receiver_key}: {quota.status} after {quota.attempts} attempts, "
+            f"next in {deferred.total_seconds():.0f}s"
+        )
+        print(f"         {quota.last_error}")
+        check(
+            "RetryAfter(counts=False) spends no attempt",
+            (quota.status, quota.attempts),
+            ("failed", 0),
+        )
+        check(
+            "and comes back between the hour asked and twice that",
+            before + timedelta(hours=1) <= quota.available_at <= after + timedelta(hours=2),
+            True,
+        )
         check(
             "and the clamp is logged",
             [m for m in warnings.messages if "MAX_RECEIVER_RETRY_DELAY_SECONDS" in m] != [],
@@ -294,4 +319,60 @@ class Command(BaseCommand):
             notices,
             ["acme-analytics", "acme-analytics", "globex-crm", "initech-erp"],
         )
+
+        head("13. An event declared to go once consumed goes at the next prune")
+        deliver_pending(worker_id="demo")
+        reservations = EventRecord.objects.filter(name="shop.StockReserved")
+        orders_logged = EventRecord.objects.filter(name="shop.OrderPlaced").count()
+        print(f"   StockReserved events delivered and waiting: {reservations.count()}")
+        check(
+            "each was delivered to every receiver",
+            set(
+                DeliveryRecord.objects.filter(event__in=reservations).values_list(
+                    "status", flat=True
+                )
+            ),
+            {"succeeded"},
+        )
+        check("both reservations are still on record", reservations.count(), 2)
+        print(f"   pruned: {prune_events()} events")
+        print(f"   StockReserved events left: {reservations.count()}")
+        orders_left = EventRecord.objects.filter(name="shop.OrderPlaced").count()
+        print(f"   OrderPlaced events left:   {orders_left}   <- kept for RETENTION_DAYS")
+        check("Retention.SUCCEEDED deletes a consumed event at once", reservations.count(), 0)
+        check("and nothing kept by RETENTION_DAYS goes with it", orders_left, orders_logged)
+        quiet = {entry.key for entry in quiet_receivers()}
+        print(f"   shop.notify_warehouse quiet: {'shop.notify_warehouse' in quiet}")
+        check(
+            "the prune remembers that the receiver ran",
+            "shop.notify_warehouse" in quiet,
+            False,
+        )
+
+        head("14. The receipt mailer has a lane of its own, and a curve that lasts")
+        receipt = "shop.email_receipt"
+        replay_events([placed.pk], receiver_keys=[receipt])
+        sent_before = SentEmail.objects.count()
+        print(f"   default lane: {deliver_pending(worker_id='demo', lane='default')}")
+        check(
+            "a relay without --lane leaves the mail lane alone",
+            SentEmail.objects.count(),
+            sent_before,
+        )
+        print(f"   mail lane:    {deliver_pending(worker_id='demo', lane='mail')}")
+        check("the mail lane's relay sends it", SentEmail.objects.count(), sent_before + 1)
+        [mailer] = [r for e in catalogue().events for r in e.receivers if r.key == receipt]
+        # One wait between each pair of attempts, each drawn from zero up to
+        # its ceiling: the sum of the ceilings is the longest the budget can
+        # last, and half of it is how long it lasts on average.
+        ceilings = [
+            backoff(
+                n, base=mailer.backoff_base_seconds, cap=mailer.backoff_cap_seconds, jitter=1.0
+            ).total_seconds()
+            for n in range(1, mailer.max_attempts)
+        ]
+        print(f"   {mailer.max_attempts} attempts, waits of at most {[int(c) for c in ceilings]}s")
+        print(f"   lasts at most {sum(ceilings) / 3600:g}h, {sum(ceilings) / 7200:g}h on average")
+        check("the retry budget lasts at most three hours", sum(ceilings), 3 * 3600)
+        check("and an hour and a half on average", sum(ceilings) / 2, 1.5 * 3600)
         print("\nEvery claim above was checked.")

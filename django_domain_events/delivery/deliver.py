@@ -4,6 +4,7 @@ import logging
 import random
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import uuid4
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
@@ -12,21 +13,35 @@ from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.fire import call_receiver
+from django_domain_events.delivery.hand_back import hand_back
 from django_domain_events.delivery.permanent_failure import PermanentFailure
 from django_domain_events.delivery.retry_after import RetryAfter
+from django_domain_events.delivery.utils import OnDeferral, claim_size, partition_by_lane
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.scope.causation import caused_by
 from django_domain_events.settings import get_task_backend, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_status import DeliveryStatus
-from django_domain_events.utils import decode_payload
+from django_domain_events.types.registered_receiver import RegisteredReceiver
+from django_domain_events.utils import TERMINAL, decode_payload, parse_datetime
 
 logger = logging.getLogger(__name__)
 
+# The receivers already warned about raising ``RetryAfter(counts=False)`` with
+# no ``give_up_after``. Per process, because the warning is about a declaration
+# and a twenty-thousand row burst should say so once, not twenty thousand times.
+_WARNED_UNBOUNDED: set[str] = set()
 
-def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryStatus | None:
-    """Run one delivery and record its outcome. ``None`` means it was lost.
+
+def deliver_one(
+    delivery_id: int,
+    *,
+    worker_id: str | None = None,
+    claimed_by: str | None = None,
+    claimed_at: str | None = None,
+) -> DeliveryStatus | None:
+    """Run one delivery and record its outcome. ``None`` means this call recorded none.
 
     The receiver's work and the acknowledgement commit together, so a receiver
     touching only this database is effectively once: the duplicate at-least-once
@@ -39,12 +54,68 @@ def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliverySt
     alive, and a worker that has lost its row must not go on to write a verdict
     over whoever legitimately took it. Losing the row returns ``None`` rather
     than raising - it is an ordinary outcome of a lease expiring, not a fault.
+
+    A row that is not owed is refused the same way, whoever asks: one already
+    settled (succeeded, dead or orphaned), or one that failed and is waiting out
+    its backoff. Running either would repeat committed work, resurrect a dead
+    letter past its budget, or ignore a ``RetryAfter`` the destination sent.
+
+    ``claimed_by`` and ``claimed_at`` are the claim a task message carries, as
+    the relay passed them to ``TaskBackend.enqueue``. Given them, this call
+    first *takes* the row: one conditional update, committed before anything
+    else runs, that succeeds only while the row is still CLAIMED under exactly
+    that claim, and moves it to ``worker_id`` - or to an id minted for this one
+    take. A second copy of the message, a copy the queue held past its lease,
+    and a copy for a row that has since settled all fail the take and return
+    ``None`` without running the receiver.
+
+    A receiver deferring with ``RetryAfter(counts=False)`` is recorded here as
+    anywhere, but pauses nothing: a pause belongs to the relay process that
+    claimed the row's batch, and a call made directly holds no batch.
     """
+    return _deliver_one(
+        delivery_id,
+        worker_id=worker_id,
+        claimed_by=claimed_by,
+        claimed_at=claimed_at,
+        on_deferral=None,
+    )
+
+
+def _deliver_one(
+    delivery_id: int,
+    *,
+    worker_id: str | None,
+    claimed_by: str | None,
+    claimed_at: str | None,
+    on_deferral: OnDeferral | None,
+) -> DeliveryStatus | None:
+    """``deliver_one``, telling ``on_deferral`` of a deferral that did not count."""
     from django_domain_events.models.delivery_record import DeliveryRecord
 
+    if claimed_by is not None or claimed_at is not None:
+        worker_id = worker_id if worker_id is not None else f"task-{uuid4().hex}"
+        if not _take(delivery_id, claimed_by, claimed_at, worker_id):
+            logger.warning(
+                "a task for delivery %s carried a claim the row no longer holds "
+                "(%s at %s); it was not run. Another copy of the message took it, "
+                "the queue held it past its lease, or the row has settled",
+                delivery_id,
+                claimed_by,
+                claimed_at,
+            )
+            return None
+
     delivery = DeliveryRecord.objects.select_related("event").get(pk=delivery_id)
-    fence = _Fence(delivery, worker_id)
     now = datetime.now(timezone.utc)
+    if not _owed(delivery, now):
+        logger.info(
+            "delivery %s is %s and not owed now, so it was not run",
+            delivery_id,
+            delivery.status,
+        )
+        return None
+    fence = _Fence(delivery, worker_id)
 
     # The receiver is resolved before the lease is extended, because it is what
     # says how long the lease should be. A registry lookup touches no rows, so
@@ -78,6 +149,7 @@ def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliverySt
         return _fail(
             fence,
             delivery,
+            receiver,
             f"No event is registered under {delivery.event.name!r}, so its "
             f"payload cannot be rebuilt.",
         )
@@ -105,6 +177,7 @@ def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliverySt
         actor_label=delivery.event.actor_label,
         scope=delivery.event.scope,
         target=delivery.target,
+        delivery_id=delivery.pk,
     )
     try:
         with (
@@ -137,14 +210,75 @@ def deliver_one(delivery_id: int, *, worker_id: str | None = None) -> DeliverySt
         # The receiver's verdict is read here, at the one boundary every
         # execution site shares, and nowhere else. Both are ordinary failures
         # in every other respect: the attempt counts and the message is kept.
+        # A deferral that does not count is the exception, and the guard is one
+        # arc of two conjuncts: the type is held by
+        # test_an_ordinary_exception_is_not_read_as_a_deferral (an exception
+        # with no ``counts`` would raise AttributeError here), ``counts`` by
+        # test_a_counting_retry_after_still_spends_its_attempt.
+        if isinstance(exc, RetryAfter) and not exc.counts:
+            return _defer(fence, delivery, receiver, exc, attempt, on_deferral)
         return _fail(
             fence,
             delivery,
+            receiver,
             f"{type(exc).__name__}: {exc}",
             attempt=attempt,
             terminal=isinstance(exc, PermanentFailure),
             requested_delay=exc.seconds if isinstance(exc, RetryAfter) else None,
         )
+
+
+def _owed(delivery: Any, now: datetime) -> bool:
+    """Whether this row is still owed a run at this moment.
+
+    The status set and the backoff are separate tests, because each guard here
+    is one branch arc and coverage cannot see a deleted member:
+    ``test_a_settled_row_delivered_again_does_not_run_its_receiver_twice``,
+    ``test_a_dead_row_is_not_run_or_resurrected`` and
+    ``test_an_orphaned_row_is_not_run`` hold one terminal status each;
+    ``test_a_failed_row_not_yet_due_is_not_run`` holds the backoff;
+    ``test_a_failed_row_that_is_due_still_runs`` holds its ``available_at``
+    half against a check that refuses every FAILED row, and
+    ``test_a_failed_row_claimed_early_on_purpose_still_runs`` its status half
+    against one that reads ``available_at`` alone.
+
+    PENDING is owed whatever its ``available_at``, and a CLAIMED row is the
+    claimer's to run: ``deliver_pending(ignore_backoff=True)`` claims a FAILED
+    row early on purpose, and the claim is what makes that row CLAIMED.
+    """
+    if delivery.status in TERMINAL:
+        return False
+    return not (delivery.status == DeliveryStatus.FAILED and delivery.available_at > now)
+
+
+def _take(delivery_id: int, claimed_by: str | None, claimed_at: str | None, worker_id: str) -> bool:
+    """Move a row from the claim a task message carries to this worker.
+
+    One conditional ``UPDATE``, never a read followed by a save: two copies of
+    one message dequeued at once each read a row that matches, and only a write
+    the database serialises can tell them apart. The loser's ``WHERE`` is
+    re-evaluated after the winner commits and matches nothing
+    (``test_two_copies_at_once_run_the_receiver_once``, on Postgres).
+
+    Outside any transaction of ours, so it commits on its own before the
+    receiver's transaction opens. A take that rolled back with the receiver
+    would leave the row under the old claim, takeable by the next copy.
+
+    Every condition is one arc, so each has a test that fails without it:
+    ``status`` - ``test_a_message_for_a_released_row_does_not_take_it``;
+    ``claimed_by`` - ``test_a_message_naming_another_worker_does_not_take_the_row``;
+    ``claimed_at`` -
+    ``test_a_message_from_an_earlier_claim_by_the_same_worker_does_not_take_the_row``.
+    """
+    from django_domain_events.models.delivery_record import DeliveryRecord
+
+    taken = DeliveryRecord.objects.filter(
+        pk=delivery_id,
+        status=DeliveryStatus.CLAIMED,
+        claimed_by=claimed_by,
+        claimed_at=None if claimed_at is None else parse_datetime(claimed_at),
+    ).update(claimed_by=worker_id, claimed_at=datetime.now(timezone.utc))
+    return bool(taken)
 
 
 class _Fence:
@@ -192,13 +326,25 @@ class _Fence:
         return fields["status"]
 
 
-def dispatch_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryStatus | None:
+def dispatch_one(
+    delivery_id: int, *, worker_id: str | None = None, on_deferral: OnDeferral | None = None
+) -> DeliveryStatus | None:
     """Deliver this row, or hand it to the task backend if that is its site.
+
+    ``on_deferral`` is told when the receiver deferred without counting and
+    the deferral was recorded, so the caller can pause that lane. Only for a
+    row run here: one handed to a task backend defers inside the task, in a
+    process holding no batch to pause.
 
     An enqueued row stays CLAIMED under its lease and is not counted as an
     outcome: nothing has happened to it yet. If the enqueue is lost the lease
     lapses and the relay reclaims it, which is what makes handing work to a
     lossy queue safe.
+
+    The message carries the claim the row was handed off under, and the task
+    must take the row under that claim before it runs anything. That is what
+    makes a queue that redelivers safe as well as one that loses: a second copy,
+    or a copy that outlived its lease, finds the claim gone and does nothing.
 
     The lease is extended here for the same reason ``deliver_one`` extends it,
     and it matters more: the row now has to survive the queue's backlog as well
@@ -212,7 +358,13 @@ def dispatch_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryS
     )
     receiver = registry.receiver_for_key(receiver_key) if receiver_key else None
     if receiver is None or receiver.site != "task":
-        return deliver_one(delivery_id, worker_id=worker_id)
+        return _deliver_one(
+            delivery_id,
+            worker_id=worker_id,
+            claimed_by=None,
+            claimed_at=None,
+            on_deferral=on_deferral,
+        )
 
     # Looked up only for a receiver that asked for it, so a misconfigured
     # TASK_BACKEND cannot break receivers that never wanted one.
@@ -223,19 +375,32 @@ def dispatch_one(delivery_id: int, *, worker_id: str | None = None) -> DeliveryS
             f"is configured, so there is nothing to hand it to."
         )
     delivery = DeliveryRecord.objects.get(pk=delivery_id)
-    if delivery.status == DeliveryStatus.CLAIMED and not _Fence(delivery, worker_id).extend_lease(
+    fence = _Fence(delivery, worker_id)
+    # The message carries the claim, so only a row this worker holds can be
+    # handed off: an unclaimed row has no claim to carry, and the task taking it
+    # would be refused. Each half has its own test, since the two are one arc:
+    # test_an_unclaimed_row_is_not_enqueued and test_a_lost_row_is_not_enqueued.
+    if delivery.status != DeliveryStatus.CLAIMED or not fence.extend_lease(
         datetime.now(timezone.utc), receiver.lease_seconds
     ):
-        logger.warning("worker %s lost delivery %s before enqueueing it", worker_id, delivery_id)
+        logger.warning(
+            "worker %s does not hold delivery %s, so it was not enqueued", worker_id, delivery_id
+        )
         return None
 
-    backend.enqueue(delivery_id)
+    # As an ISO string because it has to survive whatever the queue serialises
+    # with: django.tasks refuses arguments that are not JSON, and a Celery
+    # message under the default serializer is JSON too.
+    backend.enqueue(
+        delivery_id, claimed_by=fence.claimed_by, claimed_at=fence.claimed_at.isoformat()
+    )
     return None
 
 
 def _fail(
     fence: _Fence,
     row: Any,
+    receiver: RegisteredReceiver,
     message: str,
     attempt: int | None = None,
     *,
@@ -249,6 +414,10 @@ def _fail(
     with the receiver's own schedule: it raised ``RetryAfter``. Neither changes
     how the attempt is counted, so neither can keep a row alive past the budget
     it was fired with.
+
+    The curve is the receiver's own where it declared one, read from the
+    registration ``deliver_one`` resolved for this attempt rather than from the
+    row: a curve changed by a deploy applies to deliveries already in flight.
     """
     now = datetime.now(timezone.utc)
     attempts = attempt if attempt is not None else row.attempts + 1
@@ -258,8 +427,8 @@ def _fail(
     wait = (
         backoff(
             attempts,
-            base=setting("BACKOFF_BASE_SECONDS"),
-            cap=setting("BACKOFF_CAP_SECONDS"),
+            base=_or_setting(receiver.backoff_base_seconds, "BACKOFF_BASE_SECONDS"),
+            cap=_or_setting(receiver.backoff_cap_seconds, "BACKOFF_CAP_SECONDS"),
             jitter=random.random(),
         )
         if requested_delay is None
@@ -275,6 +444,115 @@ def _fail(
     if outcome is not None:
         _notify_failure(row, status=status, attempt=attempts, error=truncated)
     return outcome
+
+
+def _defer(
+    fence: _Fence,
+    row: Any,
+    receiver: RegisteredReceiver,
+    exc: RetryAfter,
+    attempt: int,
+    on_deferral: OnDeferral | None,
+) -> DeliveryStatus | None:
+    """Record a deferral that does not count, or the give-up that ends it.
+
+    ``attempts`` is never written here, whatever the outcome, and that is the
+    invariant the whole feature is: an attempt is counted by the outcome of an
+    attempt - a success, an ordinary failure, a counting ``RetryAfter`` - and
+    the claim never touches it. Both halves are held by
+    ``test_a_deferral_that_does_not_count_leaves_the_attempts_and_the_budget_alone``,
+    which runs the deferral twice on a budget of one, so an increment in
+    either the claim or this function dead-letters the row; the give-up half
+    by ``test_a_deferral_past_give_up_after_dead_letters_the_row``.
+    ``on_failure`` is told the attempt number the receiver's context carried,
+    which the next run is given again.
+
+    With no ``give_up_after`` nothing would end the delivery, so the deferral
+    is counted after all, with a warning once per receiver per process
+    (``test_a_deferral_with_no_give_up_after_counts_and_says_so_once``).
+
+    The bound is measured from ``due_at``, or the event's ``recorded_at`` where
+    that is NULL, which is when a row nobody has reopened became owed. Each arm
+    has a test that fails without it: NULL -
+    ``test_a_deferral_past_give_up_after_dead_letters_the_row``; ``due_at`` -
+    ``test_due_at_is_read_before_the_event_timestamp`` and the replay test
+    ``test_a_replayed_old_event_is_not_dead_lettered_on_its_first_deferral``.
+    Past the bound the row is dead-lettered as a spent budget is: ``DEAD``,
+    ``completed_at``, ``on_failure``, and a ``last_error`` naming the bound.
+
+    Otherwise the next attempt is scheduled between the requested delay and
+    twice that, clamped to ``MAX_RECEIVER_RETRY_DELAY_SECONDS``: never earlier
+    than the destination asked, and spread so that rows deferred together do
+    not return together. The caller is told the lane and the delay asked for,
+    not the jittered one, because a pause longer than asked holds back rows
+    the destination is ready for - and only once the deferral is recorded,
+    since a worker that lost the row has no say over its lane
+    (``test_a_deferral_this_worker_could_not_record_pauses_nothing``). A
+    caller with no callback - a direct ``deliver_one``, the eager attempt, a
+    task - pauses nothing
+    (``test_a_deferral_run_directly_is_recorded_and_pauses_nothing``).
+    """
+    message = f"{type(exc).__name__}: {exc}"
+    if receiver.give_up_after is None:
+        _warn_unbounded(receiver.key)
+        return _fail(fence, row, receiver, message, attempt=attempt, requested_delay=exc.seconds)
+
+    now = datetime.now(timezone.utc)
+    owed_since = row.due_at if row.due_at is not None else row.event.recorded_at
+    if _given_up(owed_since, now, receiver.give_up_after):
+        truncated = (
+            f"Gave up: owed since {owed_since.isoformat()}, past "
+            f"give_up_after={receiver.give_up_after}, and still deferred. {message}"
+        )[:2000]
+        outcome = fence.write(status=DeliveryStatus.DEAD, last_error=truncated, completed_at=now)
+        if outcome is not None:
+            _notify_failure(row, status=DeliveryStatus.DEAD, attempt=attempt, error=truncated)
+        return outcome
+
+    requested = _capped(row, exc.seconds)
+    ceiling = timedelta(seconds=setting("MAX_RECEIVER_RETRY_DELAY_SECONDS"))
+    truncated = message[:2000]
+    outcome = fence.write(
+        status=DeliveryStatus.FAILED,
+        last_error=truncated,
+        completed_at=None,
+        available_at=now + min(requested * (1 + random.random()), ceiling),
+    )
+    if outcome is not None:
+        _notify_failure(row, status=DeliveryStatus.FAILED, attempt=attempt, error=truncated)
+        if on_deferral is not None:
+            on_deferral(receiver.lane, requested.total_seconds())
+    return outcome
+
+
+def _given_up(owed_since: datetime, now: datetime, bound: timedelta) -> bool:
+    """Whether a row owed since ``owed_since`` has reached ``bound`` at ``now``.
+
+    At exactly the bound it has: ``give_up_after=timedelta(days=1)`` means a
+    day and no longer. Its own function so both sides of the comparison can be
+    pinned, which a real clock cannot do
+    (``test_the_bound_is_reached_at_exactly_give_up_after``).
+    """
+    return now - owed_since >= bound
+
+
+def _warn_unbounded(receiver_key: str) -> None:
+    """Say once per process that a receiver defers with nothing to end it."""
+    if receiver_key in _WARNED_UNBOUNDED:
+        return
+    _WARNED_UNBOUNDED.add(receiver_key)
+    logger.warning(
+        "receiver %s raised RetryAfter(counts=False) but declares no give_up_after, "
+        "so nothing would ever end its deliveries; the deferral was counted against "
+        "max_attempts instead. Declare give_up_after= on the receiver. Said once per "
+        "process.",
+        receiver_key,
+    )
+
+
+def _or_setting(declared: float | None, name: str) -> float:
+    """A receiver's declared value, or the setting it overrides when it has none."""
+    return setting(name) if declared is None else declared
 
 
 def _capped(row: Any, seconds: float) -> timedelta:
@@ -357,6 +635,8 @@ def deliver_pending(
     *,
     worker_id: str = "deliver_pending",
     ignore_backoff: bool = False,
+    lane: str | None = None,
+    batch_size: int | None = None,
 ) -> dict[DeliveryStatus, int]:
     """Claim and deliver what is owed, and report the outcome.
 
@@ -365,22 +645,65 @@ def deliver_pending(
     relay uses, so a pass here and a running relay do not hand the same row to
     two receivers - on a backend with row locking. SQLite has none, so two
     concurrent passes there can both take the same row.
+
+    ``lane`` delivers only that lane's rows, as ``run_relay(lane=...)`` claims
+    them; ``"default"`` is every row no named lane takes. None, the default
+    here, is every lane, which is what this function did before lanes existed
+    and what ``drain_outbox`` promises. ``deliver_events --once`` passes the
+    default lane unless told otherwise, as the relay does.
+
+    ``batch_size`` sizes each claim in place of ``BATCH_SIZE``. It cannot be
+    combined with ``limit``, which is one claim of exactly that many rows under
+    one lease: accepting both would silently ignore the batch, and claiming a
+    hundred rows at once is what a small batch is asked for to prevent
+    (``test_a_limit_and_a_batch_size_together_are_refused``).
+
+    A receiver deferring with ``RetryAfter(counts=False)`` sets its lane aside
+    for the rest of the call: the lane's unstarted rows in the batch are
+    handed back rather than attempted, and later claims leave the lane out,
+    while every other lane goes on being delivered
+    (``test_a_deferral_sets_its_lane_aside_and_the_pass_delivers_the_rest``).
     """
+    if limit is not None and batch_size is not None:
+        raise ValueError(
+            f"limit={limit} is one claim of that many rows, so batch_size={batch_size} "
+            f"would be ignored. Pass one or the other."
+        )
+    registry.require_lane(lane)
     lease = timedelta(seconds=setting("LEASE_SECONDS"))
-    batch_size = setting("BATCH_SIZE")
+    batch_size = claim_size(batch_size)
 
     counts: dict[DeliveryStatus, int] = {}
+    # Lanes set aside for the rest of this call by a deferral that did not
+    # count. For the rest of the call rather than for the requested delay: a
+    # pass has no clock to wait on, and with the backoff ignored - as
+    # drain_outbox ignores it - nothing else would stop it claiming the
+    # deferred row again, forever (test_a_drain_meeting_a_deferral_ends).
+    paused: set[str] = set()
+    deferred: list[str] = []
     while True:
+        claimed_at = datetime.now(timezone.utc)
         ids = claim_batch(
             worker_id=worker_id,
-            now=datetime.now(timezone.utc),
+            now=claimed_at,
             lease=lease,
             limit=limit if limit is not None else batch_size,
             ignore_backoff=ignore_backoff,
+            lane=lane,
+            exclude_lanes=paused,
         )
-        for delivery_id in ids:
-            outcome = dispatch_one(delivery_id, worker_id=worker_id)
+        unstarted = list(ids)
+        while unstarted:
+            outcome = dispatch_one(
+                unstarted.pop(0),
+                worker_id=worker_id,
+                on_deferral=lambda deferred_lane, _seconds: deferred.append(deferred_lane),
+            )
             if outcome is not None:
                 counts[outcome] = counts.get(outcome, 0) + 1
+            while deferred:
+                paused.add(deferred[-1])
+                to_give_back, unstarted = partition_by_lane(unstarted, deferred.pop())
+                hand_back(to_give_back, worker_id=worker_id, claimed_at=claimed_at)
         if limit is not None or not ids:
             return counts

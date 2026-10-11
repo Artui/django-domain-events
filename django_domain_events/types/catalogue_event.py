@@ -24,3 +24,17 @@ class CatalogueEvent:
 
     Last, and defaulted, so adding it does not break a consumer constructing
     one - these are exported types."""
+
+    retention_seconds: int | None = None
+    """The window of its own the event is declared with, in seconds, or None.
+
+    Published as ``fire()`` records it on the row rather than as the declared
+    ``timedelta`` or ``Retention``, so the JSON form stays plain values, and a
+    pipeline diffing catalogues sees an event start or stop deleting early.
+    Defaulted for the same reason as ``migrates_older_rows``."""
+
+    delete_when: str = ""
+    """``"succeeded"`` or ``"settled"`` for an event deleted once consumed (the
+    ``Retention`` value), or blank. At most one of this and
+    ``retention_seconds`` is set; with neither, the event follows
+    ``RETENTION_DAYS``."""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -12,6 +13,7 @@ from django_domain_events.utils import (
     label_for,
     require_frozen_dataclass,
     resolve_targets,
+    target_digest,
 )
 
 
@@ -126,3 +128,16 @@ def test_a_blank_target_is_refused() -> None:
     """Blank is what a receiver without targets= writes."""
     with pytest.raises(ValueError, match="returned an empty string"):
         _resolve("a", "")
+
+
+def test_a_target_digest_is_the_32_raw_bytes_of_its_sha256() -> None:
+    """Raw rather than hex: the unique index holds one per delivery row, and hex
+    doubled its width for nothing a byte comparison needs."""
+    digest = target_digest("endpoint-42")
+    assert digest == hashlib.sha256(b"endpoint-42").digest()
+    assert isinstance(digest, bytes)
+    assert len(digest) == 32
+
+
+def test_the_blank_target_has_a_digest_like_any_other() -> None:
+    assert target_digest("") == hashlib.sha256(b"").digest()

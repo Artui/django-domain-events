@@ -2,8 +2,6 @@
 
 from django.db import migrations, models
 
-import django_domain_events.models.target_digest_field
-
 
 class Migration(migrations.Migration):
     dependencies = [
@@ -26,11 +24,19 @@ class Migration(migrations.Migration):
             name="target",
             field=models.TextField(blank=True, default=""),
         ),
+        # A plain string field, not TargetDigestField: that class now stores raw
+        # bytes, and a migration naming it would build a binary column here and
+        # hand 0006 a value it cannot convert. This is the column as it was
+        # created - 64 characters, not editable - which is all the state this
+        # migration ever described. No database that already applied it sees a
+        # difference.
         migrations.AddField(
             model_name="deliveryrecord",
             name="target_digest",
-            field=django_domain_events.models.target_digest_field.TargetDigestField(
-                default="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            field=models.CharField(
+                default="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                editable=False,
+                max_length=64,
             ),
             preserve_default=False,
         ),

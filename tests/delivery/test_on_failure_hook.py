@@ -190,5 +190,6 @@ def test_a_worker_that_lost_the_row_does_not_report_the_failure() -> None:
 
     claim_batch(worker_id="B", now=_now(), lease=timedelta(hours=1), limit=10)
 
-    assert _fail(zombie, row, "boom", attempt=1) is None
+    declared = registry.receiver_for_key("probe.lostrow")
+    assert _fail(zombie, row, declared, "boom", attempt=1) is None
     assert seen == [], "a worker that wrote nothing must report nothing"

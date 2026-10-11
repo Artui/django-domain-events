@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -10,8 +11,14 @@ from django.utils.module_loading import import_string
 
 from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.declaration.registry import registry
-from django_domain_events.settings import DEFAULTS, SETTINGS_NAME, get_codec, setting
-from django_domain_events.utils import TERMINAL, has_table
+from django_domain_events.settings import (
+    DEFAULTS,
+    SETTINGS_NAME,
+    WAKE_MODES,
+    get_codec,
+    setting,
+)
+from django_domain_events.utils import has_table, owed
 
 # The names a reader reaches for instead: the app label, and the prose everyone
 # writes. Neither is read, and neither fails.
@@ -114,7 +121,8 @@ def check_declared_events_are_decodable(**kwargs: Any) -> list[Any]:
 
 
 def check_settings_keys_are_known(**kwargs: Any) -> list[Any]:
-    """The settings dict is named correctly and holds no unrecognised keys.
+    """The settings dict is named correctly, holds no unrecognised keys, and the
+    wake settings hold values the relay can act on.
 
     Both halves are silent by default. ``setting()`` reads only the keys this
     package asks for, so a typo sits in the settings looking effective; and the
@@ -149,7 +157,115 @@ def check_settings_keys_are_known(**kwargs: Any) -> list[Any]:
                 id="django_domain_events.W007",
             )
         )
+
+    # Folded in here rather than registered on its own: it is the same silent
+    # ineffective configuration, and the check is already wired.
+    problems.extend(_wake_setting_problems())
+    problems.extend(_relay_prune_setting_problems())
+    problems.extend(_prune_batch_problems())
     return problems
+
+
+def _wake_setting_problems() -> list[Any]:
+    """``WAKE`` and ``NOTIFY_COALESCE_SECONDS`` hold values the relay can use.
+
+    A misspelt ``WAKE`` would otherwise read as "not notify" and quietly turn
+    NOTIFY off, and a negative or NaN interval compares false against every
+    elapsed time, so it would silence every notification after the first.
+    ``bool`` is refused because ``True`` is an ``int`` and would read as a
+    one-second interval.
+
+    The interval guard is one branch arc of three disjuncts, each held by one case
+    of ``test_a_coalesce_interval_that_is_not_a_duration_is_an_error``: the bool
+    test by ``True``, the type test by ``"0.5"`` and ``None``, and the sign test
+    by ``nan`` (a ``-1`` passes under either form of it).
+    """
+    problems: list[Any] = []
+    wake = setting("WAKE")
+    if wake not in WAKE_MODES:
+        problems.append(
+            Error(
+                f"WAKE is {wake!r}, which is not a wake mode.",
+                hint=f"Use one of: {', '.join(repr(mode) for mode in WAKE_MODES)}.",
+                id="django_domain_events.E006",
+            )
+        )
+    interval = setting("NOTIFY_COALESCE_SECONDS")
+    # ``not interval >= 0`` rather than ``interval < 0``: NaN fails the first
+    # comparison and passes the second.
+    if isinstance(interval, bool) or not isinstance(interval, (int, float)) or not interval >= 0:
+        problems.append(
+            Error(
+                f"NOTIFY_COALESCE_SECONDS is {interval!r}, which is not a number of "
+                "seconds, zero or more.",
+                hint="Use 0 to send every notification, or a positive number of seconds.",
+                id="django_domain_events.E007",
+            )
+        )
+    return problems
+
+
+def _relay_prune_setting_problems() -> list[Any]:
+    """``RELAY_PRUNE`` is a switch and ``RELAY_PRUNE_SECONDS`` a positive interval.
+
+    Both fail the relay quietly if misread. A ``RELAY_PRUNE`` of ``"false"`` is
+    a truthy string and would leave the sweep on for the operator who meant it
+    off, and an interval of zero, a negative or NaN compares true or false
+    against every elapsed time and turns the throttle into a sweep on every idle
+    pass, or into none. Infinity is refused too: it is the off switch spelt
+    badly, and ``RELAY_PRUNE`` is the spelling.
+
+    The interval guard is one branch arc of several conditions, each held by a
+    case of ``test_a_prune_interval_that_is_not_a_positive_duration_is_an_error``:
+    the bool test by ``True``, the type test by ``"60"`` and ``None``, the sign
+    test by ``0`` and ``-1``, and the finiteness test by ``inf`` and ``nan``
+    (which is false against ``> 0`` too, so either conjunct refuses it).
+    """
+    problems: list[Any] = []
+    switch = setting("RELAY_PRUNE")
+    if not isinstance(switch, bool):
+        problems.append(
+            Error(
+                f"RELAY_PRUNE is {switch!r}, which is not a bool.",
+                hint="Use True to let an idle relay prune, or False to schedule prune_events.",
+                id="django_domain_events.E008",
+            )
+        )
+    interval = setting("RELAY_PRUNE_SECONDS")
+    if (
+        isinstance(interval, bool)
+        or not isinstance(interval, (int, float))
+        or not (interval > 0 and math.isfinite(interval))
+    ):
+        problems.append(
+            Error(
+                f"RELAY_PRUNE_SECONDS is {interval!r}, which is not a finite number of "
+                "seconds above zero.",
+                hint="Set RELAY_PRUNE to False to stop the relay pruning rather than a long interval.",
+                id="django_domain_events.E009",
+            )
+        )
+    return problems
+
+
+def _prune_batch_problems() -> list[Any]:
+    """``PRUNE_BATCH_ROWS`` is a positive whole number of rows.
+
+    ``prune_events`` refuses anything else with a ``ValueError``, which an idle
+    relay's sweep logs and swallows once an interval: the setting would be
+    wrong everywhere and the only sign a line in a log. The same bool-first
+    test as the prune's own, since ``True`` is an ``int``.
+    """
+    size = setting("PRUNE_BATCH_ROWS")
+    if isinstance(size, bool) or not isinstance(size, int) or size < 1:
+        return [
+            Error(
+                f"PRUNE_BATCH_ROWS is {size!r}, which is not a positive whole number of rows.",
+                hint="Use the number of rows one prune transaction may delete; the default is 5000.",
+                id="django_domain_events.E010",
+            )
+        ]
+    return []
 
 
 def check_no_orphaned_deliveries(
@@ -158,10 +274,14 @@ def check_no_orphaned_deliveries(
     """No delivery still owed names a receiver the registry no longer has.
 
     Owed means "not terminal", the same definition the relay claims by and the
-    prune settles by. Listing the owed statuses instead is how this check came
-    to omit CLAIMED: a worker that died between claiming a row and the deploy
-    that deleted its receiver leaves the row claimed with a lapsed lease, and it
-    read as settled until a relay happened to reclaim it.
+    prune settles by, phrased as the owed partial indexes' own conditions
+    (``owed``) so this reads the owed rows rather than every delivery ever
+    made - it runs on every ``migrate`` and ``check``. A hand-written list of
+    owed statuses is how this check once came to omit CLAIMED: a worker that
+    died between claiming a row and the deploy that deleted its receiver leaves
+    the row claimed with a lapsed lease, and it read as settled until a relay
+    happened to reclaim it. That is now held by a test with a row in every
+    status (test_the_orphan_warning_counts_every_owed_status_and_no_other).
 
     Two guards, and both are load-bearing. Without the first this runs under
     ``check``, ``showmigrations`` and ``makemigrations``, which pass no
@@ -181,7 +301,7 @@ def check_no_orphaned_deliveries(
             continue
         keys |= set(
             DeliveryRecord.objects.using(alias)
-            .exclude(status__in=TERMINAL)
+            .filter(owed())
             .values_list("receiver_key", flat=True)
             .distinct()
         )
@@ -221,7 +341,10 @@ def check_recorded_events_are_declared(
         return []
 
     table = EventRecord._meta.db_table
-    owed = DeliveryRecord.objects.filter(event=models.OuterRef("pk")).exclude(status__in=TERMINAL)
+    # Phrased as the owed partial indexes' conditions, like the orphan check,
+    # so Postgres can find the owed rows through those indexes and join out to
+    # their events rather than probe every event's deliveries.
+    owed_deliveries = DeliveryRecord.objects.filter(owed(), event=models.OuterRef("pk"))
     names: set[str] = set()
     for alias in databases:
         # One table answers for both: they are created by the same
@@ -230,7 +353,7 @@ def check_recorded_events_are_declared(
             continue
         names |= set(
             EventRecord.objects.using(alias)
-            .filter(models.Exists(owed))
+            .filter(models.Exists(owed_deliveries))
             .values_list("name", flat=True)
             .distinct()
         )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.types.registered_event import RegisteredEvent
-from django_domain_events.types.registered_receiver import RegisteredReceiver
+from django_domain_events.types.registered_receiver import DEFAULT_LANE, RegisteredReceiver
 
 
 class Registry:
@@ -75,6 +75,46 @@ class Registry:
 
     def receivers(self) -> list[RegisteredReceiver]:
         return list(self._receivers.values())
+
+    def receiver_keys_in_lane(self, lane: str) -> list[str]:
+        """The keys of the receivers declared in ``lane``, sorted.
+
+        What a relay serving a named lane claims. Asked on every claim rather
+        than cached, so membership is whatever the registry says at that moment.
+        """
+        return sorted(r.key for r in self._receivers.values() if r.lane == lane)
+
+    def receiver_keys_in_named_lanes(self) -> list[str]:
+        """The keys of every receiver declared in a lane other than the default.
+
+        The default lane is phrased as *not these* rather than as the receivers
+        declared in it, because that is what reaches a row whose receiver was
+        deleted: it names no lane at all, and it still has to drain.
+        """
+        return sorted(r.key for r in self._receivers.values() if r.lane != DEFAULT_LANE)
+
+    def lanes(self) -> list[str]:
+        """Every lane a relay can serve, sorted: the default and each one declared."""
+        return sorted({DEFAULT_LANE} | {r.lane for r in self._receivers.values()})
+
+    def require_lane(self, lane: str | None) -> None:
+        """Refuse a lane no receiver is declared in.
+
+        A relay started for one - a typo in a manifest, or a lane renamed in
+        the code and not in the deployment - would claim nothing, forever, and
+        look healthy doing it. None is every lane, and the default lane exists
+        with no receiver in it, because that is where a deleted receiver's rows
+        drain.
+
+        One arc, two conjuncts, each held by a case of
+        ``test_a_declared_lane_the_default_and_every_lane_are_accepted``: None
+        for the first, a declared lane for the second.
+        """
+        if lane is not None and lane not in self.lanes():
+            raise ValueError(
+                f"No receiver is declared in lane {lane!r}, so a relay serving it "
+                f"would claim nothing. Declared lanes: {', '.join(self.lanes())}."
+            )
 
     def clear(self) -> None:
         self._events_by_class.clear()

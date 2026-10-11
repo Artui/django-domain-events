@@ -74,6 +74,7 @@ nav:
   - Delivery: delivery.md
   - Scope and attribution: scope.md
   - Operations: operations.md
+  - Retention: retention.md
   - Introspection: introspection.md
   - Settings: settings.md
   - API reference: reference.md

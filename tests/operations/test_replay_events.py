@@ -4,6 +4,7 @@ import hashlib
 import importlib
 import secrets
 from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import pytest
@@ -14,6 +15,7 @@ from django_domain_events.declaration.receiver import receiver
 from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.operations.replay_events import replay_events
@@ -298,7 +300,7 @@ def test_a_row_replay_adds_carries_the_digest_of_its_target(owed_targets: list[s
 
     assert replay_events([event_id]) == {"reopened": 0, "added": 1}
     added = DeliveryRecord.objects.get(receiver_key="probe.fan", target="c" * 3000)
-    assert added.target_digest == hashlib.sha256(("c" * 3000).encode()).hexdigest()
+    assert added.target_digest == hashlib.sha256(("c" * 3000).encode()).digest()
 
 
 def test_a_long_target_already_delivered_is_reopened_not_duplicated(
@@ -337,3 +339,62 @@ def test_replay_finds_existing_rows_by_the_indexed_digest_not_the_text(
         where = sql.split(" WHERE ", 1)[1]
         assert '"target_digest" IN' in where
         assert '"target" IN' not in where
+
+
+class _Runaway(BaseException):
+    """A BaseException, so delivery does not record it as a failure."""
+
+
+@pytest.fixture
+def throttled() -> Iterator[str]:
+    """A receiver of ``Unheard`` whose every call defers without counting,
+    bounded by a day, so a deferral measured from the wrong moment dead-letters.
+    Past five calls it raises a BaseException: ``drain_outbox`` ignores the
+    backoff, so a regression in setting the lane aside would otherwise hang."""
+    calls_made: list[int] = []
+
+    def defer(event: Unheard) -> None:
+        calls_made.append(1)
+        if len(calls_made) > 5:
+            raise _Runaway("the drain kept claiming a deferred row")
+        raise RetryAfter(60, reason="throttled", counts=False)
+
+    receiver(Unheard, key="probe.throttled", give_up_after=timedelta(days=1))(defer)
+    yield "probe.throttled"
+    registry._receivers.pop("probe.throttled", None)
+
+
+def _a_month_old(event_id: int) -> None:
+    EventRecord.objects.filter(pk=event_id).update(
+        recorded_at=datetime.now(timezone.utc) - timedelta(days=30)
+    )
+
+
+def test_a_replayed_old_event_is_not_dead_lettered_on_its_first_deferral(throttled: str) -> None:
+    """Reopening makes the row owed now. Measured from the event's own
+    timestamp, a month-old event replayed into a throttled destination would be
+    past a one-day bound before its first attempt had run."""
+    with transaction.atomic():
+        event_id = fire(Unheard(value=1))
+    DeliveryRecord.objects.filter(receiver_key=throttled).update(status=DeliveryStatus.DEAD)
+    _a_month_old(event_id)
+
+    before = datetime.now(timezone.utc)
+    assert replay_events([event_id]) == {"reopened": 1, "added": 0}
+    assert DeliveryRecord.objects.get(receiver_key=throttled).due_at >= before
+
+    assert drain_outbox() == {DeliveryStatus.FAILED: 1}
+
+
+def test_a_row_a_replay_adds_is_owed_from_the_replay_too(throttled: str) -> None:
+    """The other half of a replay: a receiver declared after the event was
+    fired gets a row written now, and that row is measured from now as well."""
+    with receiver_deleted(throttled), transaction.atomic():
+        event_id = fire(Unheard(value=1))
+    _a_month_old(event_id)
+
+    before = datetime.now(timezone.utc)
+    assert replay_events([event_id]) == {"reopened": 0, "added": 1}
+    assert DeliveryRecord.objects.get(receiver_key=throttled).due_at >= before
+
+    assert drain_outbox() == {DeliveryStatus.FAILED: 1}
