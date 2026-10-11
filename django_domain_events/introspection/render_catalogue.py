@@ -134,12 +134,12 @@ def _receiver_table(receivers: tuple[CatalogueReceiver, ...]) -> list[str]:
         if receiver.give_up_after_seconds is not None:
             lines += [
                 f"`{_cell(receiver.key)}` dead-letters a deferral once its delivery has "
-                f"been owed for {receiver.give_up_after_seconds:g}s.",
+                f"been owed for {_plain(receiver.give_up_after_seconds)}.",
                 "",
             ]
         if receiver.due_seconds is not None:
             lines += [
-                f"`{_cell(receiver.key)}` is due {receiver.due_seconds:g}s after the event "
+                f"`{_cell(receiver.key)}` is due {_plain(receiver.due_seconds)} after the event "
                 f"occurred.",
                 "",
             ]
@@ -189,7 +189,18 @@ def _duration(seconds: int) -> str:
 
 def _seconds(value: float | None, setting: str) -> str:
     """A declared duration as ``60s``, or the setting that supplies it."""
-    return f"`{setting}`" if value is None else f"{value:g}s"
+    return f"`{setting}`" if value is None else _plain(value)
+
+
+def _plain(value: float) -> str:
+    """A duration in seconds as ``1209600s``.
+
+    Fifteen significant digits rather than ``:g``'s six, which writes a
+    fortnight - the delay a scheduled reminder is likeliest to have - as
+    ``1.2096e+06s``. Still the shortest form for the rest: ``0.5s``, ``60s``
+    (test_a_duration_of_a_million_seconds_or_more_is_written_out).
+    """
+    return f"{value:.15g}s"
 
 
 def _cell(value: str) -> str:

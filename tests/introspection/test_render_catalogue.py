@@ -332,6 +332,19 @@ def test_a_due_time_is_said_in_prose_under_the_table() -> None:
     assert " is due " not in _with()
 
 
+def test_a_duration_of_a_million_seconds_or_more_is_written_out() -> None:
+    """A fortnight is 1209600 seconds, and the shortest float formatting writes
+    that as 1.2096e+06 - for the delay a scheduled reminder is most likely to
+    have. Every duration line reads the same way, so each is checked."""
+    fortnight = 14 * 86400.0
+    assert "is due 1209600s after the event occurred." in _with(due_seconds=fortnight)
+    assert "been owed for 1209600s." in _with(give_up_after_seconds=fortnight)
+    assert "base 1209600s, cap 2419200s." in _with(
+        backoff_base_seconds=fortnight, backoff_cap_seconds=2 * fortnight
+    )
+    assert "e+" not in _with(due_seconds=fortnight, give_up_after_seconds=fortnight)
+
+
 def test_json_carries_the_due_time() -> None:
     receiver = dataclasses.replace(_receiver("shop.mail"), due_seconds=172800.0)
     parsed = json.loads(
