@@ -12,12 +12,15 @@ from typing import Any
 import pytest
 from django.db import OperationalError, connection, transaction
 
+from django_domain_events.declaration.receiver import receiver
 from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery import deliver as deliver_module
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.deliver import deliver_one, deliver_pending
+from django_domain_events.delivery.django_tasks_backend import deliver_delivery
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.utils import partition_by_lane
 from django_domain_events.models.delivery_record import DeliveryRecord
@@ -28,7 +31,7 @@ from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
 from tests.conftest import receiver_deleted, receiver_registered, receiver_replaced
-from tests.testapp.events import OrderPlaced, SlowWork, calls
+from tests.testapp.events import OrderPlaced, SlowWork, Unheard, calls
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -1132,3 +1135,86 @@ def test_deliver_pending_refuses_a_batch_that_claims_nothing(size: int) -> None:
     at once having delivered nothing, and a relay sized that way idles forever."""
     with pytest.raises(ValueError, match="batch_size must be positive"):
         deliver_pending(batch_size=size)
+
+
+# A task backend the relay hands rows to, recorded at module level because
+# settings name it by dotted path and the package builds the instance.
+_ENQUEUED: list[int] = []
+
+
+class _QueueingBackend:
+    """Enqueues and runs nothing, as a real queue does until a worker takes the
+    message. Past five messages it raises a BaseException, which nothing in the
+    relay catches, so a pass that keeps re-enqueueing fails rather than hangs."""
+
+    def enqueue(self, *args: object, **kwargs: object) -> None:
+        _ENQUEUED.append(int(args[0]))
+        if len(_ENQUEUED) > 5:
+            raise _Runaway("the pass kept handing the same row to the queue")
+
+
+class _ImmediateBackend(_QueueingBackend):
+    """Runs the task body inside ``enqueue``, as django.tasks' immediate backend
+    and Celery's eager mode do."""
+
+    def enqueue(self, *args: object, **kwargs: object) -> None:
+        super().enqueue(*args, **kwargs)
+        deliver_delivery(*args, **kwargs)
+
+
+@contextmanager
+def _task_site(settings: Any, backend: type, func: Any, **declaration: Any) -> Iterator[None]:
+    """``func`` declared ``site="task"`` for ``Unheard``, handed to ``backend``."""
+    _ENQUEUED.clear()
+    settings.DJANGO_DOMAIN_EVENTS = {"TASK_BACKEND": f"{__name__}.{backend.__name__}"}
+    receiver(Unheard, key="probe.task_site", site="task", **declaration)(func)
+    try:
+        with transaction.atomic():
+            fire(Unheard(value=1))
+        yield
+    finally:
+        registry._receivers.pop("probe.task_site", None)
+
+
+def test_a_drain_told_a_later_time_hands_a_task_row_to_the_queue_once(settings) -> None:
+    """The claim leases a row against the drain's ``now``, and the hand-off
+    extends the lease on the real clock, which is earlier: without leaving the
+    row out of the call's later claims, the next claim finds the lease lapsed
+    and enqueues it again, forever. Not counted, as no hand-off is."""
+    with _task_site(settings, _QueueingBackend, lambda event: None):
+        counts = drain_outbox(now=datetime.now(timezone.utc) + timedelta(days=7))
+
+    assert (counts, _ENQUEUED) == ({}, [_delivery_id("probe.task_site")])
+    assert _delivery("probe.task_site").status == DeliveryStatus.CLAIMED
+
+
+def test_a_task_answering_not_yet_under_a_drain_told_a_later_time_runs_once(settings) -> None:
+    """A task run inside the hand-off reschedules its row where the pass cannot
+    see the outcome, so the pass reads the row: PENDING is a reschedule, and a
+    drain told a time past it would otherwise take it straight back."""
+
+    def always_later(event: Unheard) -> None:
+        raise NotYet(datetime.now(timezone.utc) + timedelta(hours=1))
+
+    with _task_site(settings, _ImmediateBackend, always_later):
+        counts = drain_outbox(now=datetime.now(timezone.utc) + timedelta(days=7))
+
+    row = _delivery("probe.task_site")
+    assert (counts, len(_ENQUEUED)) == ({}, 1)
+    assert (row.status, row.attempts) == (DeliveryStatus.PENDING, 0)
+
+
+def test_a_task_that_failed_inside_the_hand_off_is_retried_within_the_drain(settings) -> None:
+    """Only a row the hand-off left owed and unfailed is set aside. One the task
+    failed is claimed again, so a drain still runs a failing task receiver to
+    its dead letter, as it runs one delivered in place."""
+
+    def broken(event: Unheard) -> None:
+        raise RuntimeError("down")
+
+    with _task_site(settings, _ImmediateBackend, broken, max_attempts=2):
+        counts = drain_outbox(now=datetime.now(timezone.utc) + timedelta(days=7))
+
+    row = _delivery("probe.task_site")
+    assert (row.status, row.attempts, len(_ENQUEUED)) == (DeliveryStatus.DEAD, 2, 2)
+    assert counts == {}

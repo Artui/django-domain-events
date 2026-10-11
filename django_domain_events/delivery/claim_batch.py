@@ -59,9 +59,11 @@ def claim_batch(
     (``test_a_paused_default_lane_with_no_named_lanes_claims_nothing``). Empty,
     the claim is the one it was without it.
 
-    ``exclude_ids`` leaves those rows out, and is how a pass keeps a row its
-    receiver answered with ``NotYet`` from coming straight back when the pass
-    was told a ``now`` beyond the time it was moved to. Empty, it adds nothing
+    ``exclude_ids`` leaves those rows out, and is how a pass keeps a row it is
+    done with from coming straight back when the pass was told a ``now`` beyond
+    the real clock: one its receiver answered with ``NotYet``, moved to a time
+    that ``now`` has passed, or one handed to a task backend under a lease the
+    real clock extended and ``now`` reads as lapsed. Empty, it adds nothing
     to the claim: Django compiles a negated ``__in`` over no values to nothing
     at all, so the relay's claim is the one it was
     (``test_without_named_lanes_the_default_lane_sends_the_unfiltered_claim``).

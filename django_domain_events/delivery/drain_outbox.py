@@ -29,5 +29,11 @@ def drain_outbox(
     then, reading the backoff, when respected, against the same moment. The
     receiver still runs on the real clock; ``DeliveryContext.due_at`` is what it
     should compare against.
+
+    A row is attempted at most once a call when its receiver answers
+    ``NotYet``, and handed to a task backend at most once a call when its
+    receiver declares ``site="task"``. A handed-off row is not counted in the
+    result, since nothing has happened to it here, and that holds for a backend
+    that runs the task inside the hand-off too.
     """
     return deliver_pending(limit=limit, ignore_backoff=not respect_backoff, now=now)

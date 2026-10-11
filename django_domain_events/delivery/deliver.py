@@ -574,6 +574,21 @@ def _reschedule(fence: _Fence, row: Any, exc: NotYet) -> DeliveryStatus | None:
     )
 
 
+def _left_unfinished(delivery_id: int) -> bool:
+    """Whether a row ``dispatch_one`` returned no outcome for is still waiting.
+
+    CLAIMED is a row handed to a queue, which has not run it yet; PENDING is
+    one a task ran inside the hand-off and rescheduled with ``NotYet``. Either
+    way the pass is done with it, where a FAILED, SUCCEEDED or DEAD row says the
+    task ran and recorded an outcome the pass could act on like its own.
+    """
+    from django_domain_events.models.delivery_record import DeliveryRecord
+
+    return DeliveryRecord.objects.filter(
+        pk=delivery_id, status__in=[DeliveryStatus.CLAIMED, DeliveryStatus.PENDING]
+    ).exists()
+
+
 def _given_up(owed_since: datetime, now: datetime, bound: timedelta) -> bool:
     """Whether a row owed since ``owed_since`` has reached ``bound`` at ``now``.
 
@@ -738,13 +753,27 @@ def deliver_pending(
     # deferred row again, forever (test_a_drain_meeting_a_deferral_ends).
     paused: set[str] = set()
     deferred: list[str] = []
-    # Rows a receiver answered with NotYet, left out of this call's later
-    # claims. On the real clock the time they were moved to is ahead, so the
-    # claim would not take them again anyway; told a later ``now``, it would,
-    # and a receiver deciding by the real clock would answer the same way every
-    # time, spending nothing (test_a_drain_told_a_later_time_runs_a_rescheduled_row_once).
-    # Recognised by the outcome alone: PENDING is what only a reschedule records.
-    rescheduled: set[int] = set()
+    # Rows this call is done with although the claim could still take them,
+    # left out of its later claims. Two kinds, and both are rows the claim
+    # would not take again on the real clock but would when told a later
+    # ``now``:
+    #
+    # - A row a receiver answered with NotYet. The time it was moved to is
+    #   ahead of the real clock, and a receiver deciding by that clock would
+    #   answer the same way every time, spending nothing
+    #   (test_a_drain_told_a_later_time_runs_a_rescheduled_row_once).
+    #   Recognised by its outcome where it ran here: PENDING is what only a
+    #   reschedule records.
+    # - A row handed to a task backend, which returns no outcome. Read back
+    #   once, and set aside if the hand-off left it CLAIMED - enqueued, under
+    #   a lease extended on the real clock, which a later ``now`` reads as
+    #   lapsed (test_a_drain_told_a_later_time_hands_a_task_row_to_the_queue_once)
+    #   - or PENDING, a task that ran inside the hand-off and answered NotYet
+    #   (test_a_task_answering_not_yet_under_a_drain_told_a_later_time_runs_once).
+    #   A row the task failed is still claimed again, so a drain runs a failing
+    #   task receiver to its dead letter as it runs one delivered in place
+    #   (test_a_task_that_failed_inside_the_hand_off_is_retried_within_the_drain).
+    set_aside: set[int] = set()
     while True:
         claimed_at = now if now is not None else datetime.now(timezone.utc)
         ids = claim_batch(
@@ -755,7 +784,7 @@ def deliver_pending(
             ignore_backoff=ignore_backoff,
             lane=lane,
             exclude_lanes=paused,
-            exclude_ids=rescheduled,
+            exclude_ids=set_aside,
         )
         unstarted = list(ids)
         while unstarted:
@@ -766,7 +795,13 @@ def deliver_pending(
                 on_deferral=lambda deferred_lane, _seconds: deferred.append(deferred_lane),
             )
             if outcome is DeliveryStatus.PENDING:
-                rescheduled.add(delivery_id)
+                set_aside.add(delivery_id)
+            elif outcome is None and _left_unfinished(delivery_id):
+                # Read back only where no outcome came back, so a row run in
+                # place costs the pass no query: ``outcome is None`` is that
+                # economy and nothing else, since a row run in place is never
+                # left CLAIMED or PENDING without saying so.
+                set_aside.add(delivery_id)
             if outcome is not None:
                 counts[outcome] = counts.get(outcome, 0) + 1
             while deferred:
