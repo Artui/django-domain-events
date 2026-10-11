@@ -399,6 +399,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../retention/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retention
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../introspection/" class="md-nav__link">
         
   
@@ -531,10 +558,65 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#wake" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WAKE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#notify_coalesce_seconds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NOTIFY_COALESCE_SECONDS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#batch_size" class="md-nav__link">
     <span class="md-ellipsis">
       
         BATCH_SIZE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prune_batch_rows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PRUNE_BATCH_ROWS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#relay_prune" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RELAY_PRUNE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#relay_prune_seconds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RELAY_PRUNE_SECONDS
       
     </span>
   </a>
@@ -675,10 +757,65 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#wake" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WAKE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#notify_coalesce_seconds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NOTIFY_COALESCE_SECONDS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#batch_size" class="md-nav__link">
     <span class="md-ellipsis">
       
         BATCH_SIZE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prune_batch_rows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PRUNE_BATCH_ROWS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#relay_prune" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RELAY_PRUNE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#relay_prune_seconds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RELAY_PRUNE_SECONDS
       
     </span>
   </a>
@@ -769,7 +906,7 @@ are changing.</p>
 <tr>
 <td><code>BATCH_SIZE</code></td>
 <td><code>50</code></td>
-<td>Rows per claim, per prune batch and per requeue chunk.</td>
+<td>Rows per claim and per requeue chunk. A relay may override it for its claims.</td>
 </tr>
 <tr>
 <td><code>LEASE_SECONDS</code></td>
@@ -780,6 +917,16 @@ are changing.</p>
 <td><code>POLL_SECONDS</code></td>
 <td><code>1.0</code></td>
 <td>Relay poll interval, and the floor under <code>LISTEN</code>/<code>NOTIFY</code>.</td>
+</tr>
+<tr>
+<td><code>WAKE</code></td>
+<td><code>"notify"</code></td>
+<td><code>"notify"</code> or <code>"poll"</code>. <code>"poll"</code> sends no <code>NOTIFY</code> and the relay does not <code>LISTEN</code>; latency is then <code>POLL_SECONDS</code>.</td>
+</tr>
+<tr>
+<td><code>NOTIFY_COALESCE_SECONDS</code></td>
+<td><code>0.5</code></td>
+<td>A process sends at most one <code>NOTIFY</code> per this long, per database. <code>0</code> sends every one.</td>
 </tr>
 <tr>
 <td><code>BACKOFF_BASE_SECONDS</code></td>
@@ -799,7 +946,22 @@ are changing.</p>
 <tr>
 <td><code>RETENTION_DAYS</code></td>
 <td><code>90</code></td>
-<td>Prune window, and the default quiet-receiver window.</td>
+<td>Prune window for an event that declares no <a href="../retention/">retention</a> of its own, and the default quiet-receiver window.</td>
+</tr>
+<tr>
+<td><code>PRUNE_BATCH_ROWS</code></td>
+<td><code>5000</code></td>
+<td>Rows per prune transaction, delivery rows and event rows alike.</td>
+</tr>
+<tr>
+<td><code>RELAY_PRUNE</code></td>
+<td><code>True</code></td>
+<td>Whether an idle relay runs <code>prune_events</code>. Turn it off if you schedule the prune yourself.</td>
+</tr>
+<tr>
+<td><code>RELAY_PRUNE_SECONDS</code></td>
+<td><code>60</code></td>
+<td>The most often a relay sweeps, in seconds above zero.</td>
 </tr>
 <tr>
 <td><code>TASK_BACKEND</code></td>
@@ -849,13 +1011,68 @@ the thing that asked to be left alone.</p>
 <code>prune_events</code> removes only settled events, so a row parked for a month keeps its
 event past <code>RETENTION_DAYS</code> for that month, and a destination answering with an
 absurd number would keep it indefinitely.</p>
+<h3 id="wake"><code>WAKE</code><a class="headerlink" href="#wake" title="Permanent link">&para;</a></h3>
+<p><code>"notify"</code> (the default) sends a <code>NOTIFY</code> after the commit of a <code>fire()</code> that
+wrote a delivery row, and the relay waits on it. It only has an effect on
+Postgres; elsewhere both settings are inert and the relay polls. <code>"poll"</code> turns
+it off on Postgres too, which trades latency of up to <code>POLL_SECONDS</code> for a commit
+that does not take Postgres's notification lock. The poll is the floor in both
+modes, so neither can lose a delivery.</p>
+<p>Read <a href="../operations/#turning-notify-off">Turning NOTIFY off</a> before choosing: the
+cost is real on some workloads and disputed on others, and polling is cheap
+enough that lowering <code>POLL_SECONDS</code> is the usual companion to it. A relay behind
+pgbouncer in transaction-pooling mode never hears a notification whatever this
+says; see <a href="../operations/#behind-pgbouncer">Behind pgbouncer</a>.</p>
+<p>A value other than <code>"notify"</code> or <code>"poll"</code> fails the system check <code>E006</code>, rather
+than quietly meaning "poll".</p>
+<h3 id="notify_coalesce_seconds"><code>NOTIFY_COALESCE_SECONDS</code><a class="headerlink" href="#notify_coalesce_seconds" title="Permanent link">&para;</a></h3>
+<p>A process sends at most one <code>NOTIFY</code> per this interval, per database. Skipping
+one is safe for the reason losing one is: a single wake makes the relay claim
+everything due, and the poll picks up the rest. The price is that an event
+committed just after a notification, but after the relay had claimed, waits for
+the next poll. <code>0</code> disables coalescing. A negative, non-numeric or NaN value
+fails the system check <code>E007</code>.</p>
 <h3 id="batch_size"><code>BATCH_SIZE</code><a class="headerlink" href="#batch_size" title="Permanent link">&para;</a></h3>
-<p>Three jobs, deliberately one number: it is "how many rows this package touches in
-one statement", and the reasons to raise or lower it point the same way for all
-three.</p>
+<p>Two jobs, deliberately one number: it is "how many rows this package touches in
+one statement", and the reasons to raise or lower it point the same way for both.</p>
 <p>The requeue chunks on it because SQLite refuses more than 32,766 parameters in
 one statement, and a dead-letter table past that is an ordinary outcome of one
 bad deploy.</p>
+<p>A relay can size its own claims without moving the other two:
+<code>deliver_events --batch-size 5</code>, or <code>run_relay(batch_size=5)</code>. That is the
+knob for a <a href="../operations/#lanes-a-relay-per-kind-of-work">lane</a> of slow
+receivers, which wants a batch it can work through inside <code>LEASE_SECONDS</code>
+while pruning keeps its larger statements.</p>
+<h3 id="prune_batch_rows"><code>PRUNE_BATCH_ROWS</code><a class="headerlink" href="#prune_batch_rows" title="Permanent link">&para;</a></h3>
+<p>How many rows one prune transaction deletes, counting each event's delivery rows
+and the event row itself. A setting of its own, rather than <code>BATCH_SIZE</code>, because
+the unit differs: a claim takes delivery rows one receiver at a time, while a
+prune takes whole events, and one fan-out event can carry tens of thousands of
+rows. Counted in events, a batch's size was whatever the events in it happened to
+hold.</p>
+<p>An event with more delivery rows than this has them deleted this many at a time,
+each chunk in its own transaction, and goes with the last of them. Override it for
+one run with <code>prune_events --batch-size</code>. A value that is not a positive whole
+number fails the system check <code>E010</code>, rather than failing every sweep of an idle
+relay quietly. See <a href="../operations/#pruning">pruning</a>.</p>
+<h3 id="relay_prune"><code>RELAY_PRUNE</code><a class="headerlink" href="#relay_prune" title="Permanent link">&para;</a></h3>
+<p>Whether a relay that finds nothing to claim runs <code>prune_events()</code>, which is what
+makes an event declared to be <a href="../retention/">deleted on consumption</a> go within
+about a minute without a cron line. On by default, because a retention policy
+that nothing carries out is the quiet failure. Set it to <code>False</code> when <code>prune_events</code>
+runs from a schedule of its own, or when you run the relay only as
+<code>deliver_events --once</code>, which never sweeps either way.</p>
+<p>Every long-running relay sweeps, whatever its <code>--lane</code>; the throttle is what
+keeps several cheap. A value that is not a bool fails the system check <code>E008</code>:
+<code>"false"</code> is a truthy string and would leave the sweep on. See
+<a href="../retention/#how-the-prune-runs">how the prune runs</a>.</p>
+<h3 id="relay_prune_seconds"><code>RELAY_PRUNE_SECONDS</code><a class="headerlink" href="#relay_prune_seconds" title="Permanent link">&para;</a></h3>
+<p>The most often a relay sweeps, counted from the previous sweep on a monotonic
+clock; the first comes this long after the relay starts. A sweep that fails also
+waits a full interval. Raise it before turning the sweep off if the cost of
+an idle sweep, which grows with the live events that carry a retention of their
+own, matters on your database. Zero, a negative, NaN, infinity or a non-number
+fails the system check <code>E009</code>; <code>RELAY_PRUNE = False</code> is the way to say never.</p>
 <h3 id="task_backend"><code>TASK_BACKEND</code><a class="headerlink" href="#task_backend" title="Permanent link">&para;</a></h3>
 <p>A mapping rather than only a dotted path, because a backend with any constructor
 options at all would otherwise be unreachable through the documented setting and
@@ -865,15 +1082,23 @@ only a subclass could use it.</p>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="s2">"queue_name"</span><span class="p">:</span> <span class="s2">"events"</span><span class="p">,</span>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="p">}</span>
 </span></code></pre></div>
+<p>or, with the <code>celery</code> extra installed:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="p">{</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="s2">"BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.delivery.celery_backend.CeleryBackend"</span><span class="p">,</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="s2">"queue"</span><span class="p">:</span> <span class="s2">"events"</span><span class="p">,</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>The Celery worker also needs the task module in its <code>imports</code>; see
+<a href="../operations/#celery">Celery</a>.</p>
 <h2 id="routing-to-another-database">Routing to another database<a class="headerlink" href="#routing-to-another-database" title="Permanent link">&para;</a></h2>
 <p>Everything that opens a transaction asks the router for the alias, rather than
 hardcoding <code>default</code>. Give the event log its own database and the guarantee still
 holds:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">EventRouter</span><span class="p">:</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">db_for_write</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="o">**</span><span class="n">hints</span><span class="p">):</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>        <span class="k">if</span> <span class="n">model</span><span class="o">.</span><span class="n">_meta</span><span class="o">.</span><span class="n">app_label</span> <span class="o">==</span> <span class="s2">"django_domain_events"</span><span class="p">:</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>            <span class="k">return</span> <span class="s2">"events"</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>        <span class="k">return</span> <span class="kc">None</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">EventRouter</span><span class="p">:</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">db_for_write</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="o">**</span><span class="n">hints</span><span class="p">):</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>        <span class="k">if</span> <span class="n">model</span><span class="o">.</span><span class="n">_meta</span><span class="o">.</span><span class="n">app_label</span> <span class="o">==</span> <span class="s2">"django_domain_events"</span><span class="p">:</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>            <span class="k">return</span> <span class="s2">"events"</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>        <span class="k">return</span> <span class="kc">None</span>
 </span></code></pre></div>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>

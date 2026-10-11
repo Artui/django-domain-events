@@ -447,6 +447,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Failure">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-curve-per-receiver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A curve per receiver
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -468,6 +485,45 @@
       
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-deferral-that-spends-no-attempt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A deferral that spends no attempt
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="A deferral that spends no attempt">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#give_up_after-keeps-every-delivery-ending" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        give_up_after keeps every delivery ending
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-pause-is-per-process" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The pause is per process
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -532,6 +588,33 @@
     
   
     Operations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../retention/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retention
   
 
     
@@ -721,6 +804,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Failure">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-curve-per-receiver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A curve per receiver
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -742,6 +842,45 @@
       
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-deferral-that-spends-no-attempt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A deferral that spends no attempt
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="A deferral that spends no attempt">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#give_up_after-keeps-every-delivery-ending" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        give_up_after keeps every delivery ending
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-pause-is-per-process" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The pause is per process
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -840,8 +979,10 @@ idempotency.</p>
 somewhere else.</p>
 <ul>
 <li><code>site="relay"</code> (default) - the relay process runs the receiver.</li>
-<li><code>site="task"</code> - the relay enqueues the delivery id to the configured
-  <a href="../operations/#handing-delivery-to-a-task-queue">task backend</a> and moves on.</li>
+<li><code>site="task"</code> - the relay enqueues the delivery id, with the claim it holds,
+  to the configured <a href="../operations/#handing-delivery-to-a-task-queue">task backend</a>
+  and moves on. The task takes the row under that claim before running it, so a
+  queue that delivers a message twice or late runs the receiver once.</li>
 </ul>
 <p>A queue is only ever an answer to <em>where</em>. It is not a timing mode, and adopting
 one does not change what the event promised.</p>
@@ -867,7 +1008,20 @@ you can run as many as you like:</p>
 <li>The acknowledgement is a <strong>compare-and-set</strong> on <code>(claimed_by, claimed_at)</code>, so
   a worker whose lease already lapsed and was stolen cannot overwrite the new
   owner's result.</li>
+<li>A relay told to stop (<code>SIGTERM</code> or <code>SIGINT</code>) finishes the delivery in hand
+  and <strong>hands back</strong> the rest of its batch. Another relay can claim those rows at
+  once instead of waiting for the lease to lapse. See
+  <a href="../operations/#stopping-it">Stopping it</a>.</li>
+<li>A relay whose database goes away <strong>stays up</strong>: it closes the dead connection,
+  backs off and claims again. See
+  <a href="../operations/#when-the-database-goes-away">When the database goes away</a>.</li>
 </ul>
+<p>A <code>DURABLE</code> receiver runs inside the transaction that carries its
+acknowledgement, so a call it makes outside the database holds that
+transaction open. See
+<a href="../operations/#a-receiver-holds-a-transaction-open">A receiver holds a transaction open</a>
+for what that means behind pgbouncer and under
+<code>idle_in_transaction_session_timeout</code>.</p>
 <div class="admonition warning">
 <p class="admonition-title">SKIP LOCKED is Postgres and MySQL 8</p>
 <p>SQLite has neither the statement nor the concurrency model that would make
@@ -886,6 +1040,37 @@ which is <a href="#when-the-receiver-knows-better">when the receiver knows bette
 adding a little on top of it. Retrying a shared downstream at
 ceiling-plus-a-bit keeps every failed delivery in the same cohort, which is the
 thundering herd the backoff was meant to break up.</p>
+<h3 id="a-curve-per-receiver">A curve per receiver<a class="headerlink" href="#a-curve-per-receiver" title="Permanent link">&para;</a></h3>
+<p>The two settings are the curve for every receiver. One that talks to a
+destination with its own idea of patience declares its own:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">backoff_base_seconds</span><span class="o">=</span><span class="mi">120</span><span class="p">,</span> <span class="n">backoff_cap_seconds</span><span class="o">=</span><span class="mi">1800</span><span class="p">,</span> <span class="n">max_attempts</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">email_receipt</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+</span></code></pre></div>
+<p>Either may be declared alone, and the other comes from its setting. Declaring
+both with the cap below the base is refused at the decorator, because every
+retry would wait for the cap and the base would never be read.</p>
+<p>The curve is read when an attempt fails, not copied onto the row, so a deploy
+that changes it applies to deliveries already in flight. <code>max_attempts</code> is the
+opposite on purpose: it is copied at fire time, so lowering it cannot
+dead-letter rows already owed.</p>
+<p><strong>Full jitter applies to a declared curve too, and it is easy to misread.</strong> A
+base of 60 does not mean "retry in a minute"; it means "retry somewhere in the
+next minute", and the first retry can land after a few seconds. The ceilings
+above are the longest each wait can be, and on average a wait is half its
+ceiling. So the span a retry budget covers is a distribution, not a number:</p>
+<ul>
+<li>the <strong>sum of the ceilings</strong> is the longest it can last;</li>
+<li><strong>half of that</strong> is how long it lasts on average.</li>
+</ul>
+<p>The curve above, with ten attempts, has nine waits with ceilings of 120, 240,
+480, 960 and then 1800 seconds five times: at most three hours, an hour and a
+half on average. It is the curve the <a href="https://github.com/Artui/django-domain-events/tree/main/examples/shop">example shop</a>
+gives its receipt mailer, and the demo there checks both numbers. Eight
+attempts on the default two-second base wait at most 254 seconds in all, so a
+mail provider down for an hour dead-letters every delivery sent into it.</p>
+<p>A list of delays or a callable schedule is not offered, because the
+<a href="../introspection/#the-catalogue">catalogue</a> publishes the curve and could not
+publish either.</p>
 <p>Dead is where a delivery stops <strong>on its own</strong>, not where it stops for good - see
 <a href="../operations/#requeue-from-the-dead-letter-queue">requeue</a>.</p>
 <table>
@@ -910,11 +1095,11 @@ thundering herd the backoff was meant to break up.</p>
 </tr>
 <tr>
 <td><code>failed</code></td>
-<td>raised, attempts remaining</td>
+<td>raised with attempts remaining, or deferred</td>
 </tr>
 <tr>
 <td><code>dead</code></td>
-<td>out of attempts</td>
+<td>out of attempts, or deferred past <code>give_up_after</code></td>
 </tr>
 <tr>
 <td><code>orphaned</code></td>
@@ -929,20 +1114,20 @@ without reading the attempt count.</p>
 the transaction that carries its acknowledgement, so everything it wrote is
 rolled back the moment it raises. <code>on_failure</code> is called afterwards, outside that
 transaction and after the delivery row is updated, so what it writes survives.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeliveryFailure</span><span class="p">,</span> <span class="n">receiver</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">log_failure</span><span class="p">(</span><span class="n">failure</span><span class="p">:</span> <span class="n">DeliveryFailure</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">DeliveryLog</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>        <span class="n">delivery_id</span><span class="o">=</span><span class="n">failure</span><span class="o">.</span><span class="n">delivery_id</span><span class="p">,</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>        <span class="n">attempt</span><span class="o">=</span><span class="n">failure</span><span class="o">.</span><span class="n">attempt</span><span class="p">,</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>        <span class="n">status</span><span class="o">=</span><span class="n">failure</span><span class="o">.</span><span class="n">status</span><span class="p">,</span>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>        <span class="n">error</span><span class="o">=</span><span class="n">failure</span><span class="o">.</span><span class="n">error</span><span class="p">,</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>    <span class="p">)</span>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">on_failure</span><span class="o">=</span><span class="n">log_failure</span><span class="p">)</span>
-</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="k">def</span><span class="w"> </span><span class="nf">notify_partner</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeliveryFailure</span><span class="p">,</span> <span class="n">receiver</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">log_failure</span><span class="p">(</span><span class="n">failure</span><span class="p">:</span> <span class="n">DeliveryFailure</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    <span class="n">DeliveryLog</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>        <span class="n">delivery_id</span><span class="o">=</span><span class="n">failure</span><span class="o">.</span><span class="n">delivery_id</span><span class="p">,</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>        <span class="n">attempt</span><span class="o">=</span><span class="n">failure</span><span class="o">.</span><span class="n">attempt</span><span class="p">,</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>        <span class="n">status</span><span class="o">=</span><span class="n">failure</span><span class="o">.</span><span class="n">status</span><span class="p">,</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>        <span class="n">error</span><span class="o">=</span><span class="n">failure</span><span class="o">.</span><span class="n">error</span><span class="p">,</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>    <span class="p">)</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">on_failure</span><span class="o">=</span><span class="n">log_failure</span><span class="p">)</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="k">def</span><span class="w"> </span><span class="nf">notify_partner</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
 </span></code></pre></div>
 <p>It is called for <code>failed</code> and for <code>dead</code>, because "it failed again" and "it will
 not be tried again" are different things to record. <code>DeliveryFailure</code> carries the
@@ -958,18 +1143,18 @@ about the delivery.</p>
 <p>The backoff curve is a guess, and the attempt budget is the only thing that ends
 a delivery on its own. Two exceptions let a durable receiver replace either with
 what it actually knows.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">PermanentFailure</span><span class="p">,</span> <span class="n">RetryAfter</span><span class="p">,</span> <span class="n">receiver</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">)</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">notify_partner</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>    <span class="n">response</span> <span class="o">=</span> <span class="n">post_to_partner</span><span class="p">(</span><span class="n">evt</span><span class="p">)</span>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>    <span class="k">if</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">410</span><span class="p">:</span>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>        <span class="k">raise</span> <span class="n">PermanentFailure</span><span class="p">(</span><span class="s2">"410 Gone: the partner retired this endpoint"</span><span class="p">)</span>
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>    <span class="k">if</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">429</span><span class="p">:</span>
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>        <span class="n">seconds</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">response</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="s2">"Retry-After"</span><span class="p">])</span>
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>        <span class="k">raise</span> <span class="n">RetryAfter</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="n">seconds</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="sa">f</span><span class="s2">"rate limited for </span><span class="si">{</span><span class="n">seconds</span><span class="si">:</span><span class="s2">g</span><span class="si">}</span><span class="s2">s"</span><span class="p">)</span>
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>    <span class="n">response</span><span class="o">.</span><span class="n">raise_for_status</span><span class="p">()</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">PermanentFailure</span><span class="p">,</span> <span class="n">RetryAfter</span><span class="p">,</span> <span class="n">receiver</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">)</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">notify_partner</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">response</span> <span class="o">=</span> <span class="n">post_to_partner</span><span class="p">(</span><span class="n">evt</span><span class="p">)</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="k">if</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">410</span><span class="p">:</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>        <span class="k">raise</span> <span class="n">PermanentFailure</span><span class="p">(</span><span class="s2">"410 Gone: the partner retired this endpoint"</span><span class="p">)</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>    <span class="k">if</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">429</span><span class="p">:</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>        <span class="n">seconds</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">response</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="s2">"Retry-After"</span><span class="p">])</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>        <span class="k">raise</span> <span class="n">RetryAfter</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="n">seconds</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="sa">f</span><span class="s2">"rate limited for </span><span class="si">{</span><span class="n">seconds</span><span class="si">:</span><span class="s2">g</span><span class="si">}</span><span class="s2">s"</span><span class="p">)</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>    <span class="n">response</span><span class="o">.</span><span class="n">raise_for_status</span><span class="p">()</span>
 </span></code></pre></div>
 <p><code>PermanentFailure</code> dead-letters the row <strong>on the attempt that raised it</strong>. A
 destination that has said it will never accept another request is not asked four
@@ -979,11 +1164,13 @@ with <code>DEAD</code>, exactly as it is when the budget runs out.</p>
 from the curve</strong>. A rate limiter that says "in two minutes" is answering the
 question the curve is guessing at, and arriving early only earns another refusal.</p>
 <div class="admonition warning">
-<p class="admonition-title">A requested retry consumes an attempt</p>
+<p class="admonition-title">By default, a requested retry consumes an attempt</p>
 <p>Otherwise a destination answering <code>429</code> to every request would keep a row
 alive forever and nothing would ever declare it dead. Every delivery stays
 bounded by the budget it was fired with. A receiver expecting to be rate
-limited should declare a wider <code>max_attempts</code>.</p>
+limited should declare a wider <code>max_attempts</code> - or
+<a href="#a-deferral-that-spends-no-attempt">defer without counting</a>, bounded by
+time instead.</p>
 </div>
 <p>The request is capped at <code>MAX_RECEIVER_RETRY_DELAY_SECONDS</code>, a day by default,
 and a longer one is clamped with a warning naming both numbers. The cap is its
@@ -995,14 +1182,107 @@ either fails the caller's transaction like any other exception, and an
 <code>ON_COMMIT</code> one has it logged: neither has a row to schedule or dead-letter. The
 type is the signal, never the message - a <code>RuntimeError</code> saying "410 Gone" is an
 ordinary failure.</p>
+<h2 id="a-deferral-that-spends-no-attempt">A deferral that spends no attempt<a class="headerlink" href="#a-deferral-that-spends-no-attempt" title="Permanent link">&para;</a></h2>
+<p>A throttle or a quota is a limit on the destination, not a failure of the row.
+Counting it against <code>max_attempts</code> dead-letters good deliveries for being sent
+at a busy moment, and widening the budget to survive a burst also widens it for
+the failures it exists to end. <code>RetryAfter(seconds, counts=False)</code> says so:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">timedelta</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">RetryAfter</span><span class="p">,</span> <span class="n">receiver</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">ReceiptQueued</span><span class="p">,</span> <span class="n">lane</span><span class="o">=</span><span class="s2">"mail"</span><span class="p">,</span> <span class="n">give_up_after</span><span class="o">=</span><span class="n">timedelta</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">2</span><span class="p">))</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">send_receipt</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">ReceiptQueued</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>        <span class="n">provider</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">render_receipt</span><span class="p">(</span><span class="n">evt</span><span class="p">))</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>    <span class="k">except</span> <span class="n">provider</span><span class="o">.</span><span class="n">Throttled</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>        <span class="k">raise</span> <span class="n">RetryAfter</span><span class="p">(</span><span class="n">exc</span><span class="o">.</span><span class="n">retry_after</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"sending rate exceeded"</span><span class="p">,</span> <span class="n">counts</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>    <span class="k">except</span> <span class="n">provider</span><span class="o">.</span><span class="n">DailyQuotaExceeded</span><span class="p">:</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>        <span class="k">raise</span> <span class="n">RetryAfter</span><span class="p">(</span><span class="n">seconds_until_quota_resets</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"daily quota"</span><span class="p">,</span> <span class="n">counts</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span></code></pre></div>
+<p>Three things happen, and each answers a way a plain retry goes wrong in a burst
+of twenty thousand rows:</p>
+<ul>
+<li><strong>The attempt is not counted.</strong> <code>attempts</code> is unchanged and <code>max_attempts</code> is
+  not spent, so the row is still owed its whole budget for real failures. It is
+  recorded as <code>failed</code>, with the message as <code>last_error</code>, and <code>on_failure</code> is
+  called with <code>FAILED</code> and the attempt number the receiver's context carried -
+  which the next run is given again, because nothing was spent.</li>
+<li><strong>The next attempt is jittered upwards</strong>: between <code>seconds</code> and twice that
+  from now, clamped to <code>MAX_RECEIVER_RETRY_DELAY_SECONDS</code>. Never earlier than
+  the destination asked, and spread, so rows deferred together do not all come
+  back in the same second and get throttled together again.</li>
+<li><strong>The relay pauses the receiver's lane</strong> for <code>seconds</code>, and hands back the
+  rest of the batch it had claimed rather than attempting it. Without that,
+  learning that a daily quota is gone would cost one call per row: twenty
+  thousand calls to hear the same answer twenty thousand times. With it, the
+  relay that heard it spends no more calls on the lane until the delay has
+  passed; the rows it gave back keep their place at the head of the queue and
+  are attempted when the pause ends, one at a time, so if the quota is still
+  gone it costs one call per pause, not one per row.</li>
+</ul>
+<h3 id="give_up_after-keeps-every-delivery-ending"><code>give_up_after</code> keeps every delivery ending<a class="headerlink" href="#give_up_after-keeps-every-delivery-ending" title="Permanent link">&para;</a></h3>
+<p>A deferral that does not count cannot be ended by <code>max_attempts</code>, and a
+destination that throttles forever would keep its rows owed forever - holding
+their events past <a href="../retention/">retention</a>, since a prune waits for every
+delivery of an event. So it is bounded by <strong>time</strong>: the receiver declares
+<code>give_up_after</code>, and a deferral arriving once the row has been owed that long
+dead-letters it, exactly as a spent budget does - <code>dead</code>, <code>completed_at</code>,
+<code>on_failure</code> with <code>DEAD</code>, and a <code>last_error</code> naming the bound.</p>
+<p>"Owed" is measured from when the row became owed: when it was written, or when
+<a href="../operations/#replay">replay</a> or <a href="../operations/#requeue-from-the-dead-letter-queue">requeue</a>
+last reopened it. Both reset that moment, so a month-old event replayed into a
+throttled destination is not dead-lettered on its first deferral for being a
+month old. Backoff never moves it, so deferring cannot keep resetting the clock.
+At exactly <code>give_up_after</code> the bound is reached.</p>
+<p>The bound applies to deferrals alone. A receiver declaring it still has
+ordinary failures and counting <code>RetryAfter</code>s ended by <code>max_attempts</code>, however
+long the row has been owed.</p>
+<div class="admonition warning">
+<p class="admonition-title"><code>counts=False</code> without <code>give_up_after</code> counts</p>
+<p>A receiver raising <code>counts=False</code> that declares no <code>give_up_after</code> has
+nothing that would ever end its deliveries. The deferral is then treated
+as an ordinary <code>RetryAfter</code> - counted, no jitter, no pause - and a warning
+naming the receiver is logged once per process. Declare the bound to get
+the deferral.</p>
+</div>
+<h3 id="the-pause-is-per-process">The pause is per process<a class="headerlink" href="#the-pause-is-per-process" title="Permanent link">&para;</a></h3>
+<p>Nothing is shared between relays: each process pauses a lane when a deferral it
+ran says to, measured on its own clock, and every relay serving the lane learns
+of the throttle from its own first deferral - one call each. That is the price
+of having no shared state to keep consistent, and it is small next to one call
+per row. A relay serving the lane claims nothing while the pause lasts, and
+resumes at its first pass after it ends, so within <code>POLL_SECONDS</code>.</p>
+<p>A relay serving every lane - <code>run_relay(lane=None)</code>, or <code>deliver_pending()</code> and
+<code>drain_outbox()</code> from code - pauses only the deferring lane: its unstarted rows
+in the batch go back, the other lanes' rows in the same batch are still
+delivered, and later claims leave the paused lane out. <code>deliver_pending()</code>
+has no clock to wait on, so it sets the lane aside for the rest of the call.
+Neither the pause nor the hand-back reaches a row already given to a
+<a href="../operations/#handing-delivery-to-a-task-queue">task backend</a>, and a receiver
+running in a task defers there, in a process that holds no batch to pause; its
+deferral is recorded all the same. A direct <code>deliver_one()</code> likewise records
+and pauses nothing, and so does an <code>eager=True</code> receiver's attempt at commit:
+the firing process serves no lane, so in a burst every fire calls the
+throttled destination once before the relay's pause can apply.</p>
+<div class="admonition note">
+<p class="admonition-title">For an endpoint's <code>429</code></p>
+<p><a href="https://github.com/Artui/django-outbound-webhooks">django-outbound-webhooks</a>
+raises <code>RetryAfter</code> for an endpoint answering <code>429</code>. That is the case this
+exists for, and it can adopt <code>counts=False</code> with a <code>give_up_after</code> on its
+receiver, so a rate-limited endpoint stops costing deliveries their budget.
+A receiver declared with <code>site="task"</code> keeps the unspent attempt and
+loses the pause, for the reason above.</p>
+</div>
 <h2 id="in-tests">In tests<a class="headerlink" href="#in-tests" title="Permanent link">&para;</a></h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">assert_fired</span><span class="p">,</span> <span class="n">drain_outbox</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_placing_an_order_reserves_stock</span><span class="p">():</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="n">place_order</span><span class="p">()</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">assert_fired</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">times</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="n">drain_outbox</span><span class="p">()</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">assert_fired</span><span class="p">,</span> <span class="n">drain_outbox</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_placing_an_order_reserves_stock</span><span class="p">():</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="n">place_order</span><span class="p">()</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>    <span class="n">assert_fired</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">times</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    <span class="n">drain_outbox</span><span class="p">()</span>
 </span></code></pre></div>
 <p><code>drain_outbox()</code> runs the <strong>real</strong> delivery path to completion - the same claim,
 encode, decode and acknowledgement the relay performs - so a test exercising it
