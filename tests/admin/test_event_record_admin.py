@@ -96,3 +96,37 @@ def test_replay_reopens_and_reports(order: OrderPlaced, record: list[str]) -> No
     assert DeliveryRecord.objects.filter(status="pending").count() == 2
     message = list(request._messages)[0].message
     assert message == "Reopened 2 deliveries and added 0."
+
+
+def test_cancel_withdraws_every_owed_delivery_of_the_events_and_reports(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Through cancel_deliveries, across every receiver of the selected events:
+    the owed rows are cancelled, the claimed one is left to run and counted, a
+    settled one keeps its outcome, and an event not selected is untouched."""
+    with transaction.atomic():
+        chosen = fire(order)
+        other = fire(order)
+    rows = list(DeliveryRecord.objects.filter(event=chosen).order_by("pk"))
+    DeliveryRecord.objects.filter(pk=rows[0].pk).update(status=DeliveryStatus.CLAIMED)
+    DeliveryRecord.objects.create(
+        event_id=chosen,
+        receiver_key="probe.done",
+        status=DeliveryStatus.SUCCEEDED,
+        available_at=rows[0].available_at,
+    )
+
+    request = _request()
+    _admin().cancel(request, EventRecord.objects.filter(pk=chosen))
+
+    statuses = dict(
+        DeliveryRecord.objects.filter(event=chosen).values_list("receiver_key", "status")
+    )
+    assert statuses == {
+        rows[0].receiver_key: DeliveryStatus.CLAIMED,
+        rows[1].receiver_key: DeliveryStatus.CANCELLED,
+        "probe.done": DeliveryStatus.SUCCEEDED,
+    }
+    assert not DeliveryRecord.objects.filter(event=other, status=DeliveryStatus.CANCELLED).exists()
+    message = list(request._messages)[0].message
+    assert message == "Cancelled 1 deliveries and left 1 in flight to run."

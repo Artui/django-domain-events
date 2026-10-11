@@ -139,6 +139,42 @@ def test_change_permission_carries_cancel_deliveries(order: OrderPlaced, record:
     assert DeliveryRecord.objects.filter(status=DeliveryStatus.CANCELLED).count() == 2
 
 
+def test_view_only_staff_are_not_offered_cancel_on_events(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    with transaction.atomic():
+        fire(order)
+    client = _staff("view_eventrecord")
+    assert b'value="cancel"' not in client.get(EVENTS_URL).content
+
+
+def test_change_permission_offers_cancel_on_events(order: OrderPlaced, record: list[str]) -> None:
+    with transaction.atomic():
+        fire(order)
+    client = _staff("view_eventrecord", "change_eventrecord")
+    assert b'value="cancel"' in client.get(EVENTS_URL).content
+
+
+def test_view_only_staff_cannot_cancel_events(order: OrderPlaced, record: list[str]) -> None:
+    with transaction.atomic():
+        fire(order)
+
+    client = _staff("view_eventrecord")
+    _post(client, EVENTS_URL, "cancel", [EventRecord.objects.get().pk])
+
+    assert DeliveryRecord.objects.filter(status=DeliveryStatus.PENDING).count() == 2
+
+
+def test_change_permission_carries_cancel_on_events(order: OrderPlaced, record: list[str]) -> None:
+    with transaction.atomic():
+        fire(order)
+
+    client = _staff("view_eventrecord", "change_eventrecord")
+    _post(client, EVENTS_URL, "cancel", [EventRecord.objects.get().pk])
+
+    assert DeliveryRecord.objects.filter(status=DeliveryStatus.CANCELLED).count() == 2
+
+
 def test_the_change_form_stays_refused_even_with_the_permission(
     order: OrderPlaced, record: list[str]
 ) -> None:
