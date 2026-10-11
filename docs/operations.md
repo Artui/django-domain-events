@@ -306,6 +306,11 @@ of an old one. Calling the callable means rebuilding the event, so replaying a
 fan-out receiver for a payload that no longer decodes raises, where a plain
 receiver's reopened row would dead-letter in the relay.
 
+A [scheduled receiver](scheduling.md#replay) has its due time resolved again, and
+its row is reopened or added due at the later of that and now, rather than at
+once: replaying this week's offers into a newly declared expiry expires each one
+when it is due, and only the ones already past it straight away.
+
 ## Requeue from the dead-letter queue
 
 ```bash

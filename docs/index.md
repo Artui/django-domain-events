@@ -94,6 +94,9 @@ python manage.py deliver_events
 - [Delivery](delivery.md) - the two knobs, the relay, what failure means in
   each mode, and how a receiver declares a failure permanent or says when to
   retry.
+- [Scheduled reactions](scheduling.md) - work due a set time after a committed
+  change, declared on the receiver with `due=`, and `NotYet` for work that
+  turns out not to be due yet.
 - [Scope and attribution](scope.md) - `attributed()`, `suppressed()`, causation
   chains, and the one rule that matters for threads.
 - [Operations](operations.md) - prune, replay, requeue, and running the relay

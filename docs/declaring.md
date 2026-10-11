@@ -66,11 +66,14 @@ def reserve_stock(evt: OrderPlaced) -> None: ...
 | `backoff_cap_seconds` | `None` | Override `BACKOFF_CAP_SECONDS` for this receiver's retries. |
 | `lane` | `"default"` | Which relay processes claim its rows. See [lanes](operations.md#lanes-a-relay-per-kind-of-work). |
 | `give_up_after` | `None` | A `timedelta`: how long a row may stay owed while it [defers without counting](delivery.md#a-deferral-that-spends-no-attempt). |
+| `due` | `None` | A `timedelta` after the event occurred, or a callable of the event returning an aware `datetime`: when the delivery runs. See [scheduled reactions](scheduling.md). |
 
 `max_attempts`, `eager`, `site="task"`, `lease_seconds`, `targets`, the two
-backoff knobs, `lane` and `give_up_after` each describe a delivery row, so a
-receiver declaring any of them with `mode=INLINE` or `ON_COMMIT` is refused at
-the decorator: it has no row to retry, lease, fan out or claim.
+backoff knobs, `lane`, `give_up_after` and `due` each describe a delivery row, so
+a receiver declaring any of them with `mode=INLINE` or `ON_COMMIT` is refused at
+the decorator: it has no row to retry, lease, fan out, schedule or claim. `due`
+is also refused beside `eager=True` and beside `targets`; see
+[what is refused](scheduling.md#what-is-refused-at-the-decorator).
 
 `give_up_after` must be a positive `timedelta`; a bare number is refused,
 because it has no unit. It is what ends a delivery whose receiver raises
@@ -96,6 +99,13 @@ email log storing the provider's message id beside the delivery that sent it,
 say. It is `None` wherever no row exists: in the context a `targets=` callable
 receives at fire time, and for `INLINE` and `ON_COMMIT` receivers.
 
+`ctx.due_at` is when the delivery became due: for a receiver declared with
+`due=`, the due time its row was written with - what a scheduled receiver
+compares against before answering an early run with
+[`NotYet`](scheduling.md#when-the-work-is-not-due-yet-notyet). For any other
+row it is when the row became owed, the moment a replay or requeue reopened it
+or else when its event was recorded, and it is `None` wherever `delivery_id` is.
+
 !!! note "A long receiver needs `lease_seconds`, not a heartbeat"
     A receiver still working when its lease lapses has its row taken by another
     worker and its own work rolled back - correct, and entirely wasted. It
@@ -104,9 +114,11 @@ receives at fire time, and for `INLINE` and `ON_COMMIT` receivers.
     Declare the lease it needs and the relay publishes it before the receiver
     starts.
 
-!!! note "`max_attempts` is frozen at fire time"
-    It is copied onto the delivery row when the event is fired, so lowering it
-    later cannot retroactively dead-letter rows already in flight.
+!!! note "`max_attempts` and `due` are frozen at fire time"
+    `max_attempts` is copied onto the delivery row when the event is fired, so
+    lowering it later cannot retroactively dead-letter rows already in flight.
+    `due` is resolved then too and written as the row's due time, so a deploy
+    changing the delay reaches the next event and not the rows already waiting.
 
 !!! note "The curve, the lane and the bound are read live"
     `backoff_base_seconds`, `backoff_cap_seconds`, `lane` and `give_up_after`

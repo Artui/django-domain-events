@@ -26,6 +26,7 @@ Everything below is exported from `django_domain_events` directly.
 ::: django_domain_events.delivery.backoff.backoff
 ::: django_domain_events.delivery.permanent_failure.PermanentFailure
 ::: django_domain_events.delivery.retry_after.RetryAfter
+::: django_domain_events.delivery.not_yet.NotYet
 ::: django_domain_events.delivery.wake.notify_relay
 
 ## Operations
