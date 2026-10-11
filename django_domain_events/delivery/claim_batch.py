@@ -9,6 +9,7 @@ from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import DEFAULT_LANE
+from django_domain_events.utils import not_yet_due
 
 
 def claim_batch(
@@ -21,6 +22,7 @@ def claim_batch(
     ignore_backoff: bool = False,
     lane: str | None = None,
     exclude_lanes: Collection[str] = (),
+    exclude_ids: Collection[int] = (),
 ) -> list[int]:
     """Take ownership of up to ``limit`` deliveries and return their ids.
 
@@ -35,6 +37,10 @@ def claim_batch(
 
     ``ignore_backoff`` claims rows whose retry is still scheduled. It exists for
     the test helper, which cannot wait out a jittered hour to observe a retry.
+    It never claims a row whose due time is still ahead of ``now`` - a receiver
+    declared with ``due=`` - because that is not a wait the helper is skipping
+    but the time the work exists for
+    (``test_ignoring_the_backoff_never_ignores_the_schedule``).
 
     ``lane`` claims only the rows of the receivers declared in it, read from the
     registry on every call; ``"default"`` claims every row no named lane takes,
@@ -52,16 +58,36 @@ def claim_batch(
     default lane leaves only the named ones, or nothing where none is declared
     (``test_a_paused_default_lane_with_no_named_lanes_claims_nothing``). Empty,
     the claim is the one it was without it.
+
+    ``exclude_ids`` leaves those rows out, and is how a pass keeps a row it is
+    done with from coming straight back when the pass was told a ``now`` beyond
+    the real clock: one its receiver answered with ``NotYet``, moved to a time
+    that ``now`` has passed, or one handed to a task backend under a lease the
+    real clock extended and ``now`` reads as lapsed. A pass on the real clock
+    passes none, since neither is claimable again there until its time has
+    really come
+    (``test_a_row_rescheduled_in_place_on_the_real_clock_is_not_excluded``).
+    Empty, it adds nothing to the claim: Django compiles a negated ``__in`` over
+    no values to nothing at all, so the relay's claim is the one it was
+    (``test_without_named_lanes_the_default_lane_sends_the_unfiltered_claim``).
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
 
     retryable = models.Q(status__in=[DeliveryStatus.PENDING, DeliveryStatus.FAILED])
     if not ignore_backoff:
         retryable &= models.Q(available_at__lte=now)
+    else:
+        # Skipping the backoff never skips the schedule. A scheduled row's
+        # available_at is its due time too, so the predicate above covers it;
+        # without that predicate only due_at tells the two apart. The negation
+        # keeps the NULL rows, which Django spells out as an IS NOT NULL inside
+        # the NOT (test_ignoring_the_backoff_still_claims_a_row_with_no_due_time).
+        retryable &= ~not_yet_due(now)
     owed = retryable | models.Q(status=DeliveryStatus.CLAIMED, lease_expires_at__lt=now)
     owed &= _in_lane(lane)
     for paused in sorted(exclude_lanes):
         owed &= ~_in_lane(paused)
+    owed &= ~models.Q(pk__in=sorted(exclude_ids))
 
     alias = write_alias()
     connection = connections[alias]

@@ -13,6 +13,7 @@ from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.testapp.events import OrderPlaced
 
 pytestmark = pytest.mark.django_db
@@ -60,6 +61,19 @@ def test_owed_counts_only_unsettled_deliveries(order: OrderPlaced, record: list[
     drain_outbox()
     row = site.get_queryset(_request()).get()
     assert site.owed(row) == 0
+
+
+def test_a_cancelled_delivery_is_not_owed(order: OrderPlaced, record: list[str]) -> None:
+    """The column counts what is still owed, and a cancelled row never will
+    be: counted, the event would read as waiting on work nobody will do."""
+    with transaction.atomic():
+        fire(order)
+    DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").update(
+        status=DeliveryStatus.CANCELLED
+    )
+    site = _admin()
+    row = site.get_queryset(_request()).get()
+    assert site.owed(row) == 1
 
 
 def test_age_renders_without_a_query(order: OrderPlaced, record: list[str]) -> None:

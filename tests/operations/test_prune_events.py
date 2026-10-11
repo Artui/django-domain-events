@@ -220,6 +220,26 @@ def test_an_orphaned_delivery_keeps_an_event_waiting_for_success() -> None:
 
 
 @pytest.mark.parametrize("delete_when", ["succeeded", "settled"])
+def test_a_cancelled_delivery_is_consumed_under_either_policy(delete_when: str) -> None:
+    """Cancelled is settled, and under ``succeeded`` it counts as consumed too:
+    the work was withdrawn on purpose, so nothing is left to inspect or requeue
+    and every row of the event is done. Without it in the success-only test,
+    an event whose reminder was cancelled would wait out the whole window."""
+    _recorded(SUCCEEDED, DeliveryStatus.CANCELLED, delete_when=delete_when)
+
+    assert prune_events() == 1
+    assert not DeliveryRecord.objects.exists()
+
+
+def test_a_cancelled_delivery_is_settled_for_the_ordinary_window() -> None:
+    """An ordinary event goes at ``RETENTION_DAYS`` once settled, and a
+    cancelled row must not hold it there as though it were still owed."""
+    _recorded(SUCCEEDED, DeliveryStatus.CANCELLED, age=timedelta(days=120))
+
+    assert prune_events() == 1
+
+
+@pytest.mark.parametrize("delete_when", ["succeeded", "settled"])
 @pytest.mark.parametrize(
     "owed", [DeliveryStatus.PENDING, DeliveryStatus.FAILED, DeliveryStatus.CLAIMED]
 )

@@ -306,3 +306,94 @@ def test_a_paused_lane_covers_its_lapsed_claims_too(order: OrderPlaced, record: 
         ids = claim_batch(worker_id="w1", now=later, lease=LEASE, limit=10, exclude_lanes={"mail"})
 
     assert _keys(ids) == DEFAULT_LANE_KEYS
+
+
+def _schedule(key: str, due: datetime) -> int:
+    """Hand-write a row due at ``due``, as ``fire()`` writes a scheduled one."""
+    delivery_id = DeliveryRecord.objects.values_list("pk", flat=True).get(receiver_key=key)
+    DeliveryRecord.objects.filter(pk=delivery_id).update(available_at=due, due_at=due)
+    return delivery_id
+
+
+def test_a_scheduled_row_is_claimed_at_its_due_time_and_not_before(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The claim needs no change for scheduling: a scheduled row's
+    ``available_at`` is its due time, so the backoff predicate keeps it out."""
+    with transaction.atomic():
+        fire(order)
+    due = _now() + timedelta(days=14)
+    scheduled = _schedule("testapp.durable_receiver", due)
+
+    early = claim_batch(worker_id="w1", now=due - timedelta(seconds=1), lease=LEASE, limit=10)
+    assert scheduled not in early
+    assert scheduled in claim_batch(worker_id="w1", now=due, lease=LEASE, limit=10)
+
+
+def test_ignoring_the_backoff_never_ignores_the_schedule(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """``ignore_backoff`` claims a retry still waiting out its backoff, which a
+    test cannot sit through - and never a row whose due time has not come,
+    because that would run every scheduled reaction the moment its event fired.
+    The two are told apart by ``due_at``, which the backoff never moves."""
+    with transaction.atomic():
+        fire(order)
+    now = _now()
+    scheduled = _schedule("testapp.durable_receiver", now + timedelta(hours=1))
+    backing_off = DeliveryRecord.objects.values_list("pk", flat=True).get(
+        receiver_key="testapp.with_context"
+    )
+    DeliveryRecord.objects.filter(pk=backing_off).update(
+        status=DeliveryStatus.FAILED,
+        attempts=1,
+        available_at=now + timedelta(hours=1),
+        due_at=now - timedelta(minutes=5),
+    )
+
+    ids = claim_batch(worker_id="w1", now=now, lease=LEASE, limit=10, ignore_backoff=True)
+
+    assert ids == [backing_off]
+    assert scheduled not in ids
+
+
+def test_ignoring_the_backoff_still_claims_a_row_with_no_due_time(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """NULL ``due_at`` is a row owed since its event was recorded, which is every
+    row written before scheduling existed - so the NULL arm of the schedule
+    predicate is what keeps ``drain_outbox`` delivering them at all."""
+    with transaction.atomic():
+        fire(order)
+    DeliveryRecord.objects.update(
+        status=DeliveryStatus.FAILED, attempts=1, available_at=_now() + timedelta(hours=1)
+    )
+
+    ids = claim_batch(worker_id="w1", now=_now(), lease=LEASE, limit=10, ignore_backoff=True)
+
+    assert len(ids) == 2
+
+
+@pytest.mark.parametrize("ignore_backoff", [False, True], ids=["relay", "ignoring-backoff"])
+def test_a_cancelled_row_is_never_claimed(
+    order: OrderPlaced, record: list[str], ignore_backoff: bool
+) -> None:
+    """The claim names the statuses it takes, so a cancelled row is outside it
+    however far ahead ``now`` is, and with the backoff skipped, which drops the
+    time predicate the schedule otherwise rides on."""
+    with transaction.atomic():
+        fire(order)
+    DeliveryRecord.objects.update(status=DeliveryStatus.CANCELLED, available_at=_now())
+
+    ids = claim_batch(
+        worker_id="w1",
+        now=_now() + timedelta(days=365),
+        lease=LEASE,
+        limit=10,
+        ignore_backoff=ignore_backoff,
+    )
+
+    assert ids == []
+    assert set(DeliveryRecord.objects.values_list("status", flat=True)) == {
+        DeliveryStatus.CANCELLED
+    }

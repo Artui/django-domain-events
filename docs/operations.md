@@ -306,6 +306,11 @@ of an old one. Calling the callable means rebuilding the event, so replaying a
 fan-out receiver for a payload that no longer decodes raises, where a plain
 receiver's reopened row would dead-letter in the relay.
 
+A [scheduled receiver](scheduling.md#replay) has its due time resolved again, and
+its row is reopened or added due at the later of that and now, rather than at
+once: replaying this week's offers into a newly declared expiry expires each one
+when it is due, and only the ones already past it straight away.
+
 ## Requeue from the dead-letter queue
 
 ```bash
@@ -331,6 +336,62 @@ requeue_dead(delivery_ids=[41, 42])
 
 `limit=0` requeues nothing. It is an operator asking for the smallest possible
 blast radius, and reading it as "no limit" would give them the largest one.
+
+## Cancel owed work
+
+```python
+from django_domain_events import cancel_deliveries
+
+cancel_deliveries([event_id])
+cancel_deliveries([event_id], receiver_key="offers.expire_offer")
+cancel_deliveries([event_id], delivery_ids=[41, 42])
+```
+
+Withdraws the owed deliveries of these events so they never run, and settles them
+as `cancelled`. It exists for [scheduled reactions](scheduling.md#cancelling-work-known-to-be-moot):
+the offer was accepted before its expiry came due, the order was paid before its
+reminder. It works on any owed delivery, though an immediate one is usually
+delivered before anyone thinks to cancel it.
+
+| The delivery is | Then |
+| --- | --- |
+| `pending` - waiting for its due time or for the relay | cancelled |
+| `failed` - waiting out its backoff | cancelled: "never runs" covers its retries |
+| `claimed` - a worker holds it | left to run, and counted as `in_flight` |
+| `succeeded`, `dead`, `orphaned`, `cancelled` | left with its outcome |
+
+It returns `{"cancelled": n, "in_flight": m}`. A claimed row is left alone because
+the worker may be running the receiver right now, and settling the row under it
+would record an outcome the receiver contradicts; the receiver re-checks current
+state when it runs, as it always did. A dead letter is left alone because
+cancelling it would drop it from the dead-letter counts without anyone having read
+or requeued it.
+
+`receiver_key` narrows it to one receiver, because one event usually drives an
+immediate reaction and a scheduled one and only the scheduled one became moot.
+`delivery_ids` narrows it to rows, and intersects with the events rather than
+widening them, so a stale id list cannot reach another event's work.
+
+Called inside a transaction, it joins it: the cancel commits with the change that
+made the work moot, or not at all. A cancelled row writes `completed_at` and not
+`succeeded_at`, so it is no evidence for
+[`quiet_receivers`](introspection.md#quiet-receivers) that a receiver works.
+
+What else reads it:
+
+- **Health and `events_status`** count it as neither owed, scheduled nor dead.
+- **Prune** treats it as settled, and under `Retention.SUCCEEDED` as consumed: see
+  [retention](retention.md#the-three-forms).
+- **[Replay](#replay)** reopens it like any other settled row - the way back for
+  work withdrawn by mistake. `requeue_dead()` does not touch it.
+- **The admin** lists it under its own status filter.
+
+On Postgres each batch locks its events first, in primary key order, as replay,
+requeue and the prune do. A cancel issued while a replay of the same event is open
+waits for it and then cancels what it reopened, rather than finding nothing and
+letting the replay make the work owed again. A relay's claim takes no event lock,
+so the write itself is conditioned on the status: a row claimed between the lock
+and the write is left claimed.
 
 ## Handing delivery to a task queue
 

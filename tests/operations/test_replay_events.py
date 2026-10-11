@@ -18,6 +18,7 @@ from django_domain_events.delivery.fire import fire
 from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.operations.cancel_deliveries import cancel_deliveries
 from django_domain_events.operations.replay_events import replay_events
 from django_domain_events.scope.attributed import attributed
 from django_domain_events.types.delivery_context import DeliveryContext
@@ -83,6 +84,24 @@ def test_a_delivery_in_flight_is_left_alone(order: OrderPlaced, record: list[str
     assert replay_events([event_id]) == {"reopened": 0, "added": 0}
 
 
+def test_a_cancelled_delivery_is_reopened_like_any_settled_one(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """A cancel is not forever, any more than a dead letter is: replay is the
+    operator saying the work is wanted after all. Without cancelled among the
+    statuses replay reopens, the row has an existing status and is not missing
+    either, so it is neither reopened nor added and the replay does nothing."""
+    with transaction.atomic():
+        event_id = fire(order)
+    DeliveryRecord.objects.update(
+        status=DeliveryStatus.CANCELLED, completed_at=datetime.now(timezone.utc)
+    )
+
+    assert replay_events([event_id]) == {"reopened": 2, "added": 0}
+    assert _status("testapp.durable_receiver") == DeliveryStatus.PENDING
+    assert not DeliveryRecord.objects.filter(completed_at__isnull=False).exists()
+
+
 def test_it_can_be_narrowed_to_one_receiver(order: OrderPlaced, record: list[str]) -> None:
     with transaction.atomic():
         event_id = fire(order)
@@ -120,7 +139,7 @@ def test_it_will_not_wipe_a_live_claim(order: OrderPlaced, record: list[str]) ->
     drain_outbox()
     stolen_id = DeliveryRecord.objects.order_by("pk").values_list("pk", flat=True).first()
 
-    real_terminal = module._TERMINAL
+    real_terminal = module.TERMINAL
 
     class StealWhenAsked(tuple):
         def __contains__(self, item: object) -> bool:
@@ -129,7 +148,7 @@ def test_it_will_not_wipe_a_live_claim(order: OrderPlaced, record: list[str]) ->
             )
             return tuple.__contains__(self, item)
 
-    with mock.patch.object(module, "_TERMINAL", StealWhenAsked(real_terminal)):
+    with mock.patch.object(module, "TERMINAL", StealWhenAsked(real_terminal)):
         assert replay_events([event_id])["reopened"] == 1
 
     stolen = DeliveryRecord.objects.get(pk=stolen_id)
@@ -398,3 +417,107 @@ def test_a_row_a_replay_adds_is_owed_from_the_replay_too(throttled: str) -> None
     assert DeliveryRecord.objects.get(receiver_key=throttled).due_at >= before
 
     assert drain_outbox() == {DeliveryStatus.FAILED: 1}
+
+
+EXPIRE = "probe.expire"
+
+
+@pytest.fixture
+def expiry() -> Iterator[list[int]]:
+    """A receiver of ``Unheard`` due 48 hours after the event occurred, which
+    records the value of every event it runs for."""
+    ran: list[int] = []
+    receiver(Unheard, key=EXPIRE, due=timedelta(hours=48))(lambda evt: ran.append(evt.value))
+    yield ran
+    registry._receivers.pop(EXPIRE, None)
+
+
+def _when(key: str) -> tuple[datetime, datetime | None]:
+    return DeliveryRecord.objects.values_list("available_at", "due_at").get(receiver_key=key)
+
+
+def test_a_replay_reopens_a_scheduled_row_at_its_due_time_when_that_is_ahead(
+    expiry: list[int],
+) -> None:
+    """Replay is also how a scheduled receiver is adopted: declare the expiry,
+    replay the recent offers - and every open offer must not expire at once."""
+    occurred = datetime.now(timezone.utc) - timedelta(hours=1)
+    with transaction.atomic():
+        event_id = fire(Unheard(value=1), occurred_at=occurred)
+    DeliveryRecord.objects.filter(receiver_key=EXPIRE).update(status=DeliveryStatus.DEAD)
+
+    assert replay_events([event_id]) == {"reopened": 1, "added": 0}
+
+    assert _when(EXPIRE) == (occurred + timedelta(hours=48),) * 2
+    assert drain_outbox() == {}
+    assert expiry == []
+
+
+def test_a_cancelled_scheduled_row_is_reopened_at_its_due_time(expiry: list[int]) -> None:
+    """The way back from a cancel made by mistake: the reopened row is due when
+    the schedule says, not at once, as any reopened scheduled row is."""
+    occurred = datetime.now(timezone.utc) - timedelta(hours=1)
+    with transaction.atomic():
+        event_id = fire(Unheard(value=1), occurred_at=occurred)
+    assert cancel_deliveries([event_id], receiver_key=EXPIRE)["cancelled"] == 1
+
+    assert replay_events([event_id]) == {"reopened": 1, "added": 0}
+
+    assert _status(EXPIRE) == DeliveryStatus.PENDING
+    assert _when(EXPIRE) == (occurred + timedelta(hours=48),) * 2
+    assert drain_outbox() == {}
+    assert expiry == []
+
+
+def test_a_replay_adds_a_scheduled_row_at_its_due_time_when_that_is_ahead(
+    expiry: list[int],
+) -> None:
+    occurred = datetime.now(timezone.utc) - timedelta(hours=1)
+    with receiver_deleted(EXPIRE), transaction.atomic():
+        event_id = fire(Unheard(value=1), occurred_at=occurred)
+
+    assert replay_events([event_id]) == {"reopened": 0, "added": 1}
+
+    assert _when(EXPIRE) == (occurred + timedelta(hours=48),) * 2
+    assert drain_outbox() == {}
+
+
+def test_a_replay_of_a_scheduled_row_whose_due_time_has_passed_runs_it_now(
+    expiry: list[int],
+) -> None:
+    """The later of the due time and the replay: an offer whose 48 hours ran
+    out last week is expired by the replay, owed from the replay."""
+    occurred = datetime.now(timezone.utc) - timedelta(days=7)
+    with receiver_deleted(EXPIRE), transaction.atomic():
+        event_id = fire(Unheard(value=1), occurred_at=occurred)
+
+    before = datetime.now(timezone.utc)
+    assert replay_events([event_id]) == {"reopened": 0, "added": 1}
+
+    available_at, due_at = _when(EXPIRE)
+    assert available_at == due_at
+    assert before <= due_at <= datetime.now(timezone.utc)
+    assert drain_outbox() == {DeliveryStatus.SUCCEEDED: 1}
+    assert expiry == [1]
+
+
+def test_a_replay_asks_a_due_callable_again() -> None:
+    """Resolved at replay time, as targets are: the event is rebuilt from its
+    payload and handed to the callable."""
+    asked: list[Unheard] = []
+    when = datetime.now(timezone.utc) + timedelta(days=2)
+
+    def send_at(evt: Unheard) -> datetime:
+        asked.append(evt)
+        return when
+
+    receiver(Unheard, key="probe.send_at", due=send_at)(lambda evt: None)
+    try:
+        with receiver_deleted("probe.send_at"), transaction.atomic():
+            event_id = fire(Unheard(value=4))
+        assert replay_events([event_id]) == {"reopened": 0, "added": 1}
+    finally:
+        registry._receivers.pop("probe.send_at", None)
+
+    assert asked == [Unheard(value=4)]
+    assert _when("probe.send_at") == (when, when)

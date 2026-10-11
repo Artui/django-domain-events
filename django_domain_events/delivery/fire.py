@@ -20,7 +20,7 @@ from django_domain_events.scope.suppressed import suppression_for
 from django_domain_events.settings import get_codec, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
-from django_domain_events.utils import resolve_targets
+from django_domain_events.utils import resolve_due, resolve_targets
 
 
 def fire(
@@ -44,6 +44,11 @@ def fire(
     consequences silently never happened. It also costs whatever the callable
     costs, on every event it is owed - one query per fired event per fan-out
     receiver, for one that reads a table.
+
+    A durable receiver declared with ``due=`` has its row written due later:
+    ``available_at`` and ``due_at`` at its due time, never earlier than now. A
+    ``due`` callable runs here too, on the same terms as ``targets``: if it
+    raises, or answers with anything but an aware datetime, this raises.
 
     The event's declared ``retention`` is copied onto the row. A ``dedupe_key``
     is refused, with ``ValueError``, for an event declared to delete on
@@ -150,6 +155,15 @@ def fire(
             [""] if r.targets is None else resolve_targets(r.key, r.targets, event, context)
         )
     ]
+    # A scheduled receiver's due time, resolved here for the same reason and
+    # with the same consequence as a fan-out: in the caller's transaction, and
+    # raising into it. Never a fan-out as well, which the declaration refuses,
+    # so one time per receiver is one time per row.
+    due = {
+        r.key: resolve_due(r.key, r.due, event, record.occurred_at, record.recorded_at)
+        for r, _ in owed
+        if r.due is not None
+    }
     if owed:
         rows = DeliveryRecord.objects.bulk_create(
             [
@@ -158,7 +172,11 @@ def fire(
                     receiver_key=r.key,
                     target=target,
                     max_attempts=r.max_attempts,
-                    available_at=record.recorded_at,
+                    # At the due time for a scheduled receiver, so the claim
+                    # takes it then and not before; at once for every other.
+                    # due_at stays NULL for those, which reads as recorded_at.
+                    available_at=due.get(r.key, record.recorded_at),
+                    due_at=due.get(r.key),
                 )
                 for r, target in owed
             ]

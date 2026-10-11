@@ -40,3 +40,16 @@ class CatalogueReceiver:
     in seconds, or None where the receiver declares no bound. Seconds rather
     than the declared ``timedelta`` so the JSON stays plain numbers, as the
     curve does."""
+
+    due_seconds: float | None = None
+    """For a receiver declared with ``due=`` and a delay, that delay in seconds,
+    counted from the event's ``occurred_at``; None otherwise. Published because
+    it changes when the work happens, which a reader diffing catalogues should
+    see."""
+
+    due_callable: str | None = None
+    """For a receiver declared with ``due=`` and a callable, where the callable
+    lives, as ``targets`` is published; None otherwise. Two fields rather than
+    one that is sometimes a number and sometimes a path, so a JSON reader never
+    switches on a value's type. At most one of the two is set, and a receiver
+    with neither runs as soon as its event is recorded."""

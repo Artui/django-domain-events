@@ -516,3 +516,128 @@ def test_a_redeclared_event_does_not_change_the_fate_of_one_already_recorded() -
     assert prune_events() == 1
     assert list(EventRecord.objects.values_list("pk", flat=True)) == [after]
     assert before != after
+
+
+def _row(key: str) -> DeliveryRecord:
+    return DeliveryRecord.objects.select_related("event").get(receiver_key=key)
+
+
+def test_a_fixed_delay_writes_the_row_due_that_long_after_the_event_occurred(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Counted from ``occurred_at``, the domain's time: an offer made at noon
+    expires 48 hours after noon, whenever the row happened to be written."""
+
+    @receiver(OrderPlaced, key="probe.expire", due=timedelta(hours=48))
+    def expire(evt: OrderPlaced) -> None: ...
+
+    occurred = datetime.now(timezone.utc) - timedelta(minutes=5)
+    with transaction.atomic():
+        fire(order, occurred_at=occurred)
+
+    row = _row("probe.expire")
+    assert (row.available_at, row.due_at) == (occurred + timedelta(hours=48),) * 2
+    assert row.status == DeliveryStatus.PENDING
+    # Every other receiver is written as it always was: available at once,
+    # with no due time of its own.
+    plain = _row("testapp.durable_receiver")
+    assert (plain.available_at, plain.due_at) == (plain.event.recorded_at, None)
+
+
+def test_a_callable_is_handed_the_event_and_its_answer_is_the_due_time(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    seen: list[object] = []
+    when = datetime.now(timezone.utc) + timedelta(days=3)
+
+    def newsletter_time(evt: OrderPlaced) -> datetime:
+        seen.append(evt)
+        return when
+
+    @receiver(OrderPlaced, key="probe.send", due=newsletter_time)
+    def send(evt: OrderPlaced) -> None: ...
+
+    with transaction.atomic():
+        fire(order)
+
+    assert seen == [order]
+    row = _row("probe.send")
+    assert (row.available_at, row.due_at) == (when, when)
+
+
+def test_a_due_time_already_past_is_due_when_the_row_is_written(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """A backfilled event can be due before it is recorded. Its row is due at
+    once, and owed from the moment it was written: a due time in the past
+    would read as a backlog that old the instant the row existed, and a
+    ``give_up_after`` measured from it would dead-letter its first deferral."""
+
+    @receiver(OrderPlaced, key="probe.late", due=timedelta(hours=1))
+    def late(evt: OrderPlaced) -> None: ...
+
+    with transaction.atomic():
+        fire(order, occurred_at=datetime.now(timezone.utc) - timedelta(days=30))
+
+    row = _row("probe.late")
+    assert (row.available_at, row.due_at) == (row.event.recorded_at,) * 2
+
+
+@pytest.mark.parametrize(
+    ("answer", "error", "message"),
+    [
+        (datetime(2026, 10, 1, 9), ValueError, "naive datetime"),
+        ("2026-10-01T09:00:00Z", TypeError, "returned '2026-10-01T09:00:00Z', a str"),
+        (None, TypeError, "returned None"),
+    ],
+)
+def test_a_callable_answering_anything_but_an_aware_datetime_fails_the_change(
+    order: OrderPlaced, record: list[str], answer: object, error: type, message: str
+) -> None:
+    """Raised, never skipped, because the alternative is a reaction that
+    silently never happens. A naive datetime is refused rather than guessed
+    at: read as UTC or as local time, it is wrong for somebody by hours."""
+
+    @receiver(OrderPlaced, key="probe.bad_due", due=lambda evt: answer)
+    def bad(evt: OrderPlaced) -> None: ...
+
+    with pytest.raises(error, match=message), transaction.atomic():
+        fire(order)
+
+    assert not EventRecord.objects.exists()
+
+
+def test_a_scheduled_receiver_is_given_its_due_time(order: OrderPlaced, record: list[str]) -> None:
+    """So it can recompute the due time from current state and compare: the
+    offer extended since this row was written is still open."""
+    seen: list[DeliveryContext] = []
+
+    @receiver(OrderPlaced, key="probe.ctx", takes_context=True, due=timedelta(hours=1))
+    def ctx(evt: OrderPlaced, context: DeliveryContext) -> None:
+        seen.append(context)
+
+    occurred = datetime.now(timezone.utc)
+    with transaction.atomic():
+        fire(order, occurred_at=occurred)
+    drain_outbox(now=occurred + timedelta(hours=1))
+
+    assert [c.due_at for c in seen] == [occurred + timedelta(hours=1)]
+
+
+def test_an_unscheduled_delivery_is_due_from_when_its_event_was_recorded(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """A NULL ``due_at`` is read as the event's ``recorded_at`` everywhere else,
+    so the context reads it the same way rather than handing a receiver None
+    for every row nobody scheduled."""
+    seen: list[DeliveryContext] = []
+
+    @receiver(OrderPlaced, key="probe.plain_ctx", takes_context=True)
+    def plain(evt: OrderPlaced, context: DeliveryContext) -> None:
+        seen.append(context)
+
+    with transaction.atomic():
+        fire(order)
+    drain_outbox()
+
+    assert [c.due_at for c in seen] == [_row("probe.plain_ctx").event.recorded_at]

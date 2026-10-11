@@ -60,7 +60,14 @@ relays started with `--lane mail`" - and the JSON carries
 `backoff_base_seconds`, `backoff_cap_seconds` and `lane` on every receiver. So
 does a declared [`give_up_after`](delivery.md#give_up_after-keeps-every-delivery-ending):
 "dead-letters a deferral once its delivery has been owed for 172800s", and
-`give_up_after_seconds` in the JSON, null where none is declared.
+`give_up_after_seconds` in the JSON, null where none is declared. A
+[scheduled receiver](scheduling.md) says when it runs - "is due 172800s after
+the event occurred", or "is due at the time `waitlist.events.offer_expiry`
+returns for the event" - and the JSON carries `due_seconds` for a delay and
+`due_callable` for a callable, each null otherwise. Two fields rather than one
+that is sometimes a number and sometimes a path, so a JSON reader never switches
+on a value's type; a receiver with both null runs as soon as its event is
+recorded.
 Lines rather than columns, so the tables a project has already committed do
 not change shape for properties most receivers do not have. A half of the curve
 left to its setting is named as the setting rather than resolved, because the
@@ -159,18 +166,30 @@ climbing, while one wedged receiver has a backlog and everything else fine.
 
 | Field | Means |
 | --- | --- |
-| `owed` | Deliveries not yet settled - pending, failed or claimed |
+| `owed` | Deliveries due and not yet settled - pending, failed or claimed |
+| `scheduled` | Deliveries not yet settled whose due time is still ahead - a [scheduled receiver](scheduling.md) waiting. **Not** counted as owed |
 | `claimed` | Currently leased by a worker |
 | `dead` | Dead-lettered. **Not** counted as owed |
-| `oldest_owed_at` | When the oldest still-owed delivery's event was **recorded**; `None` when nothing is owed |
+| `oldest_owed_at` | When the oldest still-owed delivery **became owed**: its due time where it has one, its event's recording otherwise; `None` when nothing is owed |
 | `lapsed_leases` | Claimed rows whose lease has expired |
-| `receivers` | Per-receiver backlog, worst first, omitting the ones with nothing owed or dead. Each carries its own `oldest_owed_at` |
+| `receivers` | Per-receiver backlog, worst first, omitting the ones with nothing owed, dead or scheduled. Each carries its own `owed`, `scheduled`, `dead` and `oldest_owed_at`; one with only scheduled work sorts after every receiver that is behind |
+
+A [cancelled](operations.md#cancel-owed-work) delivery is settled, so it appears
+in none of these: not owed, not scheduled and not dead. An outbox holding only
+cancelled work reads as drained.
 
 **The age of `oldest_owed_at` is the number to alert on**, and it is measured
-from when the work *arrived*, not from when it next becomes due. That
+from when the work *arrived*, not from when it next becomes available. That
 distinction is the whole point: the backoff pushes a failed delivery's
 `available_at` into the future on every attempt, so an alert written against
 that column reads a **negative** age exactly while a receiver is failing.
+
+Work arrives when it becomes due. For most rows that is when the event was
+recorded; for a replayed or requeued row, when it was reopened; and for a
+[scheduled receiver](scheduling.md#is-it-keeping-up), its due time. A row due in
+a fortnight is `scheduled` until then and does not age at all, so a five-minute
+backlog alert does not fire for work that is on time - and one failing after it
+came due ages from its due time, not from an event a fortnight older.
 
 It rises monotonically for as long as work sits undone - a relay that is down,
 a receiver that is failing its way through its retries, or a queue simply longer
@@ -192,10 +211,30 @@ reading after a deploy is that, not a dying worker.
 Every figure here is answered from an index and none of them scans the
 delivery table, so the call is cheap enough to scrape on an interval.
 
-`owed` means "not terminal", which is what the prune settles by and a superset
-of what the relay can claim at any given moment: a row inside its backoff window
-is owed and not yet claimable. The superset is the useful side - this cannot
-report an empty queue while work is still outstanding.
+`owed` means "not terminal and due", a superset of what the relay can claim at
+any given moment: a row inside its backoff window is owed and not yet claimable.
+The superset is the useful side - this cannot report an empty queue while work
+is still outstanding. A row whose due time has not come is not outstanding yet,
+which is why it is `scheduled` instead; at exactly its due time it is owed, as
+the relay can claim it then. The prune settles by "not terminal", so it waits
+for `owed` and `scheduled` rows alike.
+
+`events_status` prints the same figures, `scheduled` among them, and a line per
+receiver:
+
+```text
+owed          3
+scheduled     120
+claimed       1
+dead          0
+lapsed leases 0
+oldest owed   42s ago
+
+  billing.send_invoice	owed=3	dead=0	scheduled=0	oldest=42s
+  waitlist.expire_offer	owed=0	dead=0	scheduled=120	oldest=-
+```
+
+`--format json` carries `scheduled` at the top level and on each receiver.
 
 ## System checks
 
@@ -256,7 +295,8 @@ Add `django.contrib.admin` and both models appear, read-only, with actions.
 - **Event records** - filter by name and date, see how many deliveries are still
   owed per event, and **Replay selected events**.
 - **Delivery records** - the dead-letter queue, filterable by status and
-  receiver, with **Requeue selected dead deliveries**. Each row shows its
+  receiver - `cancelled` included, so withdrawn work can be listed on its own -
+  with **Requeue selected dead deliveries**. Each row shows its
   target, and the search covers the receiver key, the target and the last error,
   since the target is what an operator is holding when one destination of a
   fan-out says it never received something.

@@ -4,25 +4,39 @@ import dataclasses
 import hashlib
 import inspect
 from collections.abc import Callable, Iterable, Mapping
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, cast
 
 from django.apps import apps
 from django.db import connections, models
+from django.utils import timezone
 
 from django_domain_events.declaration.registry import registry
 from django_domain_events.payload_upgrade_failed import PayloadUpgradeFailed
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_status import DeliveryStatus
 
-TERMINAL = (DeliveryStatus.SUCCEEDED, DeliveryStatus.DEAD, DeliveryStatus.ORPHANED)
-"""Statuses a delivery does not come back from.
+TERMINAL = (
+    DeliveryStatus.SUCCEEDED,
+    DeliveryStatus.DEAD,
+    DeliveryStatus.ORPHANED,
+    DeliveryStatus.CANCELLED,
+)
+"""Statuses a delivery does not come back from on its own.
 
-Everything else is still owed. Named once because three callers ask the
-question and an explicit list of the owed statuses is what let two of them
-disagree: one omitted CLAIMED, so a row whose worker died between the claim
+Everything else is still owed. Named once because every reader of "settled"
+asks the question and an explicit list of the owed statuses is what let two of
+them disagree: one omitted CLAIMED, so a row whose worker died between the claim
 and the deploy that deleted its receiver read as settled until a relay
-happened to reclaim it.
+happened to reclaim it. Replay and the event changelist's owed count kept
+copies of their own until CANCELLED arrived, and now read this one.
+
+Each member is held per reader, because membership in a tuple is one branch
+arc: CANCELLED by test_a_cancelled_row_is_not_run (the relay's refusal),
+test_a_cancelled_delivery_is_reopened_like_any_settled_one (replay),
+test_a_cancelled_delivery_is_settled_for_the_ordinary_window (prune),
+test_a_cancelled_delivery_is_not_owed (the admin) and
+test_every_status_is_counted_owed_or_settled_exactly_once (health).
 """
 
 RETRYABLE = (DeliveryStatus.PENDING, DeliveryStatus.FAILED)
@@ -53,6 +67,28 @@ def owed() -> models.Q:
     test_the_orphan_warning_counts_every_owed_status_and_no_other).
     """
     return models.Q(status__in=RETRYABLE) | models.Q(status=DeliveryStatus.CLAIMED)
+
+
+def not_yet_due(now: datetime) -> models.Q:
+    """Rows whose due time is still ahead of ``now``: scheduled, not yet owed.
+
+    Read off ``due_at`` and never ``available_at``, because only the first
+    tells a schedule from a backoff: the backoff moves ``available_at`` ahead on
+    every failed attempt and leaves ``due_at`` alone, so a row failing after
+    it came due has a future ``available_at`` and a past ``due_at``, and is
+    owed. A NULL ``due_at`` is a row owed since its event was recorded, which is
+    never in the future, so it is never matched here.
+
+    Strictly after ``now``, as the claim takes a row once ``available_at <=
+    now``: at its due time a row is owed, to the claim and to health alike
+    (``test_a_row_becomes_owed_at_exactly_its_due_time``).
+
+    A filter on rows already narrowed to the owed ones, not a predicate of its
+    own: it adds nothing an index could use, so every caller applies it to a
+    query whose WHERE clause is ``owed()``, and the owed partial indexes are
+    what read the rows.
+    """
+    return models.Q(due_at__gt=now)
 
 
 def label_for(module: str, fallback_name: str) -> str:
@@ -214,6 +250,52 @@ def resolve_targets(
             )
         resolved[target] = None
     return list(resolved)
+
+
+def resolve_due(
+    receiver_key: str,
+    due: timedelta | Callable[[Any], datetime],
+    event: object,
+    occurred_at: datetime,
+    floor: datetime,
+) -> datetime:
+    """When a scheduled receiver's delivery of ``event`` comes due.
+
+    Shared by ``fire()`` and ``replay_events()``, as ``resolve_targets`` is, so
+    a replay cannot write a due time firing would have refused. A delay counts
+    from ``occurred_at``; a callable is handed the event.
+
+    Two refusals, raised rather than skipped, for the reason ``resolve_targets``
+    gives: this runs inside somebody else's transaction, and the alternative is
+    a reaction that silently never happens. A value that is not a datetime is
+    refused before it reaches a comparison that would fail with a less useful
+    message, and a naive one because reading it as UTC or as local time would be
+    wrong by hours for somebody.
+
+    Never earlier than ``floor`` - when the row is written: ``recorded_at`` at
+    fire time, the moment of the replay on a replay. A due time already past
+    is due at once, and ``due_at`` is when a row became owed, which cannot be
+    before it existed: a backfilled event would otherwise read as a backlog
+    that old the instant its row was written, and a ``give_up_after`` measured
+    from it would dead-letter the first deferral
+    (``test_a_due_time_already_past_is_due_when_the_row_is_written``).
+    """
+    if isinstance(due, timedelta):
+        when = occurred_at + due
+    else:
+        when = due(event)
+        if not isinstance(when, datetime):
+            raise TypeError(
+                f"due for receiver {receiver_key!r} returned {when!r}, a "
+                f"{type(when).__name__}. It must return an aware datetime."
+            )
+        if not timezone.is_aware(when):
+            raise ValueError(
+                f"due for receiver {receiver_key!r} returned the naive datetime {when!r}. "
+                f"Give it a timezone; reading it as UTC or as local time would each be "
+                f"a guess."
+            )
+    return max(when, floor)
 
 
 def target_digest(target: str) -> bytes:

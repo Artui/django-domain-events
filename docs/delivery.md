@@ -165,6 +165,7 @@ Dead is where a delivery stops **on its own**, not where it stops for good - see
 | `failed` | raised with attempts remaining, or deferred |
 | `dead` | out of attempts, or deferred past `give_up_after` |
 | `orphaned` | addressed to a receiver key the registry no longer has |
+| `cancelled` | withdrawn by [`cancel_deliveries`](operations.md#cancel-owed-work) before it ran |
 
 `failed` is distinct from `pending` so that "has this ever failed" is answerable
 without reading the attempt count.
@@ -357,6 +358,41 @@ throttled destination once before the relay's pause can apply.
     A receiver declared with `site="task"` keeps the unspent attempt and
     loses the pause, for the reason above.
 
+## When the work is not due yet
+
+`RetryAfter` is a destination saying when to come back. `NotYet(until)` is the
+receiver itself saying its work is not due until `until`, an aware `datetime` in
+the future - typically a [scheduled receiver](scheduling.md) whose due time has
+moved since its row was written:
+
+```python
+from django.utils import timezone
+
+from django_domain_events import DeliveryContext, NotYet, receiver
+
+
+@receiver(OfferMade, due=timedelta(hours=48), takes_context=True)
+def expire_offer(evt: OfferMade, ctx: DeliveryContext) -> None:
+    offer = Offer.objects.get(pk=evt.offer_id)
+    if offer.expires_at > max(ctx.due_at, timezone.now()):
+        raise NotYet(offer.expires_at, reason="the offer was extended")
+    offer.expire()
+```
+
+The relay moves the row's `available_at` and `due_at` to `until` and sets it back
+to `pending`. **No attempt is spent**, nothing is capped or jittered,
+`give_up_after` does not apply, `last_error` and `on_failure` are left alone, and
+no lane is paused: it is the application's own statement of when its work is
+due, not a destination's advice to be distrusted. On the next run,
+`ctx.due_at` is `until`. A naive or past `until` is refused when the exception
+is built, so raising one records an ordinary, counted failure instead.
+[Scheduled reactions](scheduling.md#when-the-work-is-not-due-yet-notyet) covers
+it in full, with how it compares to `RetryAfter`.
+
+Like the other two, it is read by the relay and by nothing else: an `INLINE`
+receiver raising it fails the caller's transaction, and an `ON_COMMIT` one has
+it logged.
+
 ## In tests
 
 ```python
@@ -373,3 +409,19 @@ def test_placing_an_order_reserves_stock():
 encode, decode and acknowledgement the relay performs - so a test exercising it
 exercises production. `assert_fired` reads the log rather than a mock, which
 means it also proves the row was written inside the transaction that committed.
+
+It skips the backoff, so a failing receiver is retried to its dead letter in one
+call, and **never skips a receiver's `due=`**: a scheduled row is left alone
+until it is due. Pass `now=` to move the claims forward in time instead:
+
+```python
+def test_an_unanswered_offer_expires():
+    make_offer()
+    drain_outbox()  # the expiry is not due yet, so it is left alone
+    drain_outbox(now=timezone.now() + timedelta(hours=48))  # now it is
+```
+
+Only the claims read `now`; the receiver runs on the real clock, so a scheduled
+receiver should compare against `ctx.due_at`, with the clock only as the floor
+that lets a late row proceed (`max(ctx.due_at, timezone.now())`). See
+[scheduled reactions](scheduling.md#in-tests).

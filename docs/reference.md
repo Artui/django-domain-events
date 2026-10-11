@@ -26,10 +26,12 @@ Everything below is exported from `django_domain_events` directly.
 ::: django_domain_events.delivery.backoff.backoff
 ::: django_domain_events.delivery.permanent_failure.PermanentFailure
 ::: django_domain_events.delivery.retry_after.RetryAfter
+::: django_domain_events.delivery.not_yet.NotYet
 ::: django_domain_events.delivery.wake.notify_relay
 
 ## Operations
 
+::: django_domain_events.operations.cancel_deliveries.cancel_deliveries
 ::: django_domain_events.operations.prune_events.prune_events
 ::: django_domain_events.operations.replay_events.replay_events
 ::: django_domain_events.operations.requeue_dead.requeue_dead

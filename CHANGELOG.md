@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-10-11
+
+### Added
+- `@receiver(due=...)`: a scheduled reaction, whose delivery of an event is
+  written when the event fires and runs later. A `timedelta` counts from the
+  event's `occurred_at`; a callable is handed the event and returns an aware
+  `datetime`, and runs inside the caller's transaction, so `fire()` raises if it
+  raises or answers with anything else. A due time already past is due when the
+  row is written. Refused beside a non-durable mode, `eager=True` and
+  `targets=`, and for a delay that is not positive; `site="task"` is unchanged,
+  handed off when the row comes due.
+- `NotYet(until, reason="")`, exported from the package root: a durable receiver
+  answering an early run moves its row to `until`, an aware future time, with no
+  attempt spent, no cap, no `give_up_after`, no `last_error`, no `on_failure`
+  call and no lane paused. `deliver_one()` returns `PENDING` for it.
+- `DeliveryContext.due_at`: the time the delivery came due with, for a scheduled
+  receiver to compare against before answering `NotYet`.
+- `drain_outbox(now=...)` and `deliver_pending(now=...)`: the moment the call's
+  claims are made at, so a test can move forward to a due time. A drain skips the
+  backoff and never a due time. Within one call, a row answered with `NotYet` is
+  attempted once and a `site="task"` row handed to the backend once.
+- `OutboxHealth.scheduled` and `ReceiverBacklog.scheduled`: unsettled rows whose
+  due time is still ahead, which `events_status` prints and its JSON carries.
+- `CatalogueReceiver.due_seconds` and `due_callable`, with a line under the
+  receiver's table in the Markdown catalogue.
+- `claim_batch(exclude_ids=...)`, which leaves those rows out of the claim.
+- The example shop sends an invoice reminder a fortnight after the invoice,
+  with a moot run and a `NotYet`.
+- `cancel_deliveries(event_ids, *, receiver_key=None, delivery_ids=None)`,
+  exported from the package root: withdraws the pending and failed deliveries of
+  those events, optionally narrowed to one receiver and to named rows (which
+  intersect with the events), so they never run. It leaves a claimed row to its
+  worker, leaves a settled row with its outcome, and returns
+  `{"cancelled": n, "in_flight": m}`. Inside a transaction it commits with the
+  caller's change. On Postgres it locks the events first, in primary key order,
+  as replay, requeue and the prune do, so a cancel issued during a replay of the
+  same event cancels what the replay reopened.
+- `DeliveryStatus.CANCELLED` (`"cancelled"`), the settled status a cancelled
+  delivery takes. The relay never claims or runs it; `outbox_health()`,
+  `events_status` and the event changelist do not count it owed; `prune_events`
+  treats it as settled, and as consumed under `Retention.SUCCEEDED` as well as
+  `Retention.SETTLED`; `replay_events()` reopens it; `requeue_dead()` leaves it
+  alone; the admin's status filter lists it. Migration `0008` changes only the
+  field's choices and emits no SQL.
+- The example shop cancels the open order's next reminder when its invoice is
+  paid, and checks that a drain past its due time never runs it.
+
+### Changed
+- **`owed` no longer counts a row whose due time has not come**, in
+  `outbox_health()`, its per-receiver backlog and `events_status`; such a row is
+  `scheduled`. `oldest_owed_at` reads a row's `due_at` where it has one and its
+  event's `recorded_at` otherwise, so a replayed or requeued row ages from when
+  it was reopened and a scheduled one from its due time.
+- **`deliver_one()` refuses a `PENDING` row whose `available_at` is ahead**, as it
+  already refused a `FAILED` row waiting out its backoff.
+- **`replay_events()` keeps a scheduled receiver's due time**: a reopened or
+  added row is due at the later of its resolved due time and now, rather than at
+  once, and a `due` callable is called again.
+- **`DeliveryStatus` has a seventh member**, `CANCELLED`. Code that maps every
+  status to something - a dashboard, a metrics label set - meets a value it has
+  not seen once anything calls `cancel_deliveries`.
+- **During a rolling deploy, 0.10 processes read the new rows with the old
+  meaning**: they treat a `cancelled` row as unsettled (their prune keeps its
+  event and their admin counts it owed) and a scheduled row as owed in health,
+  until every process is on 0.11.
+
+### Fixed
+- The Markdown catalogue writes a duration of a million seconds or more out in
+  full, where it printed a fortnight as `1.2096e+06s`.
+
 ## [0.10.0] — 2026-10-11
 
 ### Added
@@ -633,7 +703,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/Artui/django-domain-events/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Artui/django-domain-events/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/Artui/django-domain-events/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Artui/django-domain-events/compare/v0.7.0...v0.8.0

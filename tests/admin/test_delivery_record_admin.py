@@ -103,6 +103,29 @@ def test_a_selection_with_nothing_dead_says_so(order: OrderPlaced, record: list[
     )
 
 
+def test_cancelled_rows_can_be_listed_on_their_own(admin_client) -> None:
+    """The status filter is the field's choices, so a cancelled row is one an
+    operator can list by itself, labelled as such, the way dead letters are."""
+    event = EventRecord.objects.create(
+        name="testapp.Unheard",
+        version=1,
+        payload={"value": 1},
+        occurred_at=datetime(2026, 9, 16, tzinfo=timezone.utc),
+    )
+    for key, status in (("probe.kept", DeliveryStatus.PENDING), ("probe.off", "cancelled")):
+        DeliveryRecord.objects.create(
+            event=event, receiver_key=key, status=status, available_at=event.recorded_at
+        )
+
+    response = admin_client.get(
+        "/admin/django_domain_events/deliveryrecord/", {"status__exact": "cancelled"}
+    )
+
+    assert response.status_code == 200
+    assert [row.receiver_key for row in response.context["cl"].result_list] == ["probe.off"]
+    assert "Cancelled" in response.content.decode()
+
+
 def test_a_fan_out_delivery_can_be_found_by_its_target(admin_client) -> None:
     """What an operator holds when a fan-out goes wrong is the target: "endpoint
     42 says it never got it"."""

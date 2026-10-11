@@ -11,6 +11,7 @@ from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.deliver import deliver_one, deliver_pending
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.permanent_failure import PermanentFailure
 from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.run_relay import run_relay
@@ -20,6 +21,7 @@ from django_domain_events.introspection.outbox_health import outbox_health
 from django_domain_events.introspection.quiet_receivers import quiet_receivers
 from django_domain_events.introspection.render_catalogue import render_catalogue
 from django_domain_events.introspection.what_listens_to import what_listens_to
+from django_domain_events.operations.cancel_deliveries import cancel_deliveries
 from django_domain_events.operations.prune_events import prune_events
 from django_domain_events.operations.replay_events import replay_events
 from django_domain_events.operations.requeue_dead import requeue_dead
@@ -64,6 +66,7 @@ __all__ = [
     "DeliveryMode",
     "DeliveryStatus",
     "INLINE",
+    "NotYet",
     "ON_COMMIT",
     "OutboxHealth",
     "PayloadCodec",
@@ -83,6 +86,7 @@ __all__ = [
     "assert_fired",
     "attributed",
     "backoff",
+    "cancel_deliveries",
     "catalogue",
     "caused_by",
     "causing_event_id",

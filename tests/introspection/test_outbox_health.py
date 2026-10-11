@@ -179,6 +179,116 @@ def test_a_receiver_backlog_carries_its_own_oldest(order: OrderPlaced, record: l
     assert by_key["testapp.durable_receiver"].oldest_owed_at == stuck
 
 
+def _scheduled(due: datetime, **fields: object) -> None:
+    """Make every row one scheduled for ``due``, as ``fire()`` writes it."""
+    DeliveryRecord.objects.update(due_at=due, **{"available_at": due, **fields})
+
+
+def test_a_scheduled_row_is_not_owed_and_does_not_age_before_its_due_time(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """A row due in fourteen days is work that has not arrived. Counting it
+    owed and aging it from the event would trip a five-minute backlog alert
+    five minutes after the event and hold it for the fortnight."""
+    with transaction.atomic():
+        fire(order)
+    now = datetime.now(timezone.utc)
+    EventRecord.objects.update(recorded_at=now - timedelta(hours=1))
+    _scheduled(now + timedelta(days=14))
+
+    health = outbox_health(now=now)
+
+    assert (health.owed, health.oldest_owed_at) == (0, None)
+    assert health.scheduled == 2
+    by_key = {r.key: r for r in health.receivers}
+    assert (
+        by_key["testapp.durable_receiver"].owed,
+        by_key["testapp.durable_receiver"].scheduled,
+    ) == (
+        0,
+        1,
+    )
+    assert by_key["testapp.durable_receiver"].oldest_owed_at is None
+
+
+def test_a_scheduled_row_failing_after_its_due_time_ages_from_its_due_time(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Work arrives when it becomes due, so that is what its age counts from -
+    not the event three days earlier, which would read as a three-day backlog
+    the moment the row came due, and not ``available_at``, which the backoff
+    pushes ahead into a negative age."""
+    with transaction.atomic():
+        fire(order)
+    now = datetime.now(timezone.utc)
+    due = now - timedelta(minutes=10)
+    EventRecord.objects.update(recorded_at=now - timedelta(days=3))
+    _scheduled(due, status=DeliveryStatus.FAILED, attempts=1)
+    DeliveryRecord.objects.update(available_at=now + timedelta(minutes=30))
+
+    health = outbox_health(now=now)
+
+    assert health.oldest_owed_at == due
+    assert {r.oldest_owed_at for r in health.receivers} == {due}
+    assert (health.owed, health.scheduled) == (2, 0)
+
+
+def test_a_row_becomes_owed_at_exactly_its_due_time(order: OrderPlaced, record: list[str]) -> None:
+    """The claim takes a row once ``available_at <= now``, so health has to call
+    it owed at the same instant, or a row the relay could already take would be
+    reported as not having arrived."""
+    with transaction.atomic():
+        fire(order)
+    due = datetime.now(timezone.utc) + timedelta(hours=1)
+    _scheduled(due)
+
+    before = outbox_health(now=due - timedelta(microseconds=1))
+    at = outbox_health(now=due)
+    assert (before.owed, at.owed) == (0, 2)
+    assert (before.scheduled, at.scheduled) == (2, 0)
+
+
+def test_a_settled_row_is_never_scheduled_whatever_its_due_time(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """A settled row keeps the due time it was written with, and a row settled
+    before that time came - dead-lettered by hand, or any terminal status a
+    later release adds - is not work waiting for it. The per-receiver split
+    reads owed and dead rows in one query, so its scheduled count has to be
+    narrowed to the owed ones as well as to the not yet due."""
+    with transaction.atomic():
+        fire(order)
+    _scheduled(datetime.now(timezone.utc) + timedelta(days=1), status=DeliveryStatus.DEAD)
+
+    health = outbox_health()
+
+    assert (health.dead, health.scheduled) == (2, 0)
+    assert {(r.dead, r.scheduled) for r in health.receivers} == {(1, 0)}
+
+
+def test_a_receiver_with_only_scheduled_work_is_listed(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Listed after every receiver that is behind, but listed: the per-receiver
+    split is also where an operator sees which reactions are waiting."""
+    with transaction.atomic():
+        fire(order)
+    DeliveryRecord.objects.filter(receiver_key="testapp.with_context").update(
+        available_at=datetime.now(timezone.utc) + timedelta(days=1),
+        due_at=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+
+    entries = outbox_health().receivers
+    assert [(e.key, e.owed) for e in entries] == [
+        ("testapp.durable_receiver", 1),
+        ("testapp.with_context", 0),
+    ]
+    assert [(e.key, e.owed, e.scheduled) for e in entries] == [
+        ("testapp.durable_receiver", 1, 0),
+        ("testapp.with_context", 0, 1),
+    ]
+
+
 def test_every_status_is_counted_owed_or_settled_exactly_once() -> None:
     """Owed is phrased as the partial indexes' own predicates, which lists the
     owed statuses where ``exclude(status__in=TERMINAL)`` could not miss one.
@@ -229,3 +339,21 @@ def test_no_query_outbox_health_sends_scans_the_delivery_table(
     # rows serves the per-receiver split too, in one scan where the three
     # above take a bitmap OR; it holds no succeeded row either.
     assert access[2] in (owed | dead, {"dde_unfinished_by_event"}), plans
+
+
+def test_a_receiver_with_only_scheduled_work_sorts_after_one_that_is_behind(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Whatever the keys: here the scheduled receiver's key sorts first, so
+    only ranking by what is owed puts it last."""
+    with transaction.atomic():
+        fire(order)
+    DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").update(
+        available_at=datetime.now(timezone.utc) + timedelta(days=1),
+        due_at=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+
+    assert [(e.key, e.owed, e.scheduled) for e in outbox_health().receivers] == [
+        ("testapp.with_context", 1, 0),
+        ("testapp.durable_receiver", 0, 1),
+    ]

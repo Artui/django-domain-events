@@ -14,6 +14,7 @@ from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.fire import call_receiver
 from django_domain_events.delivery.hand_back import hand_back
+from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.permanent_failure import PermanentFailure
 from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.utils import OnDeferral, claim_size, partition_by_lane
@@ -24,7 +25,7 @@ from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
-from django_domain_events.utils import TERMINAL, decode_payload, parse_datetime
+from django_domain_events.utils import RETRYABLE, TERMINAL, decode_payload, parse_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +57,14 @@ def deliver_one(
     than raising - it is an ordinary outcome of a lease expiring, not a fault.
 
     A row that is not owed is refused the same way, whoever asks: one already
-    settled (succeeded, dead or orphaned), or one that failed and is waiting out
-    its backoff. Running either would repeat committed work, resurrect a dead
-    letter past its budget, or ignore a ``RetryAfter`` the destination sent.
+    settled (succeeded, dead or orphaned), one that failed and is waiting out
+    its backoff, or one whose due time has not come. Running any of them would
+    repeat committed work, resurrect a dead letter past its budget, ignore a
+    ``RetryAfter`` the destination sent, or do scheduled work early.
+
+    A receiver answering ``NotYet`` has its row moved to the time it named,
+    with no attempt spent, and this returns ``PENDING``: the one outcome that
+    leaves the row owed and not failed.
 
     ``claimed_by`` and ``claimed_at`` are the claim a task message carries, as
     the relay passed them to ``TaskBackend.enqueue``. Given them, this call
@@ -178,6 +184,8 @@ def _deliver_one(
         scope=delivery.event.scope,
         target=delivery.target,
         delivery_id=delivery.pk,
+        # NULL read as the event's recorded_at, as give_up_after reads it.
+        due_at=delivery.due_at if delivery.due_at is not None else delivery.event.recorded_at,
     )
     try:
         with (
@@ -215,6 +223,8 @@ def _deliver_one(
         # test_an_ordinary_exception_is_not_read_as_a_deferral (an exception
         # with no ``counts`` would raise AttributeError here), ``counts`` by
         # test_a_counting_retry_after_still_spends_its_attempt.
+        if isinstance(exc, NotYet):
+            return _reschedule(fence, delivery, exc)
         if isinstance(exc, RetryAfter) and not exc.counts:
             return _defer(fence, delivery, receiver, exc, attempt, on_deferral)
         return _fail(
@@ -234,21 +244,28 @@ def _owed(delivery: Any, now: datetime) -> bool:
     The status set and the backoff are separate tests, because each guard here
     is one branch arc and coverage cannot see a deleted member:
     ``test_a_settled_row_delivered_again_does_not_run_its_receiver_twice``,
-    ``test_a_dead_row_is_not_run_or_resurrected`` and
-    ``test_an_orphaned_row_is_not_run`` hold one terminal status each;
+    ``test_a_dead_row_is_not_run_or_resurrected``,
+    ``test_an_orphaned_row_is_not_run`` and ``test_a_cancelled_row_is_not_run``
+    hold one terminal status each;
     ``test_a_failed_row_not_yet_due_is_not_run`` holds the backoff;
     ``test_a_failed_row_that_is_due_still_runs`` holds its ``available_at``
     half against a check that refuses every FAILED row, and
     ``test_a_failed_row_claimed_early_on_purpose_still_runs`` its status half
     against one that reads ``available_at`` alone.
 
-    PENDING is owed whatever its ``available_at``, and a CLAIMED row is the
-    claimer's to run: ``deliver_pending(ignore_backoff=True)`` claims a FAILED
-    row early on purpose, and the claim is what makes that row CLAIMED.
+    PENDING is held to its ``available_at`` as FAILED is, because a PENDING row
+    is the one a receiver declared with ``due=`` writes, with its
+    ``available_at`` at the due time
+    (``test_a_pending_row_not_yet_due_is_not_run`` holds PENDING's membership,
+    which coverage cannot see). Every other PENDING row is available from the
+    moment it was written. A CLAIMED row is the claimer's to run:
+    ``deliver_pending(ignore_backoff=True)`` claims a FAILED row early on
+    purpose, and ``drain_outbox(now=...)`` a scheduled one, and the claim is
+    what makes that row CLAIMED.
     """
     if delivery.status in TERMINAL:
         return False
-    return not (delivery.status == DeliveryStatus.FAILED and delivery.available_at > now)
+    return not (delivery.status in RETRYABLE and delivery.available_at > now)
 
 
 def _take(delivery_id: int, claimed_by: str | None, claimed_at: str | None, worker_id: str) -> bool:
@@ -525,6 +542,54 @@ def _defer(
     return outcome
 
 
+def _reschedule(fence: _Fence, row: Any, exc: NotYet) -> DeliveryStatus | None:
+    """Move a row its receiver answered with ``NotYet`` to the time it named.
+
+    ``available_at`` and ``due_at`` together, because the row is not owed
+    until then: ``available_at`` alone would keep the relay off it, but a
+    drain - which reads ``due_at`` to tell the schedule from the backoff -
+    would take it straight back, and health would age an extended offer from
+    the due time it no longer has
+    (``test_the_row_is_not_claimed_again_before_the_time``,
+    ``test_a_time_past_the_retry_ceiling_is_not_capped``).
+
+    ``attempts`` is never written, as in ``_defer``, and neither is
+    ``last_error`` or the failure hook: nothing failed
+    (``test_an_early_run_moves_the_row_to_the_time_and_spends_no_attempt``,
+    ``test_it_is_not_a_failure_so_on_failure_is_not_told``). PENDING rather
+    than FAILED for the same reason, which is also what keeps a direct
+    ``deliver_one`` off it until then, since the owed check holds PENDING to
+    its ``available_at`` as it holds FAILED.
+    """
+    logger.info(
+        "receiver %s answered delivery %s with NotYet; it is due again at %s",
+        row.receiver_key,
+        row.pk,
+        exc.until.isoformat(),
+    )
+    return fence.write(
+        status=DeliveryStatus.PENDING,
+        available_at=exc.until,
+        due_at=exc.until,
+        completed_at=None,
+    )
+
+
+def _left_unfinished(delivery_id: int) -> bool:
+    """Whether a row ``dispatch_one`` returned no outcome for is still waiting.
+
+    CLAIMED is a row handed to a queue, which has not run it yet; PENDING is
+    one a task ran inside the hand-off and rescheduled with ``NotYet``. Either
+    way the pass is done with it, where a FAILED, SUCCEEDED or DEAD row says the
+    task ran and recorded an outcome the pass could act on like its own.
+    """
+    from django_domain_events.models.delivery_record import DeliveryRecord
+
+    return DeliveryRecord.objects.filter(
+        pk=delivery_id, status__in=[DeliveryStatus.CLAIMED, DeliveryStatus.PENDING]
+    ).exists()
+
+
 def _given_up(owed_since: datetime, now: datetime, bound: timedelta) -> bool:
     """Whether a row owed since ``owed_since`` has reached ``bound`` at ``now``.
 
@@ -637,6 +702,7 @@ def deliver_pending(
     ignore_backoff: bool = False,
     lane: str | None = None,
     batch_size: int | None = None,
+    now: datetime | None = None,
 ) -> dict[DeliveryStatus, int]:
     """Claim and deliver what is owed, and report the outcome.
 
@@ -663,6 +729,13 @@ def deliver_pending(
     handed back rather than attempted, and later claims leave the lane out,
     while every other lane goes on being delivered
     (``test_a_deferral_sets_its_lane_aside_and_the_pass_delivers_the_rest``).
+
+    ``now`` is the moment every claim of the call is made at, in place of the
+    clock: what is due, which backoff has run out and which lease has lapsed
+    are all read against it. It is how ``drain_outbox(now=...)`` moves a test
+    forward to a receiver's due time. Only the claims read it; the attempt
+    itself runs and is recorded on the real clock, since a receiver's
+    acknowledgement is a fact about when it ran.
     """
     if limit is not None and batch_size is not None:
         raise ValueError(
@@ -681,8 +754,29 @@ def deliver_pending(
     # deferred row again, forever (test_a_drain_meeting_a_deferral_ends).
     paused: set[str] = set()
     deferred: list[str] = []
+    # Rows this call is done with although the claim could still take them,
+    # left out of its later claims, when it was told a ``now``. Two kinds, and both are rows the claim
+    # would not take again on the real clock but would when told a later
+    # ``now``:
+    #
+    # - A row a receiver answered with NotYet. The time it was moved to is
+    #   ahead of the real clock, and a receiver deciding by that clock would
+    #   answer the same way every time, spending nothing
+    #   (test_a_drain_told_a_later_time_runs_a_rescheduled_row_once).
+    #   Recognised by its outcome where it ran here: PENDING is what only a
+    #   reschedule records.
+    # - A row handed to a task backend, which returns no outcome. Read back
+    #   once, and set aside if the hand-off left it CLAIMED - enqueued, under
+    #   a lease extended on the real clock, which a later ``now`` reads as
+    #   lapsed (test_a_drain_told_a_later_time_hands_a_task_row_to_the_queue_once)
+    #   - or PENDING, a task that ran inside the hand-off and answered NotYet
+    #   (test_a_task_answering_not_yet_under_a_drain_told_a_later_time_runs_once).
+    #   A row the task failed is still claimed again, so a drain runs a failing
+    #   task receiver to its dead letter as it runs one delivered in place
+    #   (test_a_task_that_failed_inside_the_hand_off_is_retried_within_the_drain).
+    set_aside: set[int] = set()
     while True:
-        claimed_at = datetime.now(timezone.utc)
+        claimed_at = now if now is not None else datetime.now(timezone.utc)
         ids = claim_batch(
             worker_id=worker_id,
             now=claimed_at,
@@ -691,14 +785,34 @@ def deliver_pending(
             ignore_backoff=ignore_backoff,
             lane=lane,
             exclude_lanes=paused,
+            exclude_ids=set_aside,
         )
         unstarted = list(ids)
         while unstarted:
+            delivery_id = unstarted.pop(0)
             outcome = dispatch_one(
-                unstarted.pop(0),
+                delivery_id,
                 worker_id=worker_id,
                 on_deferral=lambda deferred_lane, _seconds: deferred.append(deferred_lane),
             )
+            # Only where ``now`` was passed: on the real clock a rescheduled
+            # row's time and a handed-off row's lease are both ahead of the
+            # clock when written, so a later claim takes the row again only
+            # once that time has really come. Nothing to exclude, and skipping the
+            # read-back spares a query per task hand-off and keeps the claim's
+            # NOT IN list empty. Held by
+            # test_a_task_row_on_the_real_clock_is_not_read_back_or_excluded and
+            # test_a_row_rescheduled_in_place_on_the_real_clock_is_not_excluded.
+            if now is not None:
+                if outcome is DeliveryStatus.PENDING:
+                    set_aside.add(delivery_id)
+                elif outcome is None and _left_unfinished(delivery_id):
+                    # Read back only where no outcome came back, so a row run in
+                    # place costs the pass no query. ``outcome is None`` changes
+                    # no result - a row run in place is never left CLAIMED or
+                    # PENDING without saying so - only the query count, which is
+                    # what test_a_row_delivered_in_place_is_never_read_back holds.
+                    set_aside.add(delivery_id)
             if outcome is not None:
                 counts[outcome] = counts.get(outcome, 0) + 1
             while deferred:

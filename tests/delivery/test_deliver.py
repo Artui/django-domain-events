@@ -12,12 +12,15 @@ from typing import Any
 import pytest
 from django.db import OperationalError, connection, transaction
 
+from django_domain_events.declaration.receiver import receiver
 from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery import deliver as deliver_module
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.deliver import deliver_one, deliver_pending
+from django_domain_events.delivery.django_tasks_backend import deliver_delivery
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.utils import partition_by_lane
 from django_domain_events.models.delivery_record import DeliveryRecord
@@ -28,7 +31,7 @@ from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
 from tests.conftest import receiver_deleted, receiver_registered, receiver_replaced
-from tests.testapp.events import OrderPlaced, SlowWork, calls
+from tests.testapp.events import OrderPlaced, SlowWork, Unheard, calls
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -665,6 +668,24 @@ def test_an_orphaned_row_is_not_run(order: OrderPlaced, record: list[str]) -> No
     assert _delivery("testapp.durable_receiver").status == DeliveryStatus.ORPHANED
 
 
+def test_a_cancelled_row_is_not_run(order: OrderPlaced, record: list[str]) -> None:
+    """The fourth terminal status, and the one the refusal fails open on: a
+    status missing from the terminal set is not in the retryable one either, so
+    the backoff test below it reads as owed and the cancelled work runs."""
+    _fire(order)
+    delivery_id = _set(
+        "testapp.durable_receiver",
+        status=DeliveryStatus.CANCELLED,
+        completed_at=datetime.now(timezone.utc),
+    )
+    record.clear()
+
+    assert deliver_one(delivery_id) is None
+
+    assert record == []
+    assert _delivery("testapp.durable_receiver").status == DeliveryStatus.CANCELLED
+
+
 def test_a_failed_row_not_yet_due_is_not_run(order: OrderPlaced, record: list[str]) -> None:
     """``available_at`` is the backoff, and a ``RetryAfter`` the receiver raised
     writes it too. Running the row early ignores both - and for a destination
@@ -699,6 +720,22 @@ def test_a_failed_row_that_is_due_still_runs(order: OrderPlaced, record: list[st
 
     assert deliver_one(delivery_id) is DeliveryStatus.SUCCEEDED
     assert record == ["durable:7"]
+
+
+def test_a_pending_row_not_yet_due_is_not_run(order: OrderPlaced, record: list[str]) -> None:
+    """A scheduled row is PENDING with its ``available_at`` at the due time, and
+    running it early on a direct call is the expiry that lands while the offer
+    is still open. Holds PENDING's membership of the backoff check, beside
+    ``test_a_failed_row_not_yet_due_is_not_run`` holding FAILED's."""
+    _fire(order)
+    due = datetime.now(timezone.utc) + timedelta(hours=48)
+    delivery_id = _set("testapp.durable_receiver", available_at=due, due_at=due)
+    record.clear()
+
+    assert deliver_one(delivery_id) is None
+
+    assert record == []
+    assert _delivery("testapp.durable_receiver").status == DeliveryStatus.PENDING
 
 
 def test_half_a_claim_takes_nothing(order: OrderPlaced, record: list[str]) -> None:
@@ -1116,3 +1153,189 @@ def test_deliver_pending_refuses_a_batch_that_claims_nothing(size: int) -> None:
     at once having delivered nothing, and a relay sized that way idles forever."""
     with pytest.raises(ValueError, match="batch_size must be positive"):
         deliver_pending(batch_size=size)
+
+
+# A task backend the relay hands rows to, recorded at module level because
+# settings name it by dotted path and the package builds the instance.
+_ENQUEUED: list[int] = []
+
+
+class _QueueingBackend:
+    """Enqueues and runs nothing, as a real queue does until a worker takes the
+    message. Past five messages it raises a BaseException, which nothing in the
+    relay catches, so a pass that keeps re-enqueueing fails rather than hangs."""
+
+    def enqueue(self, *args: object, **kwargs: object) -> None:
+        _ENQUEUED.append(int(args[0]))
+        if len(_ENQUEUED) > 5:
+            raise _Runaway("the pass kept handing the same row to the queue")
+
+
+class _ImmediateBackend(_QueueingBackend):
+    """Runs the task body inside ``enqueue``, as django.tasks' immediate backend
+    and Celery's eager mode do."""
+
+    def enqueue(self, *args: object, **kwargs: object) -> None:
+        super().enqueue(*args, **kwargs)
+        deliver_delivery(*args, **kwargs)
+
+
+@contextmanager
+def _task_site(settings: Any, backend: type, func: Any, **declaration: Any) -> Iterator[None]:
+    """``func`` declared ``site="task"`` for ``Unheard``, handed to ``backend``."""
+    _ENQUEUED.clear()
+    settings.DJANGO_DOMAIN_EVENTS = {"TASK_BACKEND": f"{__name__}.{backend.__name__}"}
+    receiver(Unheard, key="probe.task_site", site="task", **declaration)(func)
+    try:
+        with transaction.atomic():
+            fire(Unheard(value=1))
+        yield
+    finally:
+        registry._receivers.pop("probe.task_site", None)
+
+
+def test_a_drain_told_a_later_time_hands_a_task_row_to_the_queue_once(settings) -> None:
+    """The claim leases a row against the drain's ``now``, and the hand-off
+    extends the lease on the real clock, which is earlier: without leaving the
+    row out of the call's later claims, the next claim finds the lease lapsed
+    and enqueues it again, forever. Not counted, as no hand-off is."""
+    with _task_site(settings, _QueueingBackend, lambda event: None):
+        counts = drain_outbox(now=datetime.now(timezone.utc) + timedelta(days=7))
+
+    assert (counts, _ENQUEUED) == ({}, [_delivery_id("probe.task_site")])
+    assert _delivery("probe.task_site").status == DeliveryStatus.CLAIMED
+
+
+def test_a_task_answering_not_yet_under_a_drain_told_a_later_time_runs_once(settings) -> None:
+    """A task run inside the hand-off reschedules its row where the pass cannot
+    see the outcome, so the pass reads the row: PENDING is a reschedule, and a
+    drain told a time past it would otherwise take it straight back."""
+
+    def always_later(event: Unheard) -> None:
+        raise NotYet(datetime.now(timezone.utc) + timedelta(hours=1))
+
+    with _task_site(settings, _ImmediateBackend, always_later):
+        counts = drain_outbox(now=datetime.now(timezone.utc) + timedelta(days=7))
+
+    row = _delivery("probe.task_site")
+    assert (counts, len(_ENQUEUED)) == ({}, 1)
+    assert (row.status, row.attempts) == (DeliveryStatus.PENDING, 0)
+
+
+def test_a_task_that_failed_inside_the_hand_off_is_retried_within_the_drain(settings) -> None:
+    """Only a row the hand-off left owed and unfailed is set aside. One the task
+    failed is claimed again, so a drain still runs a failing task receiver to
+    its dead letter, as it runs one delivered in place."""
+
+    def broken(event: Unheard) -> None:
+        raise RuntimeError("down")
+
+    with _task_site(settings, _ImmediateBackend, broken, max_attempts=2):
+        counts = drain_outbox(now=datetime.now(timezone.utc) + timedelta(days=7))
+
+    row = _delivery("probe.task_site")
+    assert (row.status, row.attempts, len(_ENQUEUED)) == (DeliveryStatus.DEAD, 2, 2)
+    assert counts == {}
+
+
+def _spy_on_set_aside(monkeypatch: pytest.MonkeyPatch) -> tuple[list[int], list[set[int]]]:
+    """Record every read-back and every ``exclude_ids`` a pass hands its claims."""
+    read_back: list[int] = []
+    exclusions: list[set[int]] = []
+    real_claim = deliver_module.claim_batch
+
+    def spy_claim(**kwargs: Any) -> list[int]:
+        exclusions.append(set(kwargs["exclude_ids"]))
+        return real_claim(**kwargs)
+
+    monkeypatch.setattr(
+        deliver_module, "_left_unfinished", lambda pk: read_back.append(pk) or False
+    )
+    monkeypatch.setattr(deliver_module, "claim_batch", spy_claim)
+    return read_back, exclusions
+
+
+def test_a_task_row_on_the_real_clock_is_not_read_back_or_excluded(
+    settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The set-aside exists for a ``now`` beyond the real clock, which the real
+    clock's own claims never need: the lease a hand-off extends is ahead of it.
+    So a pass told no ``now`` - ``deliver_events --once`` - skips the read-back
+    that costs a query per task hand-off, and its claims carry no exclusion.
+    This holds the ``now is not None`` conjunct on the arm for a row handed to a
+    queue, which returns no outcome and so would be read back."""
+    read_back, exclusions = _spy_on_set_aside(monkeypatch)
+
+    with _task_site(settings, _QueueingBackend, lambda event: None):
+        deliver_pending(worker_id="w")
+
+    assert (read_back, exclusions) == ([], [set(), set()])
+    assert _delivery("probe.task_site").status == DeliveryStatus.CLAIMED
+
+
+def test_a_row_rescheduled_in_place_on_the_real_clock_is_not_excluded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other arm of the same conjunct: a row answering ``NotYet`` reports
+    PENDING, which a pass told a ``now`` beyond the clock excludes from its later
+    claims. On the real clock the time it was moved to is ahead of every later
+    claim, so there is nothing to exclude."""
+    read_back, exclusions = _spy_on_set_aside(monkeypatch)
+
+    def always_later(event: Unheard) -> None:
+        raise NotYet(datetime.now(timezone.utc) + timedelta(hours=1))
+
+    receiver(Unheard, key="probe.in_place")(always_later)
+    try:
+        with transaction.atomic():
+            fire(Unheard(value=1))
+        deliver_pending(worker_id="w")
+    finally:
+        registry._receivers.pop("probe.in_place", None)
+
+    assert (read_back, exclusions) == ([], [set(), set()])
+    assert _delivery("probe.in_place").status == DeliveryStatus.PENDING
+
+
+def test_give_up_after_measures_a_scheduled_row_from_its_due_time(order: OrderPlaced) -> None:
+    """A scheduled row became owed at its due time, not when its event was
+    recorded, so a receiver deferring right after it came due is not
+    dead-lettered for the days it spent waiting for it. Three days scheduled
+    against a one-day bound: read from the event, the first deferral would end
+    it."""
+    entry = dataclasses.replace(_throttled_mail([]), due=timedelta(days=3))
+    with receiver_registered(entry):
+        _fire(order)
+        # Three days on: the event was recorded then, and the row came due a
+        # minute ago.
+        back = timedelta(days=3, minutes=1)
+        row = _delivery("tests.throttled")
+        EventRecord.objects.filter(pk=row.event.pk).update(
+            recorded_at=row.event.recorded_at - timedelta(days=3)
+        )
+        DeliveryRecord.objects.filter(pk=row.pk).update(
+            available_at=row.available_at - back, due_at=row.due_at - back
+        )
+
+        deliver_pending(worker_id="w1")
+
+    row = _delivery("tests.throttled")
+    assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 0)
+
+
+def test_a_row_delivered_in_place_is_never_read_back(
+    order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a row that came back with no outcome - one handed to a task backend
+    - is read back to see whether the pass is done with it. A row run in place
+    reports its outcome, so reading it again would be a query per row for
+    nothing."""
+    read_back: list[int] = []
+    monkeypatch.setattr(deliver_module, "_left_unfinished", read_back.append)
+    _fire(order)
+
+    # ``now=`` is passed because the read-back only happens when it is: without
+    # it this would hold vacuously, whatever the pass did with a row run in place.
+    deliver_pending(worker_id="w1", now=datetime.now(timezone.utc))
+
+    assert read_back == []

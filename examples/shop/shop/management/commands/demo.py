@@ -15,8 +15,10 @@ from django_domain_events import (
     assert_fired,
     attributed,
     backoff,
+    cancel_deliveries,
     catalogue,
     deliver_pending,
+    drain_outbox,
     outbox_health,
     prune_events,
     quiet_receivers,
@@ -27,7 +29,13 @@ from django_domain_events import (
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.models.receiver_last_success import ReceiverLastSuccess
-from shop.events import OrderCancelled, OrderPlaced, ParcelDispatched
+from shop.events import (
+    REMINDER_QUIET_PERIOD,
+    InvoiceSent,
+    OrderCancelled,
+    OrderPlaced,
+    ParcelDispatched,
+)
 from shop.models import (
     Order,
     PartnerNotice,
@@ -375,4 +383,146 @@ class Command(BaseCommand):
         print(f"   lasts at most {sum(ceilings) / 3600:g}h, {sum(ceilings) / 7200:g}h on average")
         check("the retry budget lasts at most three hours", sum(ceilings), 3 * 3600)
         check("and an hour and a half on average", sum(ceilings) / 2, 1.5 * 3600)
+
+        head("15. A reminder due a fortnight after the invoice")
+        chase = "shop.chase_unpaid_invoice"
+        # The billing system sent both invoices thirteen days ago, so the
+        # reminders, due fourteen days after that, are due tomorrow. The
+        # first order was cancelled in step 5; the second is still open.
+        issued = now() - timedelta(days=13)
+        with transaction.atomic():
+            from django_domain_events import fire
+
+            fire(InvoiceSent(order_id=order.pk), occurred_at=issued)
+            fire(InvoiceSent(order_id=second.pk), occurred_at=issued)
+        due = issued + timedelta(days=14)
+
+        def reminders() -> list[DeliveryRecord]:
+            # Read afresh each time: a queryset caches the rows it first
+            # fetched, and every check below is about a later state.
+            return list(DeliveryRecord.objects.filter(receiver_key=chase).order_by("pk"))
+
+        print(f"   due at: {sorted({r.due_at.isoformat() for r in reminders()})}")
+        check(
+            "each reminder is due fourteen days after its invoice",
+            {r.due_at for r in reminders()},
+            {due},
+        )
+        # A drain skips the backoff - everything the earlier steps left
+        # failing runs to its end here - and never skips a due time.
+        drain_outbox()
+        print(f"   after a drain: {[(r.status, r.attempts) for r in reminders()]}")
+        check(
+            "a drain leaves a reminder that is not due alone",
+            [(r.status, r.attempts) for r in reminders()],
+            [("pending", 0), ("pending", 0)],
+        )
+        health = outbox_health()
+        [backlog] = [entry for entry in health.receivers if entry.key == chase]
+        print(
+            f"   scheduled={health.scheduled}; {chase}: owed={backlog.owed} scheduled={backlog.scheduled}"
+        )
+        check("health counts them as scheduled", (health.scheduled, backlog.scheduled), (2, 2))
+        check("and not as owed, so no backlog alert fires", backlog.owed, 0)
+        emails = SentEmail.objects.count()
+        last_mail = SentEmail.objects.filter(to=user.email).latest("sent_at").sent_at
+        quiet_until = last_mail + REMINDER_QUIET_PERIOD
+        drain_outbox(now=due + timedelta(seconds=1))
+        print("   drained as of tomorrow, when both reminders are due:")
+        cancelled, open_order = reminders()
+        print(
+            f"   cancelled order: {cancelled.status}, emails sent: {SentEmail.objects.count() - emails}"
+        )
+        print(
+            f"   open order:      {open_order.status}, due again at {open_order.due_at.isoformat()}"
+        )
+        check("moot work is an ordinary success", cancelled.status, "succeeded")
+        check("and sends nothing", SentEmail.objects.count(), emails)
+        check(
+            "NotYet moves the open order's reminder past the quiet period, spending no attempt",
+            (open_order.status, open_order.attempts, open_order.due_at),
+            ("pending", 0, quiet_until),
+        )
+        check("and it is scheduled again", outbox_health().scheduled, 1)
+        drain_outbox(now=quiet_until + timedelta(seconds=1))
+        open_order.refresh_from_db()
+        print(f"   after the quiet period: {open_order.status} after {open_order.attempts} attempt")
+        check(
+            "the reminder goes once it is due",
+            (open_order.status, open_order.attempts),
+            ("succeeded", 1),
+        )
+        check(
+            "and is sent",
+            SentEmail.objects.filter(subject__startswith="Reminder:").count(),
+            1,
+        )
+        # The late case: the reminder is due, and the quiet period it was waiting
+        # out ended before the row ran at all. Comparing against `ctx.due_at`
+        # alone would raise `NotYet` with a time already come, which is refused
+        # and recorded as a failure on every retry; flooring the comparison at
+        # the clock sends the reminder.
+        with transaction.atomic():
+            from django_domain_events import fire
+
+            late_invoice = fire(InvoiceSent(order_id=second.pk))
+        [late] = DeliveryRecord.objects.filter(event=late_invoice, receiver_key=chase)
+        # As if the relay had been down: the row came due six days ago and has
+        # not been claimed since. (`fire` never writes a due time in the past,
+        # so a row can only be this late by waiting.) Its customer was last
+        # emailed four days ago, so the quiet period ended a day ago - after the
+        # row came due and before it ran.
+        six_days_ago = now() - timedelta(days=6)
+        DeliveryRecord.objects.filter(pk=late.pk).update(
+            available_at=six_days_ago, due_at=six_days_ago
+        )
+        SentEmail.objects.filter(to=user.email).update(sent_at=now() - timedelta(days=4))
+        emails = SentEmail.objects.count()
+        drain_outbox()
+        late.refresh_from_db()
+        print(
+            f"   late reminder: {late.status} after {late.attempts} attempt, "
+            f"error: {late.last_error or 'none'}"
+        )
+        check(
+            "a reminder that runs after its quiet period ended is sent, not failed",
+            (late.status, late.attempts, late.last_error),
+            ("succeeded", 1, ""),
+        )
+        check("and sends exactly one email", SentEmail.objects.count(), emails + 1)
+        head("16. The invoice is paid, so its reminder is cancelled")
+        # A new invoice for the open order, and its reminder due in a
+        # fortnight. Then the customer pays: the billing code knows the
+        # reminder is moot ahead of time, so rather than leave it to run and
+        # find nothing to do, it withdraws it, in the transaction that records
+        # the payment.
+        with transaction.atomic():
+            from django_domain_events import fire
+
+            invoice = fire(InvoiceSent(order_id=second.pk))
+        [reminder] = DeliveryRecord.objects.filter(event=invoice, receiver_key=chase)
+        emails = SentEmail.objects.count()
+        with transaction.atomic():
+            counts = cancel_deliveries([invoice], receiver_key=chase)
+        print(f"   cancel_deliveries: {counts}")
+        check(
+            "the waiting reminder is cancelled, and none was in flight",
+            counts,
+            {"cancelled": 1, "in_flight": 0},
+        )
+        drain_outbox(now=reminder.due_at + timedelta(days=1))
+        reminder.refresh_from_db()
+        print(f"   drained past its due time: {reminder.status} after {reminder.attempts} attempts")
+        check(
+            "a drain past its due time never runs it",
+            (reminder.status, reminder.attempts, reminder.succeeded_at),
+            ("cancelled", 0, None),
+        )
+        check("and nothing is sent", SentEmail.objects.count(), emails)
+        health = outbox_health()
+        check(
+            "health counts it as neither scheduled nor owed",
+            (health.scheduled, [b.key for b in health.receivers if b.key == chase]),
+            (0, []),
+        )
         print("\nEvery claim above was checked.")

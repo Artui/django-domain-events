@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from django.db import transaction
@@ -13,7 +13,13 @@ from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
-from django_domain_events.utils import decode_payload, resolve_targets, target_digest
+from django_domain_events.utils import (
+    TERMINAL,
+    decode_payload,
+    resolve_due,
+    resolve_targets,
+    target_digest,
+)
 
 
 def replay_events(
@@ -37,6 +43,15 @@ def replay_events(
     on its first deferral
     (``test_a_replayed_old_event_is_not_dead_lettered_on_its_first_deferral``
     and ``test_a_row_a_replay_adds_is_owed_from_the_replay_too``).
+
+    A receiver declared with ``due=`` is the exception: its due time is
+    resolved again, through the resolver ``fire()`` uses, and both columns are
+    written with the later of that and now. Replay is how a scheduled receiver
+    is adopted - declare the expiry, replay the recent offers - and writing now
+    would expire every open offer at once; an offer whose time has already
+    passed is expired by the replay, owed from it. A ``due`` callable is called
+    again, as a ``targets`` callable is, and raises to the operator on the same
+    terms.
 
     A delivery still in flight is left alone. Reopening a claimed row would hand
     the same work to two receivers, which is the one thing the lease exists to
@@ -105,7 +120,11 @@ def replay_events(
                         event=record, receiver_key=receiver.key, target_digest__in=targets
                     ).values_list("target_digest", "status")
                 )
-                reopen = [d for d, status in existing.items() if status in _TERMINAL]
+                reopen = [d for d, status in existing.items() if status in TERMINAL]
+                # Now, or a scheduled receiver's due time where that is later:
+                # replaying a recent offer into its expiry must not expire it
+                # early, and one whose time has passed is owed from now.
+                when = _due_now(receiver, record, entry.event_class, now)
                 # The status predicate is what keeps this from wiping a live
                 # lease. Between reading the statuses above and this update, a
                 # relay can claim a row - and clearing claimed_by on it would
@@ -115,12 +134,12 @@ def replay_events(
                     event=record,
                     receiver_key=receiver.key,
                     target_digest__in=reopen,
-                    status__in=_TERMINAL,
+                    status__in=TERMINAL,
                 ).update(
                     status=DeliveryStatus.PENDING,
                     attempts=0,
-                    available_at=now,
-                    due_at=now,
+                    available_at=when,
+                    due_at=when,
                     claimed_by="",
                     claimed_at=None,
                     lease_expires_at=None,
@@ -140,8 +159,8 @@ def replay_events(
                                 receiver_key=receiver.key,
                                 target=targets[digest],
                                 max_attempts=receiver.max_attempts,
-                                available_at=now,
-                                due_at=now,
+                                available_at=when,
+                                due_at=when,
                             )
                             for digest in missing
                         ],
@@ -184,4 +203,23 @@ def _targets_now(receiver: RegisteredReceiver, record: Any, event_class: type) -
     return resolve_targets(receiver.key, receiver.targets, event, context)
 
 
-_TERMINAL = (DeliveryStatus.SUCCEEDED, DeliveryStatus.DEAD, DeliveryStatus.ORPHANED)
+def _due_now(
+    receiver: RegisteredReceiver, record: Any, event_class: type, now: datetime
+) -> datetime:
+    """When a row this replay reopens or adds for one receiver becomes due.
+
+    ``now`` for a receiver without ``due=``, as every replay always wrote. For a
+    scheduled receiver, its due time resolved again through the resolver
+    ``fire()`` uses, and never earlier than ``now``. Only a callable needs the
+    event, so only a callable rebuilds it: a delay is read off ``occurred_at``
+    and replays a payload that no longer decodes the way a plain receiver
+    does, leaving the relay to say so.
+    """
+    if receiver.due is None:
+        return now
+    event = (
+        None
+        if isinstance(receiver.due, timedelta)
+        else decode_payload(event_class, record.payload, record.version)
+    )
+    return resolve_due(receiver.key, receiver.due, event, record.occurred_at, now)
