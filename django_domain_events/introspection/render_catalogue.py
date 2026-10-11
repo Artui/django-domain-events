@@ -154,8 +154,8 @@ def _receiver_table(receivers: tuple[CatalogueReceiver, ...]) -> list[str]:
 
 _POLICIES = {
     Retention.SUCCEEDED.value: (
-        "Deleted once every delivery has succeeded. A dead letter keeps it for "
-        "`RETENTION_DAYS`, so it can still be requeued."
+        "Deleted once every delivery has succeeded or been cancelled. A dead "
+        "letter keeps it for `RETENTION_DAYS`, so it can still be requeued."
     ),
     Retention.SETTLED.value: (
         "Deleted once every delivery is terminal, dead letters included, rather "

@@ -95,8 +95,9 @@ python manage.py deliver_events
   each mode, and how a receiver declares a failure permanent or says when to
   retry.
 - [Scheduled reactions](scheduling.md) - work due a set time after a committed
-  change, declared on the receiver with `due=`, and `NotYet` for work that
-  turns out not to be due yet.
+  change, declared on the receiver with `due=`, `NotYet` for work that
+  turns out not to be due yet, and `cancel_deliveries` for work known to be
+  moot before it runs.
 - [Scope and attribution](scope.md) - `attributed()`, `suppressed()`, causation
   chains, and the one rule that matters for threads.
 - [Operations](operations.md) - prune, replay, requeue, and running the relay

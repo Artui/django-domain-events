@@ -243,7 +243,10 @@ def _kept(retention_seconds: int | None = None, delete_when: str = "") -> Catalo
         (_kept(retention_seconds=86400), "Kept for 1 day rather"),
         (_kept(retention_seconds=2 * 3600), "Kept for 2 hours rather"),
         (_kept(retention_seconds=90), "Kept for 90 seconds rather"),
-        (_kept(delete_when="succeeded"), "Deleted once every delivery has succeeded"),
+        (
+            _kept(delete_when="succeeded"),
+            "Deleted once every delivery has succeeded or been cancelled.",
+        ),
         (_kept(delete_when="settled"), "Deleted once every delivery is terminal"),
     ],
     ids=["days", "one-day", "hours", "seconds", "succeeded", "settled"],
