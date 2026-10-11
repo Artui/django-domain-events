@@ -22,6 +22,7 @@ def claim_batch(
     ignore_backoff: bool = False,
     lane: str | None = None,
     exclude_lanes: Collection[str] = (),
+    exclude_ids: Collection[int] = (),
 ) -> list[int]:
     """Take ownership of up to ``limit`` deliveries and return their ids.
 
@@ -57,6 +58,13 @@ def claim_batch(
     default lane leaves only the named ones, or nothing where none is declared
     (``test_a_paused_default_lane_with_no_named_lanes_claims_nothing``). Empty,
     the claim is the one it was without it.
+
+    ``exclude_ids`` leaves those rows out, and is how a pass keeps a row its
+    receiver answered with ``NotYet`` from coming straight back when the pass
+    was told a ``now`` beyond the time it was moved to. Empty, it adds nothing
+    to the claim: Django compiles a negated ``__in`` over no values to nothing
+    at all, so the relay's claim is the one it was
+    (``test_without_named_lanes_the_default_lane_sends_the_unfiltered_claim``).
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
 
@@ -74,6 +82,7 @@ def claim_batch(
     owed &= _in_lane(lane)
     for paused in sorted(exclude_lanes):
         owed &= ~_in_lane(paused)
+    owed &= ~models.Q(pk__in=sorted(exclude_ids))
 
     alias = write_alias()
     connection = connections[alias]

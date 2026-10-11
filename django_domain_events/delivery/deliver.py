@@ -14,6 +14,7 @@ from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.fire import call_receiver
 from django_domain_events.delivery.hand_back import hand_back
+from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.permanent_failure import PermanentFailure
 from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.utils import OnDeferral, claim_size, partition_by_lane
@@ -56,9 +57,14 @@ def deliver_one(
     than raising - it is an ordinary outcome of a lease expiring, not a fault.
 
     A row that is not owed is refused the same way, whoever asks: one already
-    settled (succeeded, dead or orphaned), or one that failed and is waiting out
-    its backoff. Running either would repeat committed work, resurrect a dead
-    letter past its budget, or ignore a ``RetryAfter`` the destination sent.
+    settled (succeeded, dead or orphaned), one that failed and is waiting out
+    its backoff, or one whose due time has not come. Running any of them would
+    repeat committed work, resurrect a dead letter past its budget, ignore a
+    ``RetryAfter`` the destination sent, or do scheduled work early.
+
+    A receiver answering ``NotYet`` has its row moved to the time it named,
+    with no attempt spent, and this returns ``PENDING``: the one outcome that
+    leaves the row owed and not failed.
 
     ``claimed_by`` and ``claimed_at`` are the claim a task message carries, as
     the relay passed them to ``TaskBackend.enqueue``. Given them, this call
@@ -217,6 +223,8 @@ def _deliver_one(
         # test_an_ordinary_exception_is_not_read_as_a_deferral (an exception
         # with no ``counts`` would raise AttributeError here), ``counts`` by
         # test_a_counting_retry_after_still_spends_its_attempt.
+        if isinstance(exc, NotYet):
+            return _reschedule(fence, delivery, exc)
         if isinstance(exc, RetryAfter) and not exc.counts:
             return _defer(fence, delivery, receiver, exc, attempt, on_deferral)
         return _fail(
@@ -533,6 +541,39 @@ def _defer(
     return outcome
 
 
+def _reschedule(fence: _Fence, row: Any, exc: NotYet) -> DeliveryStatus | None:
+    """Move a row its receiver answered with ``NotYet`` to the time it named.
+
+    ``available_at`` and ``due_at`` together, because the row is not owed
+    until then: ``available_at`` alone would keep the relay off it, but a
+    drain - which reads ``due_at`` to tell the schedule from the backoff -
+    would take it straight back, and health would age an extended offer from
+    the due time it no longer has
+    (``test_the_row_is_not_claimed_again_before_the_time``,
+    ``test_a_time_past_the_retry_ceiling_is_not_capped``).
+
+    ``attempts`` is never written, as in ``_defer``, and neither is
+    ``last_error`` or the failure hook: nothing failed
+    (``test_an_early_run_moves_the_row_to_the_time_and_spends_no_attempt``,
+    ``test_it_is_not_a_failure_so_on_failure_is_not_told``). PENDING rather
+    than FAILED for the same reason, which is also what keeps a direct
+    ``deliver_one`` off it until then, since the owed check holds PENDING to
+    its ``available_at`` as it holds FAILED.
+    """
+    logger.info(
+        "receiver %s answered delivery %s with NotYet; it is due again at %s",
+        row.receiver_key,
+        row.pk,
+        exc.until.isoformat(),
+    )
+    return fence.write(
+        status=DeliveryStatus.PENDING,
+        available_at=exc.until,
+        due_at=exc.until,
+        completed_at=None,
+    )
+
+
 def _given_up(owed_since: datetime, now: datetime, bound: timedelta) -> bool:
     """Whether a row owed since ``owed_since`` has reached ``bound`` at ``now``.
 
@@ -697,6 +738,13 @@ def deliver_pending(
     # deferred row again, forever (test_a_drain_meeting_a_deferral_ends).
     paused: set[str] = set()
     deferred: list[str] = []
+    # Rows a receiver answered with NotYet, left out of this call's later
+    # claims. On the real clock the time they were moved to is ahead, so the
+    # claim would not take them again anyway; told a later ``now``, it would,
+    # and a receiver deciding by the real clock would answer the same way every
+    # time, spending nothing (test_a_drain_told_a_later_time_runs_a_rescheduled_row_once).
+    # Recognised by the outcome alone: PENDING is what only a reschedule records.
+    rescheduled: set[int] = set()
     while True:
         claimed_at = now if now is not None else datetime.now(timezone.utc)
         ids = claim_batch(
@@ -707,14 +755,18 @@ def deliver_pending(
             ignore_backoff=ignore_backoff,
             lane=lane,
             exclude_lanes=paused,
+            exclude_ids=rescheduled,
         )
         unstarted = list(ids)
         while unstarted:
+            delivery_id = unstarted.pop(0)
             outcome = dispatch_one(
-                unstarted.pop(0),
+                delivery_id,
                 worker_id=worker_id,
                 on_deferral=lambda deferred_lane, _seconds: deferred.append(deferred_lane),
             )
+            if outcome is DeliveryStatus.PENDING:
+                rescheduled.add(delivery_id)
             if outcome is not None:
                 counts[outcome] = counts.get(outcome, 0) + 1
             while deferred:

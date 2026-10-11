@@ -11,6 +11,7 @@ from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.deliver import deliver_one, deliver_pending
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.permanent_failure import PermanentFailure
 from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.run_relay import run_relay
@@ -64,6 +65,7 @@ __all__ = [
     "DeliveryMode",
     "DeliveryStatus",
     "INLINE",
+    "NotYet",
     "ON_COMMIT",
     "OutboxHealth",
     "PayloadCodec",
