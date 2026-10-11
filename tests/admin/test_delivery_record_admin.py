@@ -141,7 +141,10 @@ def test_cancel_touches_only_the_selected_rows_of_an_event(
 
 
 def test_cancel_reports_a_claimed_row_as_in_flight(order: OrderPlaced, record: list[str]) -> None:
+    """Three cancelled and one in flight, so the two counts cannot be read from
+    each other and still produce this message."""
     with transaction.atomic():
+        fire(order)
         fire(order)
     claimed = DeliveryRecord.objects.order_by("pk").first()
     DeliveryRecord.objects.filter(pk=claimed.pk).update(status=DeliveryStatus.CLAIMED)
@@ -152,7 +155,7 @@ def test_cancel_reports_a_claimed_row_as_in_flight(order: OrderPlaced, record: l
     assert DeliveryRecord.objects.get(pk=claimed.pk).status == DeliveryStatus.CLAIMED
     assert (
         list(request._messages)[0].message
-        == "Cancelled 1 deliveries. 1 were in flight and were left to run."
+        == "Cancelled 3 deliveries. 1 were in flight and were left to run."
     )
 
 

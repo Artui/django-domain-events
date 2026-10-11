@@ -104,7 +104,8 @@ def test_cancel_withdraws_every_owed_delivery_of_the_events_and_reports(
 ) -> None:
     """Through cancel_deliveries, across every receiver of the selected events:
     the owed rows are cancelled, the claimed one is left to run and counted, a
-    settled one keeps its outcome, and an event not selected is untouched."""
+    settled one keeps its outcome, and an event not selected is untouched. Two
+    cancelled and one in flight, so neither count can stand in for the other."""
     with transaction.atomic():
         chosen = fire(order)
         other = fire(order)
@@ -114,6 +115,12 @@ def test_cancel_withdraws_every_owed_delivery_of_the_events_and_reports(
         event_id=chosen,
         receiver_key="probe.done",
         status=DeliveryStatus.SUCCEEDED,
+        available_at=rows[0].available_at,
+    )
+    DeliveryRecord.objects.create(
+        event_id=chosen,
+        receiver_key="probe.pending",
+        status=DeliveryStatus.PENDING,
         available_at=rows[0].available_at,
     )
 
@@ -127,10 +134,11 @@ def test_cancel_withdraws_every_owed_delivery_of_the_events_and_reports(
         rows[0].receiver_key: DeliveryStatus.CLAIMED,
         rows[1].receiver_key: DeliveryStatus.CANCELLED,
         "probe.done": DeliveryStatus.SUCCEEDED,
+        "probe.pending": DeliveryStatus.CANCELLED,
     }
     assert not DeliveryRecord.objects.filter(event=other, status=DeliveryStatus.CANCELLED).exists()
     message = list(request._messages)[0].message
-    assert message == "Cancelled 1 deliveries and left 1 in flight to run."
+    assert message == "Cancelled 2 deliveries and left 1 in flight to run."
 
 
 def test_cancel_goes_through_the_operation(
