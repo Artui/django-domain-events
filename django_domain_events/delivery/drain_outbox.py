@@ -37,7 +37,8 @@ def drain_outbox(
     that runs the task inside the hand-off too. The pass keeps such a row out of
     its later claims only when it was given ``now``: on the real clock the time
     a ``NotYet`` moved a row to and the lease a hand-off extended are ahead of
-    every later claim already, so nothing is excluded and no row is read back
+    the clock when written, so a later claim takes the row again only once that
+    time has really come, and nothing is excluded or read back
     (``test_a_task_row_on_the_real_clock_is_not_read_back_or_excluded``).
     """
     return deliver_pending(limit=limit, ignore_backoff=not respect_backoff, now=now)

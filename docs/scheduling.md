@@ -293,8 +293,9 @@ Within one call, a row is attempted at most once if its receiver answers
 at most once if it declares `site="task"` - a handed-off row is not counted in
 the result, whether the backend runs it there and then or later. The pass keeps
 the row out of its later claims only when it was given a `now`; on the real
-clock a rescheduled row's time and a handed-off row's lease are ahead of every
-later claim already, so nothing is excluded and no row is read back.
+clock a rescheduled row's time and a handed-off row's lease are ahead of the
+clock when written, so a later claim takes the row again only once that time has
+really come, and nothing is excluded or read back.
 
 ## Is it keeping up?
 

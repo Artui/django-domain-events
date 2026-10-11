@@ -796,8 +796,9 @@ def deliver_pending(
                 on_deferral=lambda deferred_lane, _seconds: deferred.append(deferred_lane),
             )
             # Only where ``now`` was passed: on the real clock a rescheduled
-            # row's time and a handed-off row's lease are both ahead of every
-            # later claim, so there is nothing to exclude, and skipping the
+            # row's time and a handed-off row's lease are both ahead of the
+            # clock when written, so a later claim takes the row again only
+            # once that time has really come. Nothing to exclude, and skipping the
             # read-back spares a query per task hand-off and keeps the claim's
             # NOT IN list empty. Held by
             # test_a_task_row_on_the_real_clock_is_not_read_back_or_excluded and

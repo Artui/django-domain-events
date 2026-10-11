@@ -98,6 +98,9 @@ def cancel_deliveries(
             # The events first, ordered as the prune orders them, and before
             # anything is read: the write below reads its rows in the same
             # statement, after any replay holding these events has committed.
+            # Ascending, which is what two lockers need to agree on to avoid a
+            # deadlock (test_the_events_are_locked_before_their_rows_are_written
+            # holds the order, and that it precedes the write).
             list(
                 EventRecord.objects.using(alias)
                 .select_for_update()
