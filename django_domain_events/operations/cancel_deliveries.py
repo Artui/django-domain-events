@@ -62,7 +62,13 @@ def cancel_deliveries(
     and ``prune_events`` take: a cancel issued while a replay of the event is
     open waits for it and then withdraws what it reopened
     (test_a_cancel_issued_during_a_replay_is_not_overtaken_by_it), and two
-    callers locking overlapping events queue rather than deadlock. A relay's
+    callers locking overlapping events queue rather than deadlock, which the
+    ordering in test_the_events_are_locked_before_their_rows_are_written holds.
+    Against the prune the lock buys nothing observable: a prune deletes only
+    an event with nothing owed and this writes only owed rows, so the two never
+    contend for a delivery row
+    (test_a_prune_during_a_cancel_loses_nothing_and_takes_the_event_after
+    passes without it). A relay's
     claim takes no event lock, so the write itself carries the status
     predicate: a claim committed first leaves the row claimed and the write
     skips it (test_it_will_not_cancel_a_row_claimed_after_the_lock, and on two

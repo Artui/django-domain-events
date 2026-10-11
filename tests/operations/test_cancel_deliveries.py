@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest import mock
@@ -365,12 +366,17 @@ def test_a_cancel_waits_for_a_claim_in_flight_and_leaves_the_row_claimed(
     timer = threading.Timer(0.5, release.set)
     timer.start()
     try:
+        started = time.monotonic()
         counts = cancel_deliveries([event_id])
+        waited = time.monotonic() - started
     finally:
         release.set()
         thread.join(10)
         timer.cancel()
 
+    # It queued behind the claim rather than reading the row after it: the
+    # interleaving under test happened, not merely the outcome.
+    assert waited >= 0.4
     assert counts == {"cancelled": 1, "in_flight": 1}
     row = DeliveryRecord.objects.get(pk=claimed[0])
     assert (row.status, row.claimed_by) == (DeliveryStatus.CLAIMED, "relay-a")
@@ -453,8 +459,7 @@ def test_a_prune_during_a_cancel_loses_nothing_and_takes_the_event_after(
 ) -> None:
     """Two connections, the cancel open while a prune sweeps. The prune reads
     the event as still owed, because the cancel has not committed, and leaves
-    it whole; the next sweep takes it. Nothing deadlocks, though both lock the
-    event rows: in primary key order, both of them.
+    it whole: nothing is lost, and the next sweep takes it.
 
     This passes with the cancel's event lock removed too, and says so rather
     than claiming to hold it: a prune deletes only an event with nothing owed,
