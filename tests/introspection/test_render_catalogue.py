@@ -320,3 +320,22 @@ def test_json_carries_give_up_after_in_seconds() -> None:
     )
     [published] = parsed["events"][0]["receivers"]
     assert published["give_up_after_seconds"] == 21600.0
+
+
+def test_a_due_time_is_said_in_prose_under_the_table() -> None:
+    """Either spelling, and nothing for a receiver that runs at once. Each arm
+    of the rendering has its own case, so deleting either goes red."""
+    assert "`shop.mail` is due 172800s after the event occurred." in _with(due_seconds=172800.0)
+    assert "`shop.mail` is due at the time `shop.when` returns for the event." in _with(
+        due_callable="shop.when"
+    )
+    assert " is due " not in _with()
+
+
+def test_json_carries_the_due_time() -> None:
+    receiver = dataclasses.replace(_receiver("shop.mail"), due_seconds=172800.0)
+    parsed = json.loads(
+        render_catalogue(Catalogue(events=(_event("shop.Sent", receiver),)), format="json")
+    )
+    [published] = parsed["events"][0]["receivers"]
+    assert (published["due_seconds"], published["due_callable"]) == (172800.0, None)

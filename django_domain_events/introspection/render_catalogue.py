@@ -137,6 +137,18 @@ def _receiver_table(receivers: tuple[CatalogueReceiver, ...]) -> list[str]:
                 f"been owed for {receiver.give_up_after_seconds:g}s.",
                 "",
             ]
+        if receiver.due_seconds is not None:
+            lines += [
+                f"`{_cell(receiver.key)}` is due {receiver.due_seconds:g}s after the event "
+                f"occurred.",
+                "",
+            ]
+        if receiver.due_callable is not None:
+            lines += [
+                f"`{_cell(receiver.key)}` is due at the time `{receiver.due_callable}` returns "
+                f"for the event.",
+                "",
+            ]
     return lines
 
 

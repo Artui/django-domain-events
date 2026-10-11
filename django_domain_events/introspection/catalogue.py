@@ -4,6 +4,7 @@ import dataclasses
 import inspect
 import typing
 from collections.abc import Callable, Iterable
+from datetime import timedelta
 from typing import Any, cast
 
 from django_domain_events.declaration.any_event import AnyEvent
@@ -70,6 +71,9 @@ def _described(receivers: Iterable[RegisteredReceiver]) -> tuple[CatalogueReceiv
             give_up_after_seconds=(
                 None if r.give_up_after is None else r.give_up_after.total_seconds()
             ),
+            # A timedelta is not callable, so at most one of the two is set.
+            due_seconds=r.due.total_seconds() if isinstance(r.due, timedelta) else None,
+            due_callable=_callable_path(r.due) if callable(r.due) else None,
         )
         for r in sorted(receivers, key=lambda r: r.key)
     )

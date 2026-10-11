@@ -6,7 +6,7 @@ import functools
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import pytest
@@ -331,3 +331,30 @@ def test_give_up_after_reaches_the_catalogue_in_seconds() -> None:
 
     assert bounded.give_up_after_seconds == 21600.0
     assert _by_name("testapp.OrderPlaced").receivers[0].give_up_after_seconds is None
+
+
+def _offer_expiry(evt: object) -> datetime:
+    return datetime(2099, 1, 1, tzinfo=timezone.utc)
+
+
+def test_a_due_delay_reaches_the_catalogue_in_seconds() -> None:
+    """A scheduled reaction runs later than the event, which a reader of the
+    catalogue should see - and seconds, as every other duration here is."""
+    declared = _durable("testapp.expire", AnyEvent, due=timedelta(hours=48))
+    with receiver_registered(declared):
+        [expire] = catalogue().wildcard_receivers
+
+    assert (expire.due_seconds, expire.due_callable) == (172800.0, None)
+    plain = _by_name("testapp.OrderPlaced").receivers[0]
+    assert (plain.due_seconds, plain.due_callable) == (None, None)
+
+
+def test_a_due_callable_reaches_the_catalogue_as_its_path() -> None:
+    """Where it lives, as a ``targets`` callable is published: the time it
+    returns is per event, so the code that decides it is what can be named."""
+    declared = _durable("testapp.expire", AnyEvent, due=_offer_expiry)
+    with receiver_registered(declared):
+        [expire] = catalogue().wildcard_receivers
+
+    assert expire.due_seconds is None
+    assert expire.due_callable == f"{__name__}._offer_expiry"
