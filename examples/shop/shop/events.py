@@ -18,6 +18,7 @@ from django_domain_events import (
     ON_COMMIT,
     AnyEvent,
     DeliveryContext,
+    NotYet,
     PermanentFailure,
     Retention,
     RetryAfter,
@@ -79,6 +80,19 @@ class ParcelDispatched:
 
     order_id: int
     carrier: str
+
+
+@event(name="shop.InvoiceSent")
+@dataclass(frozen=True, slots=True)
+class InvoiceSent:
+    """The billing system sent the customer an invoice for an order.
+
+    Fired with the `occurred_at` the billing system reports, which can be
+    earlier than when the shop records it. A receiver's `due=` delay counts
+    from that time, the domain's own, rather than from the recording.
+    """
+
+    order_id: int
 
 
 @receiver(OrderPlaced, mode=INLINE)
@@ -302,3 +316,52 @@ def forward_to_partners(evt: object, ctx: DeliveryContext) -> None:
     PartnerNotice.objects.create(
         partner=ctx.target, event_name=ctx.event_name, event_id=ctx.event_id
     )
+
+
+REMINDER_QUIET_PERIOD = timedelta(days=3)
+
+
+@receiver(
+    InvoiceSent,
+    mode=DURABLE,
+    key="shop.chase_unpaid_invoice",
+    due=timedelta(days=14),
+    takes_context=True,
+)
+def chase_unpaid_invoice(evt: InvoiceSent, ctx: DeliveryContext) -> None:
+    """`due=timedelta(days=14)`: a reminder two weeks after the invoice.
+
+    The delivery row is written when the invoice event is, in the same
+    transaction, and the relay claims it a fortnight later - the beat job that
+    would otherwise poll every minute for invoices to chase is not needed, and
+    the reminder has attempts, a dead letter and a place in `outbox_health()`
+    like any other delivery.
+
+    Two things can have changed in the fortnight, and they are handled
+    differently:
+
+    - **The order was cancelled**, so there is nothing to chase. That is moot
+      work, and returning is an ordinary success: the delivery ran and its
+      work is done.
+    - **The customer heard from us in the last three days**, so a reminder now
+      would be one email too many. That is work not due yet, and returning
+      would lose it - nothing would ever send the reminder. `NotYet` moves the
+      row to the end of the quiet period, spending no attempt.
+
+    The comparison is against `ctx.due_at`, the time the row came due with,
+    never against the clock: on the next run `ctx.due_at` is the time `NotYet`
+    named, so the same comparison lets the reminder go, and a test moving
+    forward with `drain_outbox(now=...)` sees what production would.
+    """
+    from shop.models import Order, SentEmail
+
+    order = Order.objects.select_related("customer").get(pk=evt.order_id)
+    if order.cancelled:
+        return
+    to = order.customer.email or "nobody@example.com"
+    last = SentEmail.objects.filter(to=to).order_by("-sent_at").first()
+    if last is not None and ctx.due_at is not None:
+        quiet_until = last.sent_at + REMINDER_QUIET_PERIOD
+        if quiet_until > ctx.due_at:
+            raise NotYet(quiet_until, reason="the customer heard from us in the last three days")
+    SentEmail.objects.create(to=to, subject=f"Reminder: the invoice for order {order.pk} is unpaid")
