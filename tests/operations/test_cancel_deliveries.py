@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -499,4 +500,9 @@ def test_the_events_are_locked_before_their_rows_are_written(
     if connection.features.has_select_for_update:
         locked = next(i for i, sql in enumerate(statements) if "FOR UPDATE" in sql)
         assert locked < updated
-        assert "ORDER BY" in statements[locked]
+        # Ascending, so two cancels (and a replay or a prune) locking the same
+        # events take them in the same order and cannot deadlock; the backend
+        # spells it ``ORDER BY 1 ASC`` or ``ORDER BY "..."."id" ASC``, and a
+        # descending lock is the spelling this must not accept.
+        assert re.search(r"ORDER BY .*\bASC\b", statements[locked]), statements[locked]
+        assert "DESC" not in statements[locked]
