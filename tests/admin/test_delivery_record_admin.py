@@ -157,8 +157,11 @@ def test_cancel_reports_a_claimed_row_as_in_flight(order: OrderPlaced, record: l
 
 
 def test_cancel_reports_settled_rows_it_left_alone(order: OrderPlaced, record: list[str]) -> None:
-    """Counted from one list captured before the call, as requeue counts: asking
-    the queryset afterwards would count the rows this call just settled."""
+    """Counted from one list captured before the call, as requeue counts. The
+    selection is a filter the cancel changes the answer to - "not cancelled",
+    as a status filter in the changelist would be - so asking the queryset
+    afterwards would drop the row this call just cancelled and misreport the
+    settled count."""
     with transaction.atomic():
         fire(order)
     dead, claimed, done = DeliveryStatus.DEAD, DeliveryStatus.CLAIMED, DeliveryStatus.SUCCEEDED
@@ -171,7 +174,7 @@ def test_cancel_reports_settled_rows_it_left_alone(order: OrderPlaced, record: l
     DeliveryRecord.objects.filter(pk=rows[1].pk).update(status=done)
 
     request = _request()
-    _admin().cancel(request, DeliveryRecord.objects.all())
+    _admin().cancel(request, DeliveryRecord.objects.exclude(status=DeliveryStatus.CANCELLED))
 
     assert list(request._messages)[0].message == (
         "Cancelled 1 deliveries. 1 were in flight and were left to run."
