@@ -19,6 +19,7 @@ from django.db.models.constants import OnConflict
 from django.db.models.sql import InsertQuery, UpdateQuery
 from django.db.utils import ConnectionHandler
 from django.test.utils import CaptureQueriesContext
+from django.utils.timezone import now
 
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
@@ -149,7 +150,8 @@ def test_a_digest_write_on_mysql_carries_no_binary_prefix() -> None:
                 event_id=1,
                 receiver_key="probe.fan",
                 target=target,
-                available_at=datetime(2026, 8, 31, tzinfo=timezone.utc),
+                # MySQL's operations refuse an aware value under USE_TZ = False.
+                available_at=now(),
             )
             for target in ("a", "b")
         ],
