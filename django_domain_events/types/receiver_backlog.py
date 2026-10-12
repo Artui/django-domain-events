@@ -19,3 +19,10 @@ class ReceiverBacklog:
     """Deliveries whose due time has not come yet, which ``owed`` leaves out.
     Defaulted and last, so adding it does not break a consumer constructing
     one - this is an exported type."""
+
+    claimed: int = 0
+    """How many of ``owed`` a worker holds right now, the per-receiver half of
+    ``OutboxHealth.claimed``. A receiver whose owed rows are all claimed and
+    none finishing is wedged, or its task queue is holding them, where the same
+    total spread across receivers is a relay at work. Defaulted and last for the
+    reason ``scheduled`` is."""

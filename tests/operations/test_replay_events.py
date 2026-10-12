@@ -4,12 +4,13 @@ import hashlib
 import importlib
 import secrets
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from unittest import mock
 
 import pytest
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone as django_timezone
 
 from django_domain_events.declaration.receiver import receiver
 from django_domain_events.declaration.registry import registry
@@ -94,7 +95,7 @@ def test_a_cancelled_delivery_is_reopened_like_any_settled_one(
     with transaction.atomic():
         event_id = fire(order)
     DeliveryRecord.objects.update(
-        status=DeliveryStatus.CANCELLED, completed_at=datetime.now(timezone.utc)
+        status=DeliveryStatus.CANCELLED, completed_at=django_timezone.now()
     )
 
     assert replay_events([event_id]) == {"reopened": 2, "added": 0}
@@ -385,7 +386,7 @@ def throttled() -> Iterator[str]:
 
 def _a_month_old(event_id: int) -> None:
     EventRecord.objects.filter(pk=event_id).update(
-        recorded_at=datetime.now(timezone.utc) - timedelta(days=30)
+        recorded_at=django_timezone.now() - timedelta(days=30)
     )
 
 
@@ -398,7 +399,7 @@ def test_a_replayed_old_event_is_not_dead_lettered_on_its_first_deferral(throttl
     DeliveryRecord.objects.filter(receiver_key=throttled).update(status=DeliveryStatus.DEAD)
     _a_month_old(event_id)
 
-    before = datetime.now(timezone.utc)
+    before = django_timezone.now()
     assert replay_events([event_id]) == {"reopened": 1, "added": 0}
     assert DeliveryRecord.objects.get(receiver_key=throttled).due_at >= before
 
@@ -412,7 +413,7 @@ def test_a_row_a_replay_adds_is_owed_from_the_replay_too(throttled: str) -> None
         event_id = fire(Unheard(value=1))
     _a_month_old(event_id)
 
-    before = datetime.now(timezone.utc)
+    before = django_timezone.now()
     assert replay_events([event_id]) == {"reopened": 0, "added": 1}
     assert DeliveryRecord.objects.get(receiver_key=throttled).due_at >= before
 
@@ -441,7 +442,7 @@ def test_a_replay_reopens_a_scheduled_row_at_its_due_time_when_that_is_ahead(
 ) -> None:
     """Replay is also how a scheduled receiver is adopted: declare the expiry,
     replay the recent offers - and every open offer must not expire at once."""
-    occurred = datetime.now(timezone.utc) - timedelta(hours=1)
+    occurred = django_timezone.now() - timedelta(hours=1)
     with transaction.atomic():
         event_id = fire(Unheard(value=1), occurred_at=occurred)
     DeliveryRecord.objects.filter(receiver_key=EXPIRE).update(status=DeliveryStatus.DEAD)
@@ -456,7 +457,7 @@ def test_a_replay_reopens_a_scheduled_row_at_its_due_time_when_that_is_ahead(
 def test_a_cancelled_scheduled_row_is_reopened_at_its_due_time(expiry: list[int]) -> None:
     """The way back from a cancel made by mistake: the reopened row is due when
     the schedule says, not at once, as any reopened scheduled row is."""
-    occurred = datetime.now(timezone.utc) - timedelta(hours=1)
+    occurred = django_timezone.now() - timedelta(hours=1)
     with transaction.atomic():
         event_id = fire(Unheard(value=1), occurred_at=occurred)
     assert cancel_deliveries([event_id], receiver_key=EXPIRE)["cancelled"] == 1
@@ -472,7 +473,7 @@ def test_a_cancelled_scheduled_row_is_reopened_at_its_due_time(expiry: list[int]
 def test_a_replay_adds_a_scheduled_row_at_its_due_time_when_that_is_ahead(
     expiry: list[int],
 ) -> None:
-    occurred = datetime.now(timezone.utc) - timedelta(hours=1)
+    occurred = django_timezone.now() - timedelta(hours=1)
     with receiver_deleted(EXPIRE), transaction.atomic():
         event_id = fire(Unheard(value=1), occurred_at=occurred)
 
@@ -487,16 +488,16 @@ def test_a_replay_of_a_scheduled_row_whose_due_time_has_passed_runs_it_now(
 ) -> None:
     """The later of the due time and the replay: an offer whose 48 hours ran
     out last week is expired by the replay, owed from the replay."""
-    occurred = datetime.now(timezone.utc) - timedelta(days=7)
+    occurred = django_timezone.now() - timedelta(days=7)
     with receiver_deleted(EXPIRE), transaction.atomic():
         event_id = fire(Unheard(value=1), occurred_at=occurred)
 
-    before = datetime.now(timezone.utc)
+    before = django_timezone.now()
     assert replay_events([event_id]) == {"reopened": 0, "added": 1}
 
     available_at, due_at = _when(EXPIRE)
     assert available_at == due_at
-    assert before <= due_at <= datetime.now(timezone.utc)
+    assert before <= due_at <= django_timezone.now()
     assert drain_outbox() == {DeliveryStatus.SUCCEEDED: 1}
     assert expiry == [1]
 
@@ -505,7 +506,7 @@ def test_a_replay_asks_a_due_callable_again() -> None:
     """Resolved at replay time, as targets are: the event is rebuilt from its
     payload and handed to the callable."""
     asked: list[Unheard] = []
-    when = datetime.now(timezone.utc) + timedelta(days=2)
+    when = django_timezone.now() + timedelta(days=2)
 
     def send_at(evt: Unheard) -> datetime:
         asked.append(evt)

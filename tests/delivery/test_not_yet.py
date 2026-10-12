@@ -48,7 +48,7 @@ def _no_leaked_receivers() -> Iterator[None]:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return django_timezone.now()
 
 
 def _fire(value: int = 1) -> None:
@@ -86,13 +86,20 @@ def test_it_carries_the_time_and_the_reason() -> None:
     assert "extended" in str(answer)
 
 
-def test_without_a_reason_it_says_until_when() -> None:
+def test_without_a_reason_it_says_until_when(settings) -> None:
+    # The wording, on the setting that keeps the offset; under USE_TZ = False
+    # the time is local and says so by having none.
+    settings.USE_TZ = True
     until = datetime(2099, 1, 1, tzinfo=timezone.utc)
     assert str(NotYet(until)) == "not due until 2099-01-01T00:00:00+00:00"
 
 
-def test_a_naive_time_is_refused() -> None:
-    """Read as UTC or as local time, it is wrong for somebody by hours."""
+def test_a_naive_time_is_refused(settings) -> None:
+    """Read as UTC or as local time, it is wrong for somebody by hours - under
+    ``USE_TZ = True``. Under ``False`` naive is the project's own convention
+    and is accepted, which ``tests/test_naive_datetimes.py`` holds; together
+    they hold both halves of the refusal's condition."""
+    settings.USE_TZ = True
     with pytest.raises(ValueError, match="NotYet needs an aware datetime"):
         NotYet(datetime(2099, 1, 1))
 
@@ -258,7 +265,7 @@ def test_a_drain_told_a_later_time_runs_a_rescheduled_row_once() -> None:
         calls.append(1)
         if len(calls) > 5:
             raise _Runaway("the drain kept claiming a rescheduled row")
-        raise NotYet(datetime.now(timezone.utc) + timedelta(hours=1))
+        raise NotYet(django_timezone.now() + timedelta(hours=1))
 
     receiver(Unheard, key="probe.clock_reader")(always_later)
     _fire()

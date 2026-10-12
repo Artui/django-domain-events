@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.db import DEFAULT_DB_ALIAS, OperationalError, connection, connections, transaction
+from django.utils import timezone as django_timezone
 
 from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery import run_relay as run_relay_module
@@ -83,11 +84,11 @@ def test_the_clock_is_an_argument(order: OrderPlaced, record: list[str]) -> None
     is asserted by moving the clock rather than by waiting."""
     with transaction.atomic():
         fire(order)
-    DeliveryRecord.objects.update(available_at=datetime.now(timezone.utc) + timedelta(hours=1))
+    DeliveryRecord.objects.update(available_at=django_timezone.now() + timedelta(hours=1))
 
     assert run_relay(worker_id="w1", passes=1, wait=lambda _: False, **UNSAFE) == {}
 
-    later = lambda: datetime.now(timezone.utc) + timedelta(hours=2)  # noqa: E731
+    later = lambda: django_timezone.now() + timedelta(hours=2)  # noqa: E731
     assert run_relay(worker_id="w1", passes=1, now=later, wait=lambda _: False, **UNSAFE) == {
         DeliveryStatus.SUCCEEDED: 2
     }
@@ -109,7 +110,7 @@ def test_a_lost_row_does_not_stop_the_pass(order: OrderPlaced, record: list[str]
 
     def steal_everything_else(evt: OrderPlaced) -> None:
         DeliveryRecord.objects.exclude(receiver_key="testapp.durable_receiver").update(
-            claimed_by="someone-else", claimed_at=datetime.now(timezone.utc)
+            claimed_by="someone-else", claimed_at=django_timezone.now()
         )
 
     with transaction.atomic():
@@ -305,11 +306,11 @@ def test_a_connection_killed_while_idling_is_replaced(
     record.clear()
     # Not owed until the clock moves, so the first pass idles and the second,
     # after the kill, has something to deliver.
-    DeliveryRecord.objects.update(available_at=datetime.now(timezone.utc) + timedelta(hours=1))
+    DeliveryRecord.objects.update(available_at=django_timezone.now() + timedelta(hours=1))
     waited: list[float] = []
 
     def clock() -> datetime:
-        return datetime.now(timezone.utc) + (timedelta(hours=2) if waited else timedelta(0))
+        return django_timezone.now() + (timedelta(hours=2) if waited else timedelta(0))
 
     def kill_then_wait(timeout: float) -> bool:
         waited.append(timeout)
@@ -370,7 +371,7 @@ def test_a_stop_mid_batch_finishes_the_row_in_hand_and_hands_back_the_rest(
     handed_back = DeliveryRecord.objects.filter(status=DeliveryStatus.CLAIMED)
     assert handed_back.count() == 3
     taken = claim_batch(
-        worker_id="w2", now=datetime.now(timezone.utc), lease=timedelta(minutes=5), limit=10
+        worker_id="w2", now=django_timezone.now(), lease=timedelta(minutes=5), limit=10
     )
     assert sorted(taken) == sorted(handed_back.values_list("pk", flat=True))
 
@@ -425,7 +426,7 @@ def test_a_row_handed_to_the_task_queue_is_not_handed_back(
     finally:
         object.__setattr__(entry, "site", "relay")
 
-    now = datetime.now(timezone.utc)
+    now = django_timezone.now()
     enqueued = DeliveryRecord.objects.get(receiver_key="testapp.durable_receiver")
     rest = DeliveryRecord.objects.exclude(pk=enqueued.pk).get()
     assert _Recorder.enqueued == [enqueued.pk], "the task row was not first in the batch"
@@ -486,7 +487,7 @@ def test_an_exit_raised_mid_delivery_ends_the_relay_and_rolls_the_receiver_back(
     assert not users.filter(username="written-before-the-exit").exists()
     interrupted_row = DeliveryRecord.objects.get(receiver_key="testapp.durable_receiver")
     assert interrupted_row.status == DeliveryStatus.CLAIMED
-    assert interrupted_row.lease_expires_at > datetime.now(timezone.utc)
+    assert interrupted_row.lease_expires_at > django_timezone.now()
 
 
 def _mail() -> RegisteredReceiver:
@@ -601,7 +602,7 @@ class _Clock:
     """An injected clock that idling moves on, ten seconds per wait."""
 
     def __init__(self) -> None:
-        self.at = datetime.now(timezone.utc)
+        self.at = django_timezone.now()
 
     def __call__(self) -> datetime:
         return self.at
@@ -616,7 +617,7 @@ def _given_back(key: str) -> list[int]:
         DeliveryRecord.objects.filter(
             receiver_key=key,
             status=DeliveryStatus.CLAIMED,
-            lease_expires_at__lt=datetime.now(timezone.utc),
+            lease_expires_at__lt=django_timezone.now(),
         ).values_list("pk", flat=True)
     )
 
@@ -649,7 +650,7 @@ def test_a_deferral_pauses_the_lane_and_hands_back_the_rest_of_the_batch(
         assert len(handed_back) == 2
         taken = claim_batch(
             worker_id="w2",
-            now=datetime.now(timezone.utc),
+            now=django_timezone.now(),
             lease=timedelta(minutes=5),
             limit=10,
             lane="mail",
@@ -799,7 +800,7 @@ def test_a_set_aside_that_fails_abandons_the_batch(
         assert counts == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 2}
         assert len(seen) == 1
         abandoned = DeliveryRecord.objects.filter(
-            status=DeliveryStatus.CLAIMED, lease_expires_at__gt=datetime.now(timezone.utc)
+            status=DeliveryStatus.CLAIMED, lease_expires_at__gt=django_timezone.now()
         )
         assert abandoned.count() == 6, "the rest of the batch was not left to its lease"
     assert "could not hand back the rows of paused lane mail" in caplog.text

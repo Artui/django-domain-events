@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from unittest import mock
 
 import pytest
 from django.db import transaction
+from django.utils import timezone as django_timezone
 
 import django_domain_events
 from django_domain_events.declaration.receiver import receiver
@@ -42,7 +43,7 @@ def _no_leaked_receivers() -> Iterator[None]:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return django_timezone.now()
 
 
 def _fire() -> None:
@@ -55,6 +56,19 @@ def _asking_for(seconds: float, key: str, **declaration: object) -> None:
         raise RetryAfter(seconds=seconds, reason=f"the endpoint sent Retry-After: {seconds:g}")
 
     receiver(Unheard, key=key, **declaration)(rate_limited)
+
+
+def _other_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """The warnings a test is about, without the line every failed attempt logs.
+
+    That line is held by its own tests in ``test_on_failure_hook.py``; here it
+    would make every count below one per attempt larger.
+    """
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and " failed delivery " not in r.getMessage()
+    ]
 
 
 def test_it_is_exported_from_the_package_root() -> None:
@@ -160,7 +174,7 @@ def test_a_delay_past_the_ceiling_is_clamped_and_warned_about(
     row = DeliveryRecord.objects.get(receiver_key="probe.patient")
     assert before + timedelta(seconds=300) <= row.available_at <= after + timedelta(seconds=300)
 
-    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    warnings = _other_warnings(caplog)
     assert len(warnings) == 1
     # Both numbers, and whose request it was, so an operator can tell whether
     # the ceiling or the destination is the thing to question.
@@ -178,7 +192,7 @@ def test_a_delay_at_the_ceiling_is_not_clamped(settings, caplog: pytest.LogCaptu
     with caplog.at_level(logging.WARNING, logger="django_domain_events.delivery.deliver"):
         deliver_pending(limit=1)
 
-    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert not _other_warnings(caplog)
 
 
 # --- A deferral that spends no attempt ---------------------------------------
@@ -307,7 +321,7 @@ def test_a_jittered_delay_stays_under_the_ceiling(
     row = DeliveryRecord.objects.get(receiver_key="probe.near_ceiling")
     ceiling = timedelta(seconds=100)
     assert before + ceiling <= row.available_at <= after + ceiling
-    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert not _other_warnings(caplog)
 
 
 def test_on_failure_hears_a_deferral_with_the_attempt_the_receiver_was_told() -> None:
@@ -428,7 +442,7 @@ def test_a_deferral_with_no_give_up_after_counts_and_says_so_once(
         )
     )
     assert attempts == [2, 2]
-    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    warnings = _other_warnings(caplog)
     assert len(warnings) == 1
     assert "probe.unbounded" in warnings[0]
     assert "give_up_after" in warnings[0]

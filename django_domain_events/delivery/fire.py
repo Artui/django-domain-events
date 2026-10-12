@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from django.db import transaction
+from django.utils import timezone
 
 from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.wake import notify_relay
@@ -20,7 +21,7 @@ from django_domain_events.scope.suppressed import suppression_for
 from django_domain_events.settings import get_codec, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
-from django_domain_events.utils import resolve_due, resolve_targets
+from django_domain_events.utils import in_project_time, resolve_due, resolve_targets
 
 
 def fire(
@@ -113,7 +114,11 @@ def fire(
         version=entry.version,
         payload=get_codec().encode(event),
         dedupe_key=dedupe_key,
-        occurred_at=occurred_at if occurred_at is not None else datetime.now(timezone.utc),
+        # In the project's form, as everything it is compared with is: an aware
+        # value under USE_TZ = False is converted to local time, which SQLite
+        # would otherwise refuse to store
+        # (test_fire_stores_an_aware_occurred_at_as_local_time).
+        occurred_at=in_project_time(occurred_at) if occurred_at is not None else timezone.now(),
         actor_id=scope.actor.user_pk,
         actor_key=scope.actor.key,
         actor_label=scope.actor.label,
@@ -219,7 +224,7 @@ def _deliver_eagerly(delivery_ids: list[int]) -> Callable[[], None]:
         from django_domain_events.delivery.claim_batch import claim_batch
         from django_domain_events.delivery.deliver import dispatch_one
 
-        now = datetime.now(timezone.utc)
+        now = timezone.now()
         claimed = claim_batch(
             worker_id="eager",
             now=now,

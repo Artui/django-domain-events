@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2] — 2026-10-12
+
+### Fixed
+- A project on `USE_TZ = False` could not run the relay. The package took "now"
+  as an aware UTC value, so comparing it with a column read back raised
+  `TypeError` - every `RetryAfter(counts=False)`, a FAILED row run without a
+  claim, `quiet_receivers()`, the `events_status` ages, scheduled due times and
+  replay - and on SQLite every write of one failed. "Now" is
+  `django.utils.timezone.now()`, and every datetime an application hands in -
+  a `now=` argument, the relay's clock, `NotYet`, a `due=` answer,
+  `fire(occurred_at=)` - is converted to the project's form first: under
+  `USE_TZ = False` an aware value becomes `TIME_ZONE` local time, never UTC,
+  and a naive `NotYet` or `due=` answer is accepted as local time rather than
+  refused. The Postgres CI job now runs under each setting.
+- An idle relay woke once for every notification sent while it was busy
+  delivering, each wake an empty claim: psycopg holds those notifications in a
+  backlog and yields them first on the next wait, and the wait returned at the
+  first and left the rest there. The wait now runs psycopg's generator to its
+  end, which empties the backlog, then reads once more without blocking for any
+  that reached the socket meanwhile. The backlog exists from psycopg 3.2.4, so
+  the development dependency's floor is raised to it; psycopg is not a runtime
+  dependency, and nothing changes for an installed project.
+
+### Added
+- Every failed attempt the relay records is logged once at `WARNING`, naming
+  the receiver, the delivery, the attempt, the exception's type and whether the
+  row is now `failed` or `dead`, with no traceback. A deferral and the give-up
+  that ends one are logged too, and so is a payload that will not decode, as
+  it is dead-lettered (its receiver's `on_failure` is not told, since the
+  receiver never ran). A row orphaned because its receiver is gone counts no
+  attempt and is not logged as a failed attempt. As with `on_failure`, a worker whose lease lapsed
+  logs nothing.
+- `ReceiverBacklog.claimed`: how many of a receiver's owed rows a worker holds,
+  the per-receiver half of `OutboxHealth.claimed`, from the same grouped query.
+  `events_status` prints it per receiver and carries it in `--format json`.
+
+### Changed
+- A task message turned away because its row's claim has moved on - a
+  redelivered copy, or one the queue held past its lease - is logged at `INFO`
+  rather than `WARNING`. It is the outcome the claim exists for, and a lapsed
+  backlog produces thousands of them.
+- The delivery and operations pages now say that the backoff is a floor under
+  a row's place in the queue, not its delay; that a lane is strictly ordered,
+  with no priority or fairness inside it; how to size a `site="task"` lease to
+  the queue's backlog, and what a lapsed one looks like; and why a side effect
+  inside the acknowledging transaction can repeat after a lost connection,
+  with `DeliveryContext.delivery_id` as the destination's idempotency key.
+  The settings page says what the spring and autumn clock changes do to a
+  lease and to `give_up_after` under `USE_TZ = False`.
+
 ## [0.11.1] — 2026-10-11
 
 ### Added
@@ -721,7 +771,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/Artui/django-domain-events/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/Artui/django-domain-events/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/Artui/django-domain-events/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Artui/django-domain-events/compare/v0.9.0...v0.10.0

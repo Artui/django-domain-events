@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timezone
 from typing import Any
 
 from django.db import transaction
 from django.db.models import QuerySet
+from django.utils import timezone
 
 from django_domain_events.delivery.wake import notify_relay
 from django_domain_events.delivery.write_alias import write_alias
@@ -45,7 +45,7 @@ def requeue_dead(
     if receiver_key is not None:
         dead = dead.filter(receiver_key=receiver_key)
 
-    now = datetime.now(timezone.utc)
+    now = timezone.now()
     chunk = setting("BATCH_SIZE")
     ids = _owed_ids(dead, delivery_ids, chunk=chunk, limit=limit)
     requeued = 0

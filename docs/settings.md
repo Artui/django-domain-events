@@ -191,6 +191,44 @@ or, with the `celery` extra installed:
 The Celery worker also needs the task module in its `imports`; see
 [Celery](operations.md#celery).
 
+## `USE_TZ = False`
+
+Supported. Every datetime the package writes or compares follows the project's
+setting: "now" is `django.utils.timezone.now()`, so it is aware under
+`USE_TZ = True` and naive local time - in `TIME_ZONE` - under `False`, which is
+how Django stores and returns the columns it is compared with.
+
+A datetime your code hands in is converted to that form first: a `now=`
+argument to `drain_outbox`, `deliver_pending`, `outbox_health`,
+`quiet_receivers`, `prune_events`, `claim_batch` or `run_relay`'s clock, a
+[`NotYet`](scheduling.md#when-the-work-is-not-due-yet-notyet) time, what a
+[`due=`](scheduling.md) callable answers, and `fire(occurred_at=...)`. Under
+`False`:
+
+- an **aware** value is converted to `TIME_ZONE` local time, never read off as
+  UTC;
+- a **naive** value is local time, as everything else in the project is, so
+  `NotYet` and `due=` accept one rather than refusing it as they do under
+  `True`.
+
+What the package hands back is in the same form: `DeliveryContext.due_at`,
+`outbox_health().oldest_owed_at` and every timestamp on the rows are naive local
+time under `False`. Compare them with `timezone.now()`, not
+`datetime.now(timezone.utc)`.
+
+The documented `NotYet` pattern, `if moved > max(ctx.due_at, timezone.now())`,
+works unchanged under either setting. Clock changes still bend naive arithmetic
+under `False`, as they do for every naive value in the project; that is the
+setting's trade-off, not the package's. The autumn change makes one local hour
+ambiguous. The spring change skips one, so a sum taken from a time before the
+jump that lands at or after it is an hour short in real time. A lease longer
+than about an hour that crosses the jump can lapse while its delivery is still
+running, and the side effect can repeat. `give_up_after` subtracts the row's
+`due_at`, or its event's `recorded_at`, from now in the same naive way, reads a
+span crossing the jump as an hour longer than it was, and can dead-letter a row
+up to an hour early. Postgres reads a local time the spring change skipped
+as standard time, and an ambiguous one as the later of its two instants.
+
 ## Routing to another database
 
 Everything that opens a transaction asks the router for the alias, rather than

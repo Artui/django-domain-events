@@ -231,8 +231,19 @@ jobs:
     # a real Postgres to prove the models and migrations work on both backends.
     # When the relay lands, the coverage gate has to move here -- Postgres-only
     # branches cannot be covered by a run that skips them.
-    name: postgres / 3.13 / Django 6.1
+    #
+    # Twice: once as most projects run, and once under USE_TZ = False, where
+    # Django stores and returns naive local time. Comparing an aware value with
+    # a naive one raises TypeError, so only a run under the other setting finds
+    # one. On Postgres rather than SQLite because Postgres accepts the aware
+    # values a test writes under that setting, so the run tests the package
+    # rather than the suite's own fixtures; SQLite refuses them outright.
+    name: postgres / 3.13 / Django 6.1 / USE_TZ=${{ matrix.use-tz }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        use-tz: ["true", "false"]
     services:
       postgres:
         image: postgres:17
@@ -249,6 +260,7 @@ jobs:
           --health-retries 5
     env:
       DDE_TEST_DATABASE: postgres
+      DDE_TEST_USE_TZ: ${{ matrix.use-tz }}
       PGHOST: localhost
       PGPORT: "5432"
       PGUSER: postgres

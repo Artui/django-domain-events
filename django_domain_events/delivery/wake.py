@@ -123,10 +123,31 @@ def _wait_on(connection: Any, timeout: float) -> bool:
     not express. Autocommit is required: LISTEN inside a transaction only starts
     delivering once that transaction commits, so a relay holding one would wait
     for a notification it has made itself unable to receive.
+
+    One wake stands for every notification queued behind it. A relay busy
+    delivering is not waiting, and psycopg (from 3.2.4) keeps the
+    notifications that arrive during other statements in a backlog. The first
+    call empties it: psycopg yields the whole backlog before it looks at
+    ``stop_after``, and the loop runs the generator to its end
+    (``test_notifications_queued_while_busy_wake_the_relay_once``, on Postgres).
+    The wake claims everything due, so the queued ones announce nothing it will
+    not find.
+
+    The second, zero-timeout call is for what the first stopped short of: a
+    notification that reached the socket after the first call's last read.
+    Left there, the next wait would return at once for a claim with nothing
+    new to find (``test_one_wake_also_takes_what_arrived_after_its_wait_returned``).
+    It is a second call made after the first generator is closed, never a
+    loop inside it: the open generator holds the connection's lock, which is
+    not reentrant, so a nested call would wait on it forever.
     """
     with connection.cursor() as cursor:
         cursor.execute(f'LISTEN "{CHANNEL}"')
     driver = connection.connection
+    woken = False
     for _ in driver.notifies(timeout=timeout, stop_after=1):
-        return True
-    return False
+        woken = True
+    if woken:
+        for _ in driver.notifies(timeout=0):
+            ...
+    return woken

@@ -2,16 +2,17 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 from django.db import models, transaction
+from django.utils import timezone
 
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.retention import Retention
-from django_domain_events.utils import TERMINAL
+from django_domain_events.utils import TERMINAL, in_project_time
 
 _EVENTS_PER_BATCH = 500
 """The most events one batch names, whatever the row budget allows.
@@ -84,7 +85,7 @@ def prune_events(
     # bool first: True is an int, and would read as a batch of one.
     if isinstance(size, bool) or not isinstance(size, int) or size < 1:
         raise ValueError(f"batch_size must be a positive number of rows, not {size!r}.")
-    moment = now or datetime.now(timezone.utc)
+    moment = in_project_time(now) if now is not None else timezone.now()
     window = older_than if older_than is not None else timedelta(days=setting("RETENTION_DAYS"))
 
     unsettled = _deliveries_of_each().exclude(status__in=TERMINAL)

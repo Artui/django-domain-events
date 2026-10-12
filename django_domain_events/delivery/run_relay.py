@@ -4,10 +4,11 @@ import itertools
 import logging
 import time as time_module
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 from django.db import Error, connections
+from django.utils import timezone
 
 from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.backoff import backoff
@@ -21,6 +22,7 @@ from django_domain_events.operations.prune_events import prune_events
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import DEFAULT_LANE
+from django_domain_events.utils import in_project_time
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +38,7 @@ def run_relay(
     *,
     worker_id: str,
     passes: int | None = None,
-    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    now: Callable[[], datetime] = timezone.now,
     sleep: Callable[[float], None] = time_module.sleep,
     wait: Callable[[float], bool] | None = None,
     stop: Callable[[], bool] = lambda: False,
@@ -110,6 +112,11 @@ def run_relay(
     only when a sweep was attempted, and a failed one counts: it is not retried
     before the next interval.
 
+    ``now`` defaults to ``django.utils.timezone.now``, so its readings follow
+    ``USE_TZ`` as the columns they are compared with do; an injected clock may
+    answer aware under either setting, and is converted to the project's form
+    (``test_a_relay_on_an_aware_clock_claims_and_delivers``).
+
     A receiver deferring with ``RetryAfter(seconds, counts=False)`` pauses its
     lane in this process for ``seconds``, measured on ``now``: the lane's
     unstarted rows in the batch are handed back rather than attempted - each
@@ -151,7 +158,7 @@ def run_relay(
         # One reading of the clock for the claim and for any hand-back: it is
         # the claim's ``claimed_at``, which is half of the token a hand-back is
         # conditioned on.
-        claimed_at = now()
+        claimed_at = in_project_time(now())
         # A pause ends at its moment exactly, which
         # test_the_pause_ends_when_the_requested_delay_has_passed_on_the_injected_clock
         # holds from both sides.
@@ -205,7 +212,7 @@ def run_relay(
                 counts[outcome] = counts.get(outcome, 0) + 1
             while deferred:
                 deferred_lane, seconds = deferred.pop()
-                paused[deferred_lane] = now() + timedelta(seconds=seconds)
+                paused[deferred_lane] = in_project_time(now()) + timedelta(seconds=seconds)
                 unstarted = _set_aside_or_survive(
                     unstarted, deferred_lane, worker_id, claimed_at, connection
                 )

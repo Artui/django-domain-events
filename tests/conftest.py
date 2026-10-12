@@ -10,13 +10,25 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from django.conf import settings
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone as django_timezone
 
 from django_domain_events.declaration.registry import registry
 from django_domain_events.types.registered_event import RegisteredEvent
 from django_domain_events.types.registered_receiver import RegisteredReceiver
 from tests.testapp.events import Currency, OrderPlaced, calls
+
+
+def stored(value: datetime) -> datetime:
+    """What a column holding the aware ``value`` reads back as under ``USE_TZ``.
+
+    The value itself under ``True``; naive ``TIME_ZONE`` local time under
+    ``False``, which the suite also runs with (``DDE_TEST_USE_TZ=false``). For a
+    test comparing a fixed instant it wrote with what the database returns.
+    """
+    return value if settings.USE_TZ else django_timezone.make_naive(value)
 
 
 @pytest.fixture

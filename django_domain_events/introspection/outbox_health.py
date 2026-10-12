@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from django.db import models
 from django.db.models.functions import Coalesce
+from django.utils import timezone
 
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.outbox_health import OutboxHealth
 from django_domain_events.types.receiver_backlog import ReceiverBacklog
-from django_domain_events.utils import not_yet_due, owed
+from django_domain_events.utils import in_project_time, not_yet_due, owed
 
 
 def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
@@ -31,7 +32,7 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
 
-    moment = now or datetime.now(timezone.utc)
+    moment = in_project_time(now) if now is not None else timezone.now()
     # Every predicate below is a partial index's own condition, word for word,
     # because that is the only form Postgres matches a partial index to: "not
     # terminal" means the same rows but implies none of the owed or dead
@@ -46,6 +47,7 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
     # them anyway.
     is_owed = owed()
     is_dead = models.Q(status=DeliveryStatus.DEAD)
+    is_claimed = models.Q(status=DeliveryStatus.CLAIMED)
     waiting = not_yet_due(moment)
     # The negation keeps NULL due_at, which is every row nobody scheduled.
     due = ~waiting
@@ -57,7 +59,7 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
     totals = owed_rows.aggregate(
         owed=models.Count("pk", filter=due),
         scheduled=models.Count("pk", filter=waiting),
-        claimed=models.Count("pk", filter=models.Q(status=DeliveryStatus.CLAIMED)),
+        claimed=models.Count("pk", filter=is_claimed),
         oldest=models.Min(owed_since, filter=due),
         lapsed=models.Count(
             "pk",
@@ -68,7 +70,8 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
 
     # One grouped query for the per-receiver split rather than one per receiver:
     # this is meant to be scraped on a schedule, so its cost is paid forever.
-    # Three in total: this, the aggregate above, and the dead count.
+    # Three in total: this, the aggregate above, and the dead count. The claimed
+    # split is one more aggregate in this query, never a query of its own.
     per_receiver = (
         DeliveryRecord.objects.filter(is_dead | is_owed)
         .values("receiver_key")
@@ -76,6 +79,7 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
             owed=models.Count("pk", filter=is_owed & due),
             dead=models.Count("pk", filter=is_dead),
             scheduled=models.Count("pk", filter=is_owed & waiting),
+            claimed=models.Count("pk", filter=is_claimed),
             oldest=models.Min(owed_since, filter=is_owed & due),
         )
     )
@@ -86,6 +90,7 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
             dead=row["dead"],
             oldest_owed_at=row["oldest"],
             scheduled=row["scheduled"],
+            claimed=row["claimed"],
         )
         for row in per_receiver
     ]

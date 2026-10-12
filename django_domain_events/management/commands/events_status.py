@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from django.core.management.base import BaseCommand
+from django.utils import timezone
 
 from django_domain_events.introspection.outbox_health import outbox_health
 
@@ -35,6 +36,7 @@ class Command(BaseCommand):
                                 "owed": r.owed,
                                 "dead": r.dead,
                                 "scheduled": r.scheduled,
+                                "claimed": r.claimed,
                                 "oldest_owed_age_seconds": _age(r.oldest_owed_at),
                             }
                             for r in health.receivers
@@ -59,7 +61,8 @@ class Command(BaseCommand):
             oldest = _age(entry.oldest_owed_at)
             self.stdout.write(
                 f"  {entry.key}\towed={entry.owed}\tdead={entry.dead}"
-                f"\tscheduled={entry.scheduled}\toldest={'-' if oldest is None else f'{oldest}s'}"
+                f"\tscheduled={entry.scheduled}\tclaimed={entry.claimed}"
+                f"\toldest={'-' if oldest is None else f'{oldest}s'}"
             )
 
 
@@ -71,4 +74,4 @@ def _age(moment: datetime | None) -> int | None:
     """
     if moment is None:
         return None
-    return int((datetime.now(timezone.utc) - moment).total_seconds())
+    return int((timezone.now() - moment).total_seconds())

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from django.db import connection, transaction
+from django.utils import timezone as django_timezone
 
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
@@ -52,7 +53,7 @@ def test_the_oldest_owed_timestamp_is_when_the_work_arrived(
 ) -> None:
     with transaction.atomic():
         fire(order)
-    stuck = datetime.now(timezone.utc) - timedelta(hours=3)
+    stuck = django_timezone.now() - timedelta(hours=3)
     EventRecord.objects.update(recorded_at=stuck)
     assert outbox_health().oldest_owed_at == stuck
 
@@ -69,12 +70,12 @@ def test_a_failing_receiver_does_not_produce_a_negative_age(
     DeliveryRecord.objects.update(
         status=DeliveryStatus.FAILED,
         attempts=2,
-        available_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+        available_at=django_timezone.now() + timedelta(minutes=30),
     )
 
     oldest = outbox_health().oldest_owed_at
     assert oldest == recorded
-    assert oldest <= datetime.now(timezone.utc), "the age must never be negative"
+    assert oldest <= django_timezone.now(), "the age must never be negative"
 
 
 def test_a_settled_row_does_not_hold_the_oldest_timestamp_open(
@@ -83,7 +84,7 @@ def test_a_settled_row_does_not_hold_the_oldest_timestamp_open(
     """Draining the queue must clear it, or the alert never resets."""
     with transaction.atomic():
         fire(order)
-    EventRecord.objects.update(recorded_at=datetime.now(timezone.utc) - timedelta(days=2))
+    EventRecord.objects.update(recorded_at=django_timezone.now() - timedelta(days=2))
     drain_outbox()
     assert outbox_health().oldest_owed_at is None
 
@@ -101,7 +102,7 @@ def test_dead_is_counted_but_not_owed(order: OrderPlaced, record: list[str]) -> 
 def test_a_lapsed_lease_is_visible(order: OrderPlaced, record: list[str]) -> None:
     """Steady non-zero means workers are dying mid-delivery, or a receiver
     outruns its lease and has its work thrown away every time."""
-    now = datetime.now(timezone.utc)
+    now = django_timezone.now()
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(
@@ -111,7 +112,7 @@ def test_a_lapsed_lease_is_visible(order: OrderPlaced, record: list[str]) -> Non
 
 
 def test_a_live_lease_is_not_counted_as_lapsed(order: OrderPlaced, record: list[str]) -> None:
-    now = datetime.now(timezone.utc)
+    now = django_timezone.now()
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(
@@ -131,6 +132,26 @@ def test_the_per_receiver_split_names_who_is_behind(order: OrderPlaced, record: 
     assert by_key["testapp.durable_receiver"].dead == 0
     assert by_key["testapp.with_context"].owed == 0
     assert by_key["testapp.with_context"].dead == 1
+
+
+def test_the_per_receiver_split_says_who_holds_the_claims(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The total says rows are claimed; only the split says whose. A receiver
+    whose rows are all claimed and none finishing is a wedged receiver or a
+    queue holding its tasks, where the same total spread evenly is a relay at
+    work. The counts add up to the total, so the split loses nothing."""
+    with transaction.atomic():
+        fire(order)
+        fire(order)
+    DeliveryRecord.objects.filter(receiver_key="testapp.with_context").update(
+        status=DeliveryStatus.CLAIMED, claimed_by="w1"
+    )
+    health = outbox_health()
+    by_key = {r.key: r for r in health.receivers}
+    assert by_key["testapp.with_context"].claimed == 2
+    assert by_key["testapp.durable_receiver"].claimed == 0
+    assert sum(r.claimed for r in health.receivers) == health.claimed == 2
 
 
 def test_receivers_with_nothing_owed_or_dead_are_left_out(
@@ -168,7 +189,7 @@ def test_a_receiver_backlog_carries_its_own_oldest(order: OrderPlaced, record: l
     with transaction.atomic():
         fire(order)
         fire(replace(order, order_id=9))
-    stuck = datetime.now(timezone.utc) - timedelta(hours=5)
+    stuck = django_timezone.now() - timedelta(hours=5)
     oldest_event = EventRecord.objects.order_by("pk").first()
     EventRecord.objects.filter(pk=oldest_event.pk).update(recorded_at=stuck)
     # The other receiver is settled, so only one backlog is left to carry it.
@@ -192,7 +213,7 @@ def test_a_scheduled_row_is_not_owed_and_does_not_age_before_its_due_time(
     five minutes after the event and hold it for the fortnight."""
     with transaction.atomic():
         fire(order)
-    now = datetime.now(timezone.utc)
+    now = django_timezone.now()
     EventRecord.objects.update(recorded_at=now - timedelta(hours=1))
     _scheduled(now + timedelta(days=14))
 
@@ -220,7 +241,7 @@ def test_a_scheduled_row_failing_after_its_due_time_ages_from_its_due_time(
     pushes ahead into a negative age."""
     with transaction.atomic():
         fire(order)
-    now = datetime.now(timezone.utc)
+    now = django_timezone.now()
     due = now - timedelta(minutes=10)
     EventRecord.objects.update(recorded_at=now - timedelta(days=3))
     _scheduled(due, status=DeliveryStatus.FAILED, attempts=1)
@@ -239,7 +260,7 @@ def test_a_row_becomes_owed_at_exactly_its_due_time(order: OrderPlaced, record: 
     reported as not having arrived."""
     with transaction.atomic():
         fire(order)
-    due = datetime.now(timezone.utc) + timedelta(hours=1)
+    due = django_timezone.now() + timedelta(hours=1)
     _scheduled(due)
 
     before = outbox_health(now=due - timedelta(microseconds=1))
@@ -258,7 +279,7 @@ def test_a_settled_row_is_never_scheduled_whatever_its_due_time(
     narrowed to the owed ones as well as to the not yet due."""
     with transaction.atomic():
         fire(order)
-    _scheduled(datetime.now(timezone.utc) + timedelta(days=1), status=DeliveryStatus.DEAD)
+    _scheduled(django_timezone.now() + timedelta(days=1), status=DeliveryStatus.DEAD)
 
     health = outbox_health()
 
@@ -274,8 +295,8 @@ def test_a_receiver_with_only_scheduled_work_is_listed(
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.filter(receiver_key="testapp.with_context").update(
-        available_at=datetime.now(timezone.utc) + timedelta(days=1),
-        due_at=datetime.now(timezone.utc) + timedelta(days=1),
+        available_at=django_timezone.now() + timedelta(days=1),
+        due_at=django_timezone.now() + timedelta(days=1),
     )
 
     entries = outbox_health().receivers
@@ -349,8 +370,8 @@ def test_a_receiver_with_only_scheduled_work_sorts_after_one_that_is_behind(
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").update(
-        available_at=datetime.now(timezone.utc) + timedelta(days=1),
-        due_at=datetime.now(timezone.utc) + timedelta(days=1),
+        available_at=django_timezone.now() + timedelta(days=1),
+        due_at=django_timezone.now() + timedelta(days=1),
     )
 
     assert [(e.key, e.owed, e.scheduled) for e in outbox_health().receivers] == [

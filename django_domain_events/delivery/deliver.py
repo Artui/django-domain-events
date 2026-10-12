@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import logging
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
+from django.utils import timezone
 
 from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.backoff import backoff
@@ -25,7 +26,13 @@ from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
-from django_domain_events.utils import RETRYABLE, TERMINAL, decode_payload, parse_datetime
+from django_domain_events.utils import (
+    RETRYABLE,
+    TERMINAL,
+    decode_payload,
+    in_project_time,
+    parse_datetime,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +109,11 @@ def _deliver_one(
     if claimed_by is not None or claimed_at is not None:
         worker_id = worker_id if worker_id is not None else f"task-{uuid4().hex}"
         if not _take(delivery_id, claimed_by, claimed_at, worker_id):
-            logger.warning(
+            # INFO rather than WARNING: a redelivered copy and one the queue
+            # held past its lease are what the take exists to turn away, and a
+            # queue draining a lapsed backlog turns away thousands of them with
+            # nothing wrong (test_a_stale_copy_turned_away_is_logged_at_info).
+            logger.info(
                 "a task for delivery %s carried a claim the row no longer holds "
                 "(%s at %s); it was not run. Another copy of the message took it, "
                 "the queue held it past its lease, or the row has settled",
@@ -113,7 +124,7 @@ def _deliver_one(
             return None
 
     delivery = DeliveryRecord.objects.select_related("event").get(pk=delivery_id)
-    now = datetime.now(timezone.utc)
+    now = timezone.now()
     if not _owed(delivery, now):
         logger.info(
             "delivery %s is %s and not owed now, so it was not run",
@@ -167,12 +178,25 @@ def _deliver_one(
     except Exception as exc:
         # Terminal: it will not decode on the next attempt either, and one
         # undecodable row must not stop the other four thousand.
-        return fence.write(
+        outcome = fence.write(
             status=DeliveryStatus.DEAD,
             attempts=delivery.attempts + 1,
             last_error=f"{type(exc).__name__}: {exc}"[:2000],
-            completed_at=datetime.now(timezone.utc),
+            completed_at=timezone.now(),
         )
+        # It counted an attempt and dead-lettered the row, so it is logged like
+        # any other failed attempt, and only once the write landed
+        # (test_a_dead_letter_for_an_undecodable_payload_this_worker_could_not_record_logs_nothing).
+        # The receiver's ``on_failure`` is not told: it was never handed this
+        # payload, and opting it into hearing about one is a separate decision.
+        if outcome is not None:
+            _log_failure(
+                delivery,
+                status=DeliveryStatus.DEAD,
+                attempt=delivery.attempts + 1,
+                error_type=type(exc).__name__,
+            )
+        return outcome
 
     attempt = delivery.attempts + 1
     context = DeliveryContext(
@@ -193,7 +217,7 @@ def _deliver_one(
             caused_by(delivery.event.pk, delivery.event.correlation_id),
         ):
             call_receiver(receiver.func, receiver.takes_context, event, context)
-            acknowledged = datetime.now(timezone.utc)
+            acknowledged = timezone.now()
             outcome = fence.write(
                 status=DeliveryStatus.SUCCEEDED,
                 attempts=attempt,
@@ -235,6 +259,7 @@ def _deliver_one(
             attempt=attempt,
             terminal=isinstance(exc, PermanentFailure),
             requested_delay=exc.seconds if isinstance(exc, RetryAfter) else None,
+            error_type=type(exc).__name__,
         )
 
 
@@ -294,7 +319,7 @@ def _take(delivery_id: int, claimed_by: str | None, claimed_at: str | None, work
         status=DeliveryStatus.CLAIMED,
         claimed_by=claimed_by,
         claimed_at=None if claimed_at is None else parse_datetime(claimed_at),
-    ).update(claimed_by=worker_id, claimed_at=datetime.now(timezone.utc))
+    ).update(claimed_by=worker_id, claimed_at=timezone.now())
     return bool(taken)
 
 
@@ -398,7 +423,7 @@ def dispatch_one(
     # would be refused. Each half has its own test, since the two are one arc:
     # test_an_unclaimed_row_is_not_enqueued and test_a_lost_row_is_not_enqueued.
     if delivery.status != DeliveryStatus.CLAIMED or not fence.extend_lease(
-        datetime.now(timezone.utc), receiver.lease_seconds
+        timezone.now(), receiver.lease_seconds
     ):
         logger.warning(
             "worker %s does not hold delivery %s, so it was not enqueued", worker_id, delivery_id
@@ -423,8 +448,12 @@ def _fail(
     *,
     terminal: bool = False,
     requested_delay: float | None = None,
+    error_type: str | None = None,
 ) -> DeliveryStatus | None:
     """Record a failed attempt, dead-lettering once the budget is spent.
+
+    ``error_type`` names the exception for the failure log; None is a failure
+    no exception raised, an event nobody registers.
 
     ``terminal`` dead-letters now, whatever is left of the budget: the receiver
     raised ``PermanentFailure``. ``requested_delay`` replaces the backoff curve
@@ -436,7 +465,7 @@ def _fail(
     registration ``deliver_one`` resolved for this attempt rather than from the
     row: a curve changed by a deploy applies to deliveries already in flight.
     """
-    now = datetime.now(timezone.utc)
+    now = timezone.now()
     attempts = attempt if attempt is not None else row.attempts + 1
     exhausted = terminal or attempts >= row.max_attempts
     status = DeliveryStatus.DEAD if exhausted else DeliveryStatus.FAILED
@@ -459,7 +488,9 @@ def _fail(
         available_at=now + wait,
     )
     if outcome is not None:
-        _notify_failure(row, status=status, attempt=attempts, error=truncated)
+        _report_failure(
+            row, status=status, attempt=attempts, error=truncated, error_type=error_type
+        )
     return outcome
 
 
@@ -512,9 +543,17 @@ def _defer(
     message = f"{type(exc).__name__}: {exc}"
     if receiver.give_up_after is None:
         _warn_unbounded(receiver.key)
-        return _fail(fence, row, receiver, message, attempt=attempt, requested_delay=exc.seconds)
+        return _fail(
+            fence,
+            row,
+            receiver,
+            message,
+            attempt=attempt,
+            requested_delay=exc.seconds,
+            error_type=type(exc).__name__,
+        )
 
-    now = datetime.now(timezone.utc)
+    now = timezone.now()
     owed_since = row.due_at if row.due_at is not None else row.event.recorded_at
     if _given_up(owed_since, now, receiver.give_up_after):
         truncated = (
@@ -523,7 +562,13 @@ def _defer(
         )[:2000]
         outcome = fence.write(status=DeliveryStatus.DEAD, last_error=truncated, completed_at=now)
         if outcome is not None:
-            _notify_failure(row, status=DeliveryStatus.DEAD, attempt=attempt, error=truncated)
+            _report_failure(
+                row,
+                status=DeliveryStatus.DEAD,
+                attempt=attempt,
+                error=truncated,
+                error_type=type(exc).__name__,
+            )
         return outcome
 
     requested = _capped(row, exc.seconds)
@@ -536,7 +581,13 @@ def _defer(
         available_at=now + min(requested * (1 + random.random()), ceiling),
     )
     if outcome is not None:
-        _notify_failure(row, status=DeliveryStatus.FAILED, attempt=attempt, error=truncated)
+        _report_failure(
+            row,
+            status=DeliveryStatus.FAILED,
+            attempt=attempt,
+            error=truncated,
+            error_type=type(exc).__name__,
+        )
         if on_deferral is not None:
             on_deferral(receiver.lane, requested.total_seconds())
     return outcome
@@ -650,6 +701,55 @@ def _capped(row: Any, seconds: float) -> timedelta:
         )
         seconds = ceiling
     return timedelta(seconds=seconds)
+
+
+def _report_failure(
+    row: Any, *, status: DeliveryStatus, attempt: int, error: str, error_type: str | None
+) -> None:
+    """Log a failed attempt this worker recorded, then tell its receiver.
+
+    Every caller reaches this only once the fence write has landed, which is
+    the one condition both halves share: a worker that lost the row recorded
+    nothing, and the one holding it now will attempt the delivery and report
+    its own outcome. The check sits at each of the three call sites, and each
+    is held by its own test: in ``_fail`` by
+    ``test_a_worker_that_lost_the_row_logs_no_failure`` and
+    ``test_a_worker_that_lost_the_row_does_not_report_the_failure``; at
+    ``_defer``'s give-up by
+    ``test_a_give_up_this_worker_could_not_record_tells_on_failure_nothing``;
+    and at its counted deferral by
+    ``test_a_deferral_this_worker_could_not_record_pauses_nothing``.
+
+    One warning per attempt, whether or not the receiver declared
+    ``on_failure``: the hook is opt-in, and without it a failing receiver - or
+    a failover that ran one twice - left a trace in its row and nowhere an
+    operator's logs would show it
+    (``test_a_failed_attempt_is_logged_with_what_identifies_it``). The type
+    and not the traceback, because ``last_error`` carries the message, and a
+    receiver failing on every retry would otherwise write a stack each time.
+    Not rate limited: one line per attempt is bounded by the attempt budget
+    and the backoff, and a deferral that spends no attempt by
+    ``give_up_after`` (``test_a_deferral_and_its_give_up_are_logged_too``).
+    """
+    _log_failure(row, status=status, attempt=attempt, error_type=error_type)
+    _notify_failure(row, status=status, attempt=attempt, error=error)
+
+
+def _log_failure(row: Any, *, status: DeliveryStatus, attempt: int, error_type: str | None) -> None:
+    """The one warning line a failed attempt writes, in one shape everywhere.
+
+    Apart from ``_report_failure`` because a payload that will not decode is
+    logged without telling the receiver's hook
+    (``test_a_payload_that_will_not_decode_is_logged_as_it_is_dead_lettered``).
+    """
+    logger.warning(
+        "receiver %s failed delivery %s on attempt %s with %s; the row is %s",
+        row.receiver_key,
+        row.pk,
+        attempt,
+        error_type if error_type is not None else "no exception",
+        status,
+    )
 
 
 def _notify_failure(row: Any, *, status: DeliveryStatus, attempt: int, error: str) -> None:
@@ -776,7 +876,7 @@ def deliver_pending(
     #   (test_a_task_that_failed_inside_the_hand_off_is_retried_within_the_drain).
     set_aside: set[int] = set()
     while True:
-        claimed_at = now if now is not None else datetime.now(timezone.utc)
+        claimed_at = in_project_time(now) if now is not None else timezone.now()
         ids = claim_batch(
             worker_id=worker_id,
             now=claimed_at,

@@ -6,11 +6,12 @@ import dataclasses
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
 from django.db import OperationalError, connection, transaction
+from django.utils import timezone as django_timezone
 
 from django_domain_events.declaration.receiver import receiver
 from django_domain_events.declaration.registry import registry
@@ -121,7 +122,7 @@ def test_a_failing_receiver_is_retried_then_dead_lettered(
         # Due now: a FAILED row waiting out its backoff is not owed, and
         # deliver_one refuses it for every caller.
         DeliveryRecord.objects.filter(pk=first.pk).update(
-            available_at=datetime.now(timezone.utc) - timedelta(seconds=1)
+            available_at=django_timezone.now() - timedelta(seconds=1)
         )
         assert deliver_one(_delivery_id("testapp.durable_receiver")) is DeliveryStatus.DEAD
         second = _delivery("testapp.durable_receiver")
@@ -270,15 +271,13 @@ def test_a_write_conditioned_on_a_lapsed_claim_lands_nowhere(
 
     with transaction.atomic():
         fire(order)
-    claim_batch(
-        worker_id="A", now=datetime.now(timezone.utc), lease=timedelta(seconds=-1), limit=10
-    )
+    claim_batch(worker_id="A", now=django_timezone.now(), lease=timedelta(seconds=-1), limit=10)
     zombie = _Fence(_delivery("testapp.durable_receiver"))
 
-    claim_batch(worker_id="B", now=datetime.now(timezone.utc), lease=timedelta(hours=1), limit=10)
+    claim_batch(worker_id="B", now=django_timezone.now(), lease=timedelta(hours=1), limit=10)
 
     assert zombie.write(status=DeliveryStatus.FAILED, attempts=99) is None
-    assert zombie.extend_lease(datetime.now(timezone.utc)) is False
+    assert zombie.extend_lease(django_timezone.now()) is False
 
     row = _delivery("testapp.durable_receiver")
     assert (row.claimed_by, row.attempts) == ("B", 0)
@@ -293,11 +292,11 @@ def test_the_receiver_work_rolls_back_when_the_claim_is_lost(
     with transaction.atomic():
         fire(order)
     delivery_id = _delivery_id("testapp.durable_receiver")
-    claim_batch(worker_id="A", now=datetime.now(timezone.utc), lease=timedelta(hours=1), limit=10)
+    claim_batch(worker_id="A", now=django_timezone.now(), lease=timedelta(hours=1), limit=10)
 
     def steal_then_write(evt: OrderPlaced) -> None:
         DeliveryRecord.objects.filter(pk=delivery_id).update(
-            claimed_by="B", claimed_at=datetime.now(timezone.utc)
+            claimed_by="B", claimed_at=django_timezone.now()
         )
         EventRecord.objects.create(
             name="testapp.side_effect", version=1, payload={}, occurred_at=evt.placed_at
@@ -318,9 +317,7 @@ def test_the_lease_is_extended_to_cover_the_delivery_it_is_about_to_run(
     batch and runs out partway through."""
     with transaction.atomic():
         fire(order)
-    claim_batch(
-        worker_id="w1", now=datetime.now(timezone.utc), lease=timedelta(seconds=1), limit=10
-    )
+    claim_batch(worker_id="w1", now=django_timezone.now(), lease=timedelta(seconds=1), limit=10)
     before = _delivery("testapp.durable_receiver").lease_expires_at
 
     deliver_one(_delivery_id("testapp.durable_receiver"), worker_id="w1")
@@ -336,9 +333,9 @@ def test_a_worker_whose_lease_already_lapsed_delivers_nothing(
     with transaction.atomic():
         fire(order)
     delivery_id = _delivery_id("testapp.durable_receiver")
-    claim_batch(worker_id="A", now=datetime.now(timezone.utc), lease=timedelta(hours=1), limit=10)
+    claim_batch(worker_id="A", now=django_timezone.now(), lease=timedelta(hours=1), limit=10)
     DeliveryRecord.objects.filter(pk=delivery_id).update(
-        claimed_by="B", claimed_at=datetime.now(timezone.utc)
+        claimed_by="B", claimed_at=django_timezone.now()
     )
     record.clear()
 
@@ -358,7 +355,7 @@ def test_deliver_pending_skips_rows_it_lost(order: OrderPlaced, record: list[str
 
     def steal_everything_else(evt: OrderPlaced) -> None:
         DeliveryRecord.objects.exclude(receiver_key="testapp.durable_receiver").update(
-            claimed_by="someone-else", claimed_at=datetime.now(timezone.utc)
+            claimed_by="someone-else", claimed_at=django_timezone.now()
         )
 
     with transaction.atomic():
@@ -391,15 +388,13 @@ def test_a_write_conditioned_on_a_lapsed_claim_lands_nowhere(
 
     with transaction.atomic():
         fire(order)
-    claim_batch(
-        worker_id="A", now=datetime.now(timezone.utc), lease=timedelta(seconds=-1), limit=10
-    )
+    claim_batch(worker_id="A", now=django_timezone.now(), lease=timedelta(seconds=-1), limit=10)
     zombie = _Fence(_delivery("testapp.durable_receiver"))
 
-    claim_batch(worker_id="B", now=datetime.now(timezone.utc), lease=timedelta(hours=1), limit=10)
+    claim_batch(worker_id="B", now=django_timezone.now(), lease=timedelta(hours=1), limit=10)
 
     assert zombie.write(status=DeliveryStatus.FAILED, attempts=99) is None
-    assert zombie.extend_lease(datetime.now(timezone.utc)) is False
+    assert zombie.extend_lease(django_timezone.now()) is False
 
     row = _delivery("testapp.durable_receiver")
     assert (row.claimed_by, row.attempts) == ("B", 0)
@@ -414,11 +409,11 @@ def test_the_receiver_work_rolls_back_when_the_claim_is_lost(
     with transaction.atomic():
         fire(order)
     delivery_id = _delivery_id("testapp.durable_receiver")
-    claim_batch(worker_id="A", now=datetime.now(timezone.utc), lease=timedelta(hours=1), limit=10)
+    claim_batch(worker_id="A", now=django_timezone.now(), lease=timedelta(hours=1), limit=10)
 
     def steal_then_write(evt: OrderPlaced) -> None:
         DeliveryRecord.objects.filter(pk=delivery_id).update(
-            claimed_by="B", claimed_at=datetime.now(timezone.utc)
+            claimed_by="B", claimed_at=django_timezone.now()
         )
         EventRecord.objects.create(
             name="testapp.side_effect", version=1, payload={}, occurred_at=evt.placed_at
@@ -439,9 +434,7 @@ def test_the_lease_is_extended_to_cover_the_delivery_it_is_about_to_run(
     batch and runs out partway through."""
     with transaction.atomic():
         fire(order)
-    claim_batch(
-        worker_id="w1", now=datetime.now(timezone.utc), lease=timedelta(seconds=1), limit=10
-    )
+    claim_batch(worker_id="w1", now=django_timezone.now(), lease=timedelta(seconds=1), limit=10)
     before = _delivery("testapp.durable_receiver").lease_expires_at
 
     deliver_one(_delivery_id("testapp.durable_receiver"), worker_id="w1")
@@ -457,9 +450,9 @@ def test_a_worker_whose_lease_already_lapsed_delivers_nothing(
     with transaction.atomic():
         fire(order)
     delivery_id = _delivery_id("testapp.durable_receiver")
-    claim_batch(worker_id="A", now=datetime.now(timezone.utc), lease=timedelta(hours=1), limit=10)
+    claim_batch(worker_id="A", now=django_timezone.now(), lease=timedelta(hours=1), limit=10)
     DeliveryRecord.objects.filter(pk=delivery_id).update(
-        claimed_by="B", claimed_at=datetime.now(timezone.utc)
+        claimed_by="B", claimed_at=django_timezone.now()
     )
     record.clear()
 
@@ -476,7 +469,7 @@ def test_a_receiver_can_declare_a_longer_lease(order: OrderPlaced, record: list[
     with transaction.atomic():
         fire(SlowWork(value=1))
     row = DeliveryRecord.objects.filter(receiver_key="testapp.slow_receiver").get()
-    now = datetime.now(timezone.utc)
+    now = django_timezone.now()
     claim_batch(worker_id="w1", now=now, lease=timedelta(seconds=1), limit=10)
 
     deliver_one(row.pk, worker_id="w1")
@@ -495,7 +488,7 @@ def test_a_receiver_without_one_gets_the_setting(order: OrderPlaced, record: lis
     with transaction.atomic():
         fire(order)
     row = DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").get()
-    now = datetime.now(timezone.utc)
+    now = django_timezone.now()
     claim_batch(worker_id="w1", now=now, lease=timedelta(seconds=1), limit=10)
 
     captured = []
@@ -522,9 +515,7 @@ def test_an_orphaned_row_still_extends_before_it_is_written(
     with transaction.atomic():
         fire(order)
     row = DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").get()
-    claim_batch(
-        worker_id="w1", now=datetime.now(timezone.utc), lease=timedelta(seconds=60), limit=10
-    )
+    claim_batch(worker_id="w1", now=django_timezone.now(), lease=timedelta(seconds=60), limit=10)
 
     with receiver_deleted("testapp.durable_receiver"):
         assert deliver_one(row.pk, worker_id="w1") == DeliveryStatus.ORPHANED
@@ -559,14 +550,14 @@ def test_a_receivers_own_write_is_invisible_to_another_worker_until_it_commits(
     with transaction.atomic():
         fire(order)
     row = DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").get()
-    started = datetime.now(timezone.utc)
+    started = django_timezone.now()
     claim_batch(worker_id="w1", now=started, lease=timedelta(seconds=1), limit=10)
 
     seen: dict[str, object] = {}
 
     def receiver_that_extends_its_own_lease(evt: OrderPlaced) -> None:
         DeliveryRecord.objects.filter(pk=row.pk).update(
-            lease_expires_at=datetime.now(timezone.utc) + timedelta(hours=1)
+            lease_expires_at=django_timezone.now() + timedelta(hours=1)
         )
 
         def other_worker() -> None:
@@ -640,7 +631,7 @@ def test_a_dead_row_is_not_run_or_resurrected(order: OrderPlaced, record: list[s
         status=DeliveryStatus.DEAD,
         attempts=5,
         max_attempts=5,
-        completed_at=datetime.now(timezone.utc),
+        completed_at=django_timezone.now(),
     )
     record.clear()
 
@@ -658,7 +649,7 @@ def test_an_orphaned_row_is_not_run(order: OrderPlaced, record: list[str]) -> No
     delivery_id = _set(
         "testapp.durable_receiver",
         status=DeliveryStatus.ORPHANED,
-        completed_at=datetime.now(timezone.utc),
+        completed_at=django_timezone.now(),
     )
     record.clear()
 
@@ -676,7 +667,7 @@ def test_a_cancelled_row_is_not_run(order: OrderPlaced, record: list[str]) -> No
     delivery_id = _set(
         "testapp.durable_receiver",
         status=DeliveryStatus.CANCELLED,
-        completed_at=datetime.now(timezone.utc),
+        completed_at=django_timezone.now(),
     )
     record.clear()
 
@@ -695,7 +686,7 @@ def test_a_failed_row_not_yet_due_is_not_run(order: OrderPlaced, record: list[st
         "testapp.durable_receiver",
         status=DeliveryStatus.FAILED,
         attempts=1,
-        available_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        available_at=django_timezone.now() + timedelta(hours=1),
     )
     record.clear()
 
@@ -714,7 +705,7 @@ def test_a_failed_row_that_is_due_still_runs(order: OrderPlaced, record: list[st
         "testapp.durable_receiver",
         status=DeliveryStatus.FAILED,
         attempts=1,
-        available_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        available_at=django_timezone.now() - timedelta(seconds=1),
     )
     record.clear()
 
@@ -728,7 +719,7 @@ def test_a_pending_row_not_yet_due_is_not_run(order: OrderPlaced, record: list[s
     is still open. Holds PENDING's membership of the backoff check, beside
     ``test_a_failed_row_not_yet_due_is_not_run`` holding FAILED's."""
     _fire(order)
-    due = datetime.now(timezone.utc) + timedelta(hours=48)
+    due = django_timezone.now() + timedelta(hours=48)
     delivery_id = _set("testapp.durable_receiver", available_at=due, due_at=due)
     record.clear()
 
@@ -745,7 +736,7 @@ def test_half_a_claim_takes_nothing(order: OrderPlaced, record: list[str]) -> No
     redelivery bug, reintroduced by a typo."""
     with transaction.atomic():
         fire(order)
-    claim_batch(worker_id="w1", now=datetime.now(timezone.utc), lease=timedelta(hours=1), limit=10)
+    claim_batch(worker_id="w1", now=django_timezone.now(), lease=timedelta(hours=1), limit=10)
     row = _delivery("testapp.durable_receiver")
     record.clear()
 
@@ -761,7 +752,7 @@ def test_a_take_moves_the_row_to_the_named_worker(order: OrderPlaced, record: li
     name of its own; the claim it was handed is what it takes the row from."""
     with transaction.atomic():
         fire(order)
-    claim_batch(worker_id="w1", now=datetime.now(timezone.utc), lease=timedelta(hours=1), limit=10)
+    claim_batch(worker_id="w1", now=django_timezone.now(), lease=timedelta(hours=1), limit=10)
     row = _delivery("testapp.durable_receiver")
     record.clear()
 
@@ -788,7 +779,7 @@ def test_a_failed_row_claimed_early_on_purpose_still_runs(
         "testapp.durable_receiver",
         status=DeliveryStatus.FAILED,
         attempts=1,
-        available_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        available_at=django_timezone.now() + timedelta(hours=1),
     )
     _set("testapp.with_context", status=DeliveryStatus.SUCCEEDED)
     record.clear()
@@ -817,7 +808,7 @@ def _explode(evt: OrderPlaced) -> None:
 
 def _wait_after_failing(key: str) -> float:
     """Fail one attempt of ``key`` and return the delay it was scheduled for."""
-    before = datetime.now(timezone.utc)
+    before = django_timezone.now()
     with receiver_replaced(key, _explode):
         assert deliver_one(_delivery_id(key)) is DeliveryStatus.FAILED
     return (_delivery(key).available_at - before).total_seconds()
@@ -941,7 +932,7 @@ def _given_back(key: str) -> list[int]:
         DeliveryRecord.objects.filter(
             receiver_key=key,
             status=DeliveryStatus.CLAIMED,
-            lease_expires_at__lt=datetime.now(timezone.utc),
+            lease_expires_at__lt=django_timezone.now(),
         ).values_list("pk", flat=True)
     )
 
@@ -964,7 +955,7 @@ def test_a_deferral_sets_its_lane_aside_and_the_pass_delivers_the_rest(
         assert len(handed_back) == 2
         taken = claim_batch(
             worker_id="w2",
-            now=datetime.now(timezone.utc),
+            now=django_timezone.now(),
             lease=timedelta(minutes=5),
             limit=10,
             lane="mail",
@@ -995,7 +986,7 @@ def test_a_deferral_is_reported_to_whoever_dispatched_it(order: OrderPlaced) -> 
         _fire(order)
         [row_id] = claim_batch(
             worker_id="w1",
-            now=datetime.now(timezone.utc),
+            now=django_timezone.now(),
             lease=timedelta(minutes=5),
             limit=10,
             lane="mail",
@@ -1018,7 +1009,7 @@ def test_a_deferral_this_worker_could_not_record_pauses_nothing(
         _fire(order)
         [row_id] = claim_batch(
             worker_id="w1",
-            now=datetime.now(timezone.utc),
+            now=django_timezone.now(),
             lease=timedelta(minutes=5),
             limit=10,
             lane="mail",
@@ -1035,7 +1026,7 @@ def test_a_deferral_this_worker_could_not_record_pauses_nothing(
 def _claimed(lane: str) -> int:
     [row_id] = claim_batch(
         worker_id="w1",
-        now=datetime.now(timezone.utc),
+        now=django_timezone.now(),
         lease=timedelta(minutes=5),
         limit=10,
         lane=lane,
@@ -1083,7 +1074,7 @@ def test_a_give_up_this_worker_could_not_record_tells_on_failure_nothing(
     bounded = dataclasses.replace(_throttled_mail([]), on_failure=heard.append)
     with receiver_registered(bounded):
         _fire(order)
-        EventRecord.objects.update(recorded_at=datetime.now(timezone.utc) - timedelta(days=2))
+        EventRecord.objects.update(recorded_at=django_timezone.now() - timedelta(days=2))
         row_id = _claimed("mail")
         monkeypatch.setattr(deliver_module._Fence, "write", lambda self, **fields: None)
 
@@ -1200,7 +1191,7 @@ def test_a_drain_told_a_later_time_hands_a_task_row_to_the_queue_once(settings) 
     row out of the call's later claims, the next claim finds the lease lapsed
     and enqueues it again, forever. Not counted, as no hand-off is."""
     with _task_site(settings, _QueueingBackend, lambda event: None):
-        counts = drain_outbox(now=datetime.now(timezone.utc) + timedelta(days=7))
+        counts = drain_outbox(now=django_timezone.now() + timedelta(days=7))
 
     assert (counts, _ENQUEUED) == ({}, [_delivery_id("probe.task_site")])
     assert _delivery("probe.task_site").status == DeliveryStatus.CLAIMED
@@ -1212,10 +1203,10 @@ def test_a_task_answering_not_yet_under_a_drain_told_a_later_time_runs_once(sett
     drain told a time past it would otherwise take it straight back."""
 
     def always_later(event: Unheard) -> None:
-        raise NotYet(datetime.now(timezone.utc) + timedelta(hours=1))
+        raise NotYet(django_timezone.now() + timedelta(hours=1))
 
     with _task_site(settings, _ImmediateBackend, always_later):
-        counts = drain_outbox(now=datetime.now(timezone.utc) + timedelta(days=7))
+        counts = drain_outbox(now=django_timezone.now() + timedelta(days=7))
 
     row = _delivery("probe.task_site")
     assert (counts, len(_ENQUEUED)) == ({}, 1)
@@ -1231,7 +1222,7 @@ def test_a_task_that_failed_inside_the_hand_off_is_retried_within_the_drain(sett
         raise RuntimeError("down")
 
     with _task_site(settings, _ImmediateBackend, broken, max_attempts=2):
-        counts = drain_outbox(now=datetime.now(timezone.utc) + timedelta(days=7))
+        counts = drain_outbox(now=django_timezone.now() + timedelta(days=7))
 
     row = _delivery("probe.task_site")
     assert (row.status, row.attempts, len(_ENQUEUED)) == (DeliveryStatus.DEAD, 2, 2)
@@ -1283,7 +1274,7 @@ def test_a_row_rescheduled_in_place_on_the_real_clock_is_not_excluded(
     read_back, exclusions = _spy_on_set_aside(monkeypatch)
 
     def always_later(event: Unheard) -> None:
-        raise NotYet(datetime.now(timezone.utc) + timedelta(hours=1))
+        raise NotYet(django_timezone.now() + timedelta(hours=1))
 
     receiver(Unheard, key="probe.in_place")(always_later)
     try:
@@ -1336,6 +1327,6 @@ def test_a_row_delivered_in_place_is_never_read_back(
 
     # ``now=`` is passed because the read-back only happens when it is: without
     # it this would hold vacuously, whatever the pass did with a row run in place.
-    deliver_pending(worker_id="w1", now=datetime.now(timezone.utc))
+    deliver_pending(worker_id="w1", now=django_timezone.now())
 
     assert read_back == []

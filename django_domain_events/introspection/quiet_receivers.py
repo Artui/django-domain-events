@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from django.db import models
+from django.utils import timezone
 
 from django_domain_events.declaration.registry import registry
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.quiet_receiver import QuietReceiver
+from django_domain_events.utils import in_project_time
 
 
 def quiet_receivers(
@@ -47,7 +49,7 @@ def quiet_receivers(
     from django_domain_events.models.receiver_last_success import ReceiverLastSuccess
 
     window = within if within is not None else timedelta(days=setting("RETENTION_DAYS"))
-    cutoff = (now or datetime.now(timezone.utc)) - window
+    cutoff = (in_project_time(now) if now is not None else timezone.now()) - window
 
     durable = sorted(
         (r for r in registry.receivers() if r.mode is DeliveryMode.DURABLE),

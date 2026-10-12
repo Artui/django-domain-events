@@ -33,7 +33,16 @@ planned.
 | `make release-bump VERSION=X.Y.Z` | Rewrite the version and promote the changelog section |
 
 Run the suite against Postgres locally with `DDE_TEST_DATABASE=postgres` and the
-usual `PG*` environment variables pointing at a server.
+usual `PG*` environment variables pointing at a server. Add `DDE_TEST_USE_TZ=false`
+to run it under `USE_TZ = False`, as CI does on Postgres: the package takes "now"
+from `django.utils.timezone.now()` and puts every datetime an application hands
+in through `utils.in_project_time`, so its values follow the project's setting,
+and an aware value meeting a naive one raises only under the other setting. On
+SQLite that run fails in the suite's own fixtures, which write aware values
+SQLite refuses under the setting; read its failures for a package frame.
+`DDE_TEST_TIME_ZONE` replaces the suite's `TIME_ZONE` (America/Chicago); a run
+under a zone with a different offset, such as `Asia/Kolkata`, finds a test that
+wrote Chicago's wall time into a constant.
 
 ## Structural rules
 
@@ -234,7 +243,7 @@ says why.
 Eight jobs in `tests.yml`: `lint`, `docs`, `floor` (resolves every declared
 dependency at the bottom of its window and runs the suite there), `test` (the
 Python x Django matrix on SQLite), `test-postgres` (a real server, for the half
-SQLite cannot exercise), `coverage-badge`, `secrets`, and the `tests-passed`
+SQLite cannot exercise, run once under each `USE_TZ`), `coverage-badge`, `secrets`, and the `tests-passed`
 gate that branch protection points at.
 
 Releases are **main-triggered**: `make release-bump`, edit the changelog, open a

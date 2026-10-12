@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from django.db import connection, transaction
+from django.utils import timezone as django_timezone
 
 from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.declaration.registry import registry
@@ -50,7 +51,7 @@ def _pruned_after_running(order: OrderPlaced, *, skip: str | None = None) -> Non
     if skip is not None:
         DeliveryRecord.objects.filter(receiver_key=skip).delete()
     drain_outbox()
-    EventRecord.objects.update(recorded_at=datetime.now(timezone.utc) - timedelta(days=365))
+    EventRecord.objects.update(recorded_at=django_timezone.now() - timedelta(days=365))
     assert prune_events() == 1
     assert not DeliveryRecord.objects.exists()
 
@@ -81,7 +82,7 @@ def test_a_receiver_that_never_ran_is_still_quiet_after_a_prune(
 def test_the_later_of_the_pruned_record_and_the_live_rows_is_reported(
     pruned_is_later: bool,
 ) -> None:
-    now = datetime.now(timezone.utc)
+    now = django_timezone.now()
     live, pruned = now - timedelta(days=3), now - timedelta(days=2)
     if not pruned_is_later:
         live, pruned = pruned, live
@@ -120,7 +121,7 @@ def test_a_success_older_than_the_window_puts_it_back(
     with transaction.atomic():
         fire(order)
     drain_outbox()
-    long_ago = datetime.now(timezone.utc) - timedelta(days=400)
+    long_ago = django_timezone.now() - timedelta(days=400)
     DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").update(
         succeeded_at=long_ago
     )
@@ -148,7 +149,7 @@ def test_the_default_window_is_the_retention_setting(
         fire(order)
     drain_outbox()
     DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").update(
-        succeeded_at=datetime.now(timezone.utc) - timedelta(days=10)
+        succeeded_at=django_timezone.now() - timedelta(days=10)
     )
     settings.DJANGO_DOMAIN_EVENTS = {"RETENTION_DAYS": 30}
     assert "testapp.durable_receiver" not in _keys()
@@ -164,7 +165,7 @@ def test_a_failed_delivery_does_not_count_as_having_run(
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").update(
-        status=DeliveryStatus.FAILED, attempts=3, completed_at=datetime.now(timezone.utc)
+        status=DeliveryStatus.FAILED, attempts=3, completed_at=django_timezone.now()
     )
     assert "testapp.durable_receiver" in _keys()
 
@@ -173,7 +174,7 @@ def test_now_is_injectable(order: OrderPlaced, record: list[str]) -> None:
     with transaction.atomic():
         fire(order)
     drain_outbox()
-    later = datetime.now(timezone.utc) + timedelta(days=400)
+    later = django_timezone.now() + timedelta(days=400)
     assert "testapp.durable_receiver" in [q.key for q in quiet_receivers(now=later)]
 
 
@@ -273,7 +274,7 @@ def test_the_latest_success_wins_over_older_ones_and_failures() -> None:
         payload={},
         occurred_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
-    now = datetime.now(timezone.utc)
+    now = django_timezone.now()
     newest = now - timedelta(days=1)
     for n, succeeded in enumerate(
         (now - timedelta(days=200), newest, None, now - timedelta(days=50))
@@ -312,7 +313,7 @@ def test_each_receiver_costs_one_probe_of_the_last_success_index(
         payload={},
         occurred_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
-    now = datetime.now(timezone.utc)
+    now = django_timezone.now()
     DeliveryRecord.objects.bulk_create(
         DeliveryRecord(
             event=event,

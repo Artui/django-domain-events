@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
-from django.utils import timezone as django_timezone
+from django.utils import timezone
+
+from django_domain_events.utils import in_project_time, require_aware_where_stored_aware
 
 
 class NotYet(Exception):
@@ -44,8 +46,11 @@ class NotYet(Exception):
     (``test_the_documented_pattern_does_the_work_of_a_row_that_runs_after_the_moved_time``).
 
     ``until`` is an aware datetime, and in the future when this is
-    constructed. A naive one is refused, as ``due=`` refuses one, and so is a
-    time already come: spending no attempt, the row would be claimed straight
+    constructed. A naive one is refused under ``USE_TZ = True``, as ``due=``
+    refuses one; under ``False`` it is local time, the project's own
+    convention, and an aware one is converted to local time, so ``until`` is
+    always in the form the row will store. A time already come is refused
+    whatever the setting: spending no attempt, the row would be claimed straight
     back and answered the same way, a hot loop nothing would end. Both are
     refused where the exception is built, so a receiver raising either has
     raised an ordinary ``TypeError`` or ``ValueError`` instead, which the relay
@@ -73,12 +78,13 @@ class NotYet(Exception):
                 f"NotYet needs a datetime, got {until!r}, a {type(until).__name__}. "
                 f"A delay is RetryAfter's; this takes the time the work is due."
             )
-        if not django_timezone.is_aware(until):
-            raise ValueError(
-                f"NotYet needs an aware datetime, got the naive {until!r}. Reading "
-                f"it as UTC or as local time would each be a guess."
-            )
-        if not until > datetime.now(timezone.utc):
+        require_aware_where_stored_aware(
+            until,
+            f"NotYet needs an aware datetime, got the naive {until!r}. Under "
+            f"USE_TZ = True reading it as UTC or as local time would each be a guess.",
+        )
+        until = in_project_time(until)
+        if not until > timezone.now():
             raise ValueError(
                 f"NotYet needs a time in the future, got {until.isoformat()}. The row "
                 f"would be due again at once, and spending no attempt, nothing would "

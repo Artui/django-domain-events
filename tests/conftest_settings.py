@@ -51,7 +51,21 @@ TEMPLATES = [
 
 ROOT_URLCONF = "tests.urls"
 
-USE_TZ = True
+# ``DDE_TEST_USE_TZ=false`` runs the whole suite with naive datetimes, which a
+# project still on ``USE_TZ = False`` stores and reads back in ``TIME_ZONE``
+# local time. The package takes "now" from ``django.utils.timezone.now()`` so its
+# values follow whichever convention the project chose; a CI job runs this
+# setting on Postgres, because a comparison between an aware and a naive value
+# raises ``TypeError`` and only a run under the other setting can find one.
+USE_TZ = os.environ.get("DDE_TEST_USE_TZ", "true").lower() not in {"0", "false", "no"}
+
+# Django's default, America/Chicago, on purpose: a zone other than UTC means a
+# naive value read back under ``USE_TZ = False`` is visibly local time, so code
+# attaching UTC to it is hours wrong and a test comparing it with
+# ``timezone.now()`` says so. ``DDE_TEST_TIME_ZONE`` runs the suite in another
+# zone, which is how a test that wrote Chicago's offset into a constant is
+# found.
+TIME_ZONE = os.environ.get("DDE_TEST_TIME_ZONE", "America/Chicago")
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

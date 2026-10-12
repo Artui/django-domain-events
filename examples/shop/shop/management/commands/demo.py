@@ -17,6 +17,7 @@ from django_domain_events import (
     backoff,
     cancel_deliveries,
     catalogue,
+    claim_batch,
     deliver_pending,
     drain_outbox,
     outbox_health,
@@ -174,12 +175,38 @@ class Command(BaseCommand):
         )
 
         head("6. How far behind is the outbox?")
+        # A relay claimed the requeued row and stopped before finishing it, so
+        # the claimed counts have something to say: with nothing claimed, every
+        # receiver's zero would add up to a zero total whether or not it was
+        # counted. Its lease has already run out, which is also what lets the
+        # drains in the later steps take the row again.
+        claim_batch(
+            worker_id="demo-relay",
+            now=now(),
+            lease=timedelta(0),
+            limit=1,
+            ignore_backoff=True,
+        )
         health = outbox_health()
         print(f"   owed={health.owed} claimed={health.claimed} dead={health.dead}")
         print(f"   lapsed leases={health.lapsed_leases} oldest owed={health.oldest_owed_at}")
         for entry in health.receivers:
-            print(f"     {entry.key:24} owed={entry.owed} dead={entry.dead}")
+            print(
+                f"     {entry.key:24} owed={entry.owed} dead={entry.dead} claimed={entry.claimed}"
+            )
         check("a requeued row is owed again", health.owed, 1)
+        check("a relay claimed it", health.claimed, 1)
+        check("and its lease has lapsed", health.lapsed_leases, 1)
+        check(
+            "and the receiver it belongs to says so",
+            [entry.key for entry in health.receivers if entry.claimed],
+            ["shop.refund"],
+        )
+        check(
+            "each receiver's claimed rows add up to the total",
+            sum(entry.claimed for entry in health.receivers),
+            health.claimed,
+        )
         check("and is no longer dead", health.dead, 0)
         if health.oldest_owed_at is None or health.oldest_owed_at > now():
             raise SystemExit("BROKEN: the oldest owed timestamp is in the future")

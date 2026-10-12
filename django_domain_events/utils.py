@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Any, cast
 
 from django.apps import apps
+from django.conf import settings
 from django.db import connections, models
 from django.utils import timezone
 
@@ -130,6 +131,55 @@ def parse_datetime(value: str) -> datetime:
     learned to read in Python 3.11. Bare parsing fails on the 3.10 floor.
     """
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def in_project_time(value: datetime) -> datetime:
+    """``value`` in the form the project stores datetimes in.
+
+    Every datetime the package compares or writes is either one it took from
+    ``django.utils.timezone.now()`` or one the ORM read back, and both follow
+    ``USE_TZ``: aware under ``True``, naive ``TIME_ZONE`` local time under
+    ``False``. A value an application hands in - a ``now=``, a ``NotYet``, a
+    ``due=`` answer, ``fire(occurred_at=)`` - goes through here first, so it
+    meets those on their own terms: comparing an aware value with a naive one
+    raises ``TypeError``, and SQLite refuses to store an aware one at all under
+    ``USE_TZ = False``.
+
+    An aware value under ``False`` is converted to local time and stripped,
+    never read off as UTC: a naive value from the database is local time, so a
+    UTC wall clock beside it would be hours out
+    (``test_a_due_callable_answering_an_aware_time_is_stored_as_local_time``).
+    Everything else is returned as it came. A naive value under ``True`` is
+    refused where it matters, by the caller, because only the caller can say
+    what it was for.
+
+    The guard is one arc of two conditions, so each has a test that fails
+    without it: ``USE_TZ`` - ``test_it_carries_the_time_and_the_reason``
+    (``NotYet`` would hand back local time under ``True``); naive -
+    ``test_not_yet_takes_local_time_and_moves_the_row_there`` (``make_naive``
+    raises on a naive value).
+    """
+    if settings.USE_TZ or timezone.is_naive(value):
+        return value
+    return timezone.make_naive(value)
+
+
+def require_aware_where_stored_aware(value: datetime, refusal: str) -> None:
+    """Refuse a naive datetime, unless the project stores naive ones.
+
+    Under ``USE_TZ = True`` a naive value could mean UTC or local time, and
+    reading it either way would be wrong by hours for somebody. Under ``False``
+    naive is the project's own convention, local time, so it is no guess, and
+    refusing it would refuse the value ``timezone.now()`` returns there.
+
+    One arc of two conditions: ``USE_TZ`` is held by
+    ``test_a_due_callable_may_answer_in_local_time`` and
+    ``test_not_yet_takes_local_time_and_moves_the_row_there``, and naive by
+    ``test_it_carries_the_time_and_the_reason``, which an aware value would
+    fail under ``True`` without it.
+    """
+    if settings.USE_TZ and timezone.is_naive(value):
+        raise ValueError(refusal)
 
 
 def has_table(alias: str, table: str) -> bool:
@@ -269,8 +319,9 @@ def resolve_due(
     gives: this runs inside somebody else's transaction, and the alternative is
     a reaction that silently never happens. A value that is not a datetime is
     refused before it reaches a comparison that would fail with a less useful
-    message, and a naive one because reading it as UTC or as local time would be
-    wrong by hours for somebody.
+    message, and a naive one under ``USE_TZ = True`` because reading it as UTC
+    or as local time would be wrong by hours for somebody. Under ``False`` a
+    naive answer is local time, and an aware one is converted to it.
 
     Never earlier than ``floor`` - when the row is written: ``recorded_at`` at
     fire time, the moment of the replay on a replay. A due time already past
@@ -287,15 +338,15 @@ def resolve_due(
         if not isinstance(when, datetime):
             raise TypeError(
                 f"due for receiver {receiver_key!r} returned {when!r}, a "
-                f"{type(when).__name__}. It must return an aware datetime."
+                f"{type(when).__name__}. It must return a datetime."
             )
-        if not timezone.is_aware(when):
-            raise ValueError(
-                f"due for receiver {receiver_key!r} returned the naive datetime {when!r}. "
-                f"Give it a timezone; reading it as UTC or as local time would each be "
-                f"a guess."
-            )
-    return max(when, floor)
+        require_aware_where_stored_aware(
+            when,
+            f"due for receiver {receiver_key!r} returned the naive datetime {when!r}. "
+            f"Give it a timezone; under USE_TZ = True reading it as UTC or as local "
+            f"time would each be a guess.",
+        )
+    return max(in_project_time(when), floor)
 
 
 def target_digest(target: str) -> bytes:
