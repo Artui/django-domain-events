@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import warnings
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -158,6 +159,12 @@ def fire(
     )
 
     receivers = registry.receivers_for(type(event))
+    # Each receiver is handed a context naming it, built from the one above
+    # with ``replace`` so no receiver's copy is another's: a ``targets=``
+    # callable, an INLINE and an ON_COMMIT receiver are each told their own key
+    # (test_a_targets_callable_is_told_the_key_of_the_receiver_it_fans_out,
+    # test_an_immediate_receiver_is_told_its_own_key).
+    #
     # One entry per row to write. A fan-out receiver's callable runs here, in
     # the caller's transaction, and whatever it raises is not caught: see the
     # docstring for why a failed fan-out must fail the change.
@@ -166,7 +173,9 @@ def fire(
         for r in receivers
         if r.mode is DeliveryMode.DURABLE
         for target in (
-            [""] if r.targets is None else resolve_targets(r.key, r.targets, event, context)
+            [""]
+            if r.targets is None
+            else resolve_targets(r.key, r.targets, event, replace(context, receiver_key=r.key))
         )
     ]
     # A scheduled receiver's due time, resolved here for the same reason and
@@ -207,13 +216,20 @@ def fire(
             # Causation at every execution site, not only the durable one. An
             # event fired by an inline receiver is just as much a descendant.
             with caused_by(record.pk, record.correlation_id):
-                call_receiver(r.func, r.takes_context, event, context)
+                call_receiver(r.func, r.takes_context, event, replace(context, receiver_key=r.key))
         elif r.mode is DeliveryMode.ON_COMMIT:
             # robust=True is not optional: without it an uncaught exception in one
             # on_commit callback cancels every later one in the same transaction,
             # silently deleting the other receivers' work.
             transaction.on_commit(
-                _bind(r.func, r.takes_context, event, context, record.pk, record.correlation_id),
+                _bind(
+                    r.func,
+                    r.takes_context,
+                    event,
+                    replace(context, receiver_key=r.key),
+                    record.pk,
+                    record.correlation_id,
+                ),
                 using=alias,
                 robust=True,
             )

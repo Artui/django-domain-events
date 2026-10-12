@@ -51,6 +51,8 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
 | Invoice reminders due a fortnight later | `due=timedelta(days=14)` counted from the invoice's `occurred_at`: `drain_outbox()` leaves the reminders alone, `outbox_health()` counts them as `scheduled` rather than owed, and `drain_outbox(now=...)` runs them - the cancelled order's as moot work that succeeds and sends nothing, the open order's answering `NotYet` until three days after the customer's last email, then sending; one that runs after that quiet period has already ended is sent rather than failed on a past `NotYet` |
 | The invoice is paid before the reminder | `cancel_deliveries` withdrawing the reminder in the transaction that records the payment: it settles as `cancelled`, a drain past its due time never runs it, nothing is sent, and `outbox_health()` counts it nowhere |
 | The customer is asked for a review | an `async def` receiver run to completion by the relay: its delivery succeeds and the request its coroutine wrote through the async ORM is on record, once |
+| Every delivery's lines name it | `AROUND_DELIVERY`: a hook entered around each durable attempt sets a log context, so the receiver's own line carries its delivery and receiver ids, as does the relay's warning for the marketplace's dead letter, and the context is gone once the attempt ends |
+| The tracer is down | a hook that raises on entering fails the attempt as the receiver raising would: the row is `failed` after one attempt with the hook's error, and the receiver never ran |
 
 ## The declarations
 
@@ -117,6 +119,16 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
     delivery runs, and its async ORM write commits with the acknowledgement,
     as a sync receiver's does. A client is made inside the call, never at
     module level, because each call's loop is closed when it returns.
+
+Beside them, **`shop/delivery_log.py`** holds the one hook the settings name,
+`AROUND_DELIVERY`. It is entered around every durable attempt, outside the
+transaction that carries the acknowledgement, and sets the delivery and
+receiver ids for the length of it; the `LOGGING` filter in `settings.py` puts
+them on every line, which is why the demo's warnings read
+`WARNING [delivery=<id> receiver=shop.refund]`. No receiver sets them itself.
+`tracer_that_is_down` beside it is the failing state, which the demo switches
+to for one order: a hook that cannot be entered fails the attempt rather than
+letting the receiver run without it.
 
 ## Other things to try
 

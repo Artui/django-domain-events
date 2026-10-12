@@ -7,6 +7,7 @@ something a real application would want.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -28,6 +29,8 @@ from django_domain_events import (
     fire,
     receiver,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @event(name="shop.OrderPlaced", version=2)
@@ -129,11 +132,16 @@ def reserve_stock(evt: OrderPlaced) -> None:
     at-least-once entitles you to cannot be observed here. It also fires a
     follow-up event, which the relay automatically records as caused by this
     one - no plumbing at the call site.
+
+    Its log line says nothing about which delivery it is, and needs not to:
+    the AROUND_DELIVERY hook in ``shop/delivery_log.py`` puts the delivery and
+    receiver ids on it.
     """
     from shop.models import Order, Reservation, StockLevel
 
     order = Order.objects.get(pk=evt.order_id)
     Reservation.objects.get_or_create(order=order, defaults={"quantity": evt.quantity})
+    logger.info("reserved %s of %s for order %s", evt.quantity, evt.sku, evt.order_id)
     StockLevel.objects.filter(sku=evt.sku).update(available=F("available") - evt.quantity)
     fire(StockReserved(order_id=evt.order_id, sku=evt.sku, quantity=evt.quantity))
 

@@ -30,6 +30,7 @@ are changing.
 | `RELAY_PRUNE` | `True` | Whether an idle relay runs `prune_events`. Turn it off if you schedule the prune yourself. |
 | `RELAY_PRUNE_SECONDS` | `60` | The most often a relay sweeps, in seconds above zero. |
 | `TASK_BACKEND` | `None` | Dotted path, or a `{"BACKEND": ..., **options}` mapping. |
+| `AROUND_DELIVERY` | `None` | Dotted path to a callable taking a `DeliveryContext` and returning a context manager, entered around each durable attempt. |
 
 ## The ones worth thinking about
 
@@ -190,6 +191,36 @@ or, with the `celery` extra installed:
 
 The Celery worker also needs the task module in its `imports`; see
 [Celery](operations.md#celery).
+
+### `AROUND_DELIVERY`
+
+A dotted path to a callable that takes the attempt's `DeliveryContext` and
+returns a synchronous context manager. The package enters it around every
+durable attempt, outside the transaction that carries the acknowledgement, and
+exits it once the outcome is recorded: the place for a tracing span, a log
+context carrying `delivery_id` and `receiver_key`, or a tenant schema. One
+callable, not a list; compose several with `contextlib.ExitStack`.
+
+```python
+"AROUND_DELIVERY": "myproject.delivery_log.delivery_log_context",
+```
+
+Read on every delivery, not cached. A path that does not import, a value that
+is not a string, or a name that is not callable fails the system check `E011`
+rather than the first delivery. Entering the hook raising fails the attempt as
+the receiver raising would; an `Exception` from `__exit__` is logged and changes
+nothing.
+
+The hook must not open a transaction. The outcome is written after the
+receiver's transaction closes and before `__exit__` runs, so a
+`transaction.atomic()` the hook entered would hold that write, and exiting it
+with the receiver's exception would roll the recorded failure back after the
+log line and `on_failure` reported it. Set a tenant schema or role at session
+level (`SET search_path`, `SET ROLE`) and reset it on exit, rather than with
+`SET LOCAL`.
+
+The rules, and what it never wraps, are in
+[A hook around each delivery](delivery.md#a-hook-around-each-delivery).
 
 ## `USE_TZ = False`
 
