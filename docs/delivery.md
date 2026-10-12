@@ -206,6 +206,31 @@ report its own outcome. A hook that raises is logged and swallowed, because a
 failure path that fails leaves the operator a traceback about logging instead of
 about the delivery.
 
+### The failure log
+
+Whether or not a receiver declares `on_failure`, every failed attempt the relay
+records is logged once, at `WARNING`, on the `django_domain_events.delivery.deliver`
+logger:
+
+```text
+receiver shop.email_receipt failed delivery 4182 on attempt 3 with SMTPServerDisconnected; the row is failed
+```
+
+The line names the receiver, the delivery, the attempt, the exception's type and
+what the row is now - `failed` while it will be retried, `dead` once it will not.
+A [deferral](#a-deferral-that-spends-no-attempt) is logged the same way, and so is
+the give-up that ends one. There is no traceback: the message is in the row's
+`last_error`, and a receiver failing on every retry would otherwise write a stack
+each time. Nor is it rate limited - the attempt budget and the backoff already
+bound how often one delivery can fail.
+
+It follows the same rule as the hook: a worker whose lease lapsed recorded
+nothing and logs nothing, so the log never shows an attempt the row does not.
+An attempt whose connection was lost before anything could be written is not
+logged either, because nothing recorded it; the lease lapsing is what puts it
+back in the queue. See
+[Side effects inside the acknowledging transaction](operations.md#side-effects-inside-the-acknowledging-transaction).
+
 ## When the receiver knows better
 
 The backoff curve is a guess, and the attempt budget is the only thing that ends

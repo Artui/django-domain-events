@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from collections.abc import Iterator
@@ -535,6 +536,26 @@ def test_a_message_for_a_released_row_does_not_take_it(
     assert DeliveryRecord.objects.get(pk=delivery_id).status == DeliveryStatus.PENDING
 
 
+def test_a_stale_copy_turned_away_is_logged_at_info(
+    order: OrderPlaced, record: list[str], task_site: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A copy the queue redelivered, or held past its lease while the relay
+    took the row back, is the outcome the take exists for, and a queue
+    draining a lapsed backlog turns thousands of them away. A warning each
+    would bury the ones that mean something; the line stays, at INFO, so a
+    count is still there to be had."""
+    delivery_id, message = _handed_off(order)
+    _replay(message)
+    record.clear()
+
+    with caplog.at_level(logging.INFO, logger="django_domain_events.delivery.deliver"):
+        _replay(message)
+
+    assert record == []
+    refused = [r for r in caplog.records if "no longer holds" in r.getMessage()]
+    assert [r.levelno for r in refused] == [logging.INFO]
+
+
 @pytest.mark.skipif(
     connection.vendor != "postgresql",
     reason=(
@@ -572,7 +593,7 @@ def test_two_copies_at_once_run_the_receiver_once(
 
     with (
         receiver_replaced("testapp.durable_receiver", slow),
-        caplog.at_level("WARNING", logger="django_domain_events.delivery.deliver"),
+        caplog.at_level("INFO", logger="django_domain_events.delivery.deliver"),
     ):
         threads = [threading.Thread(target=copy) for _ in range(2)]
         for t in threads:
@@ -587,6 +608,10 @@ def test_two_copies_at_once_run_the_receiver_once(
     assert errors == []
     refused = [r for r in caplog.records if "no longer holds" in r.getMessage()]
     assert len(refused) == 1
+    # INFO, not WARNING: a redelivered copy and one held past its lease are
+    # what the take exists to turn away, and a queue draining a lapsed backlog
+    # turns away thousands. Nothing is wrong when it does.
+    assert refused[0].levelno == logging.INFO
     assert ran == [1]
     row = DeliveryRecord.objects.get(pk=delivery_id)
     assert (row.status, row.attempts) == (DeliveryStatus.SUCCEEDED, 1)
