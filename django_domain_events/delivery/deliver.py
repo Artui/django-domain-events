@@ -698,9 +698,14 @@ def _report_failure(
     Every caller reaches this only once the fence write has landed, which is
     the one condition both halves share: a worker that lost the row recorded
     nothing, and the one holding it now will attempt the delivery and report
-    its own outcome. Held for the log by
-    ``test_a_worker_that_lost_the_row_logs_no_failure`` and for the hook by
-    ``test_a_worker_that_lost_the_row_does_not_report_the_failure``.
+    its own outcome. The check sits at each of the three call sites, and each
+    is held by its own test: in ``_fail`` by
+    ``test_a_worker_that_lost_the_row_logs_no_failure`` and
+    ``test_a_worker_that_lost_the_row_does_not_report_the_failure``; at
+    ``_defer``'s give-up by
+    ``test_a_give_up_this_worker_could_not_record_tells_on_failure_nothing``;
+    and at its counted deferral by
+    ``test_a_deferral_this_worker_could_not_record_pauses_nothing``.
 
     One warning per attempt, whether or not the receiver declared
     ``on_failure``: the hook is opt-in, and without it a failing receiver - or
