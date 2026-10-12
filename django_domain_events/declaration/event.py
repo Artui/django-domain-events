@@ -47,7 +47,7 @@ def event(
     renaming the class would otherwise strand rows written under the old one.
     A name may not be longer than the column that holds it, 255 characters,
     whether given or derived: a longer one is refused here with ``ValueError``,
-    because the database raises at ``fire()`` time while SQLite enforces nothing.
+    because Postgres raises at ``fire()`` time while SQLite enforces nothing.
 
     ``retention`` says how long ``prune_events`` keeps this event's rows: a
     ``timedelta`` for a window of its own, ``Retention.SUCCEEDED`` or
