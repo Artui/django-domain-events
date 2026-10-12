@@ -12,8 +12,10 @@ too, and assert the hook was entered for that one and for nothing else.
 
 from __future__ import annotations
 
+import gc
 import logging
 import threading
+import weakref
 from collections.abc import Callable, Iterator
 from contextvars import ContextVar
 from datetime import timedelta
@@ -21,7 +23,7 @@ from typing import Any
 
 import pytest
 from django.contrib.auth.models import Group
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 
 from django_domain_events.declaration.receiver import receiver
@@ -37,6 +39,7 @@ from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.run_relay import run_relay
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.operations.replay_events import replay_events
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_mode import DeliveryMode
@@ -55,6 +58,9 @@ CURRENT: ContextVar[str | None] = ContextVar("CURRENT", default=None)
 
 #: The thread each probe hook was entered on.
 ENTERED_ON: list[int] = []
+
+#: ``(in_atomic_block, autocommit)`` as ``observing``'s ``__exit__`` saw them.
+AT_EXIT: list[tuple[bool, bool]] = []
 
 
 class _Stop(BaseException):
@@ -149,6 +155,40 @@ def enter_without_exit(context: DeliveryContext) -> _NoExit:
     return _NoExit()
 
 
+class _Quiet:
+    """Keeps nothing it is handed, so it cannot be what keeps a frame alive."""
+
+    def __enter__(self) -> None: ...
+
+    def __exit__(self, *args: object) -> None: ...
+
+
+def quiet(context: DeliveryContext) -> _Quiet:
+    return _Quiet()
+
+
+class _Observing:
+    """Records the state of the connection when it is exited."""
+
+    def __enter__(self) -> None: ...
+
+    def __exit__(self, *args: object) -> None:
+        AT_EXIT.append((connection.in_atomic_block, connection.get_autocommit()))
+
+
+def observing(context: DeliveryContext) -> _Observing:
+    return _Observing()
+
+
+def halting_on_exit(context: DeliveryContext) -> _Probe:
+    return _Probe(context, exit_raises=_Stop())
+
+
+def opening_a_transaction(context: DeliveryContext) -> Any:
+    """The shape the docs warn against: the hook is itself a transaction."""
+    return transaction.atomic()
+
+
 def not_a_context_manager(context: DeliveryContext) -> None:
     EVENTS.append(("factory", context))
 
@@ -161,9 +201,11 @@ def _clean() -> Iterator[None]:
     """
     EVENTS.clear()
     ENTERED_ON.clear()
+    AT_EXIT.clear()
     yield
     EVENTS.clear()
     ENTERED_ON.clear()
+    AT_EXIT.clear()
     for key in [key for key in registry._receivers if key.startswith("probe.")]:
         registry._receivers.pop(key)
 
@@ -518,6 +560,115 @@ def test_what_the_hook_writes_is_not_rolled_back_with_the_receiver(settings: Any
     assert Group.objects.filter(name=f"probe-attempt-{row.pk}").exists()
 
 
+@pytest.mark.django_db(transaction=True)
+def test_the_outcome_is_committed_before_exit_runs(settings: Any) -> None:
+    """A real transaction (``transaction=True``), so the delivery's ``atomic()``
+    is the outermost one: by ``__exit__`` it has committed and the connection is
+    back in autocommit. Called inside that block instead, ``__exit__`` would see
+    ``(True, False)``."""
+    receiver(Unheard, key="probe.durable")(lambda event: None)
+    _hook(settings, "observing")
+    row = _owed("probe.durable")
+
+    assert deliver_one(row.pk) == DeliveryStatus.SUCCEEDED
+
+    assert AT_EXIT == [(False, True)]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_inside_a_callers_transaction_the_outcome_is_recorded_not_committed(
+    settings: Any,
+) -> None:
+    """Why the docs say "recorded" rather than "committed": a delivery run
+    inside the caller's own ``atomic()`` writes its outcome into that
+    transaction, which is still open when ``__exit__`` runs."""
+    receiver(Unheard, key="probe.durable")(lambda event: None)
+    _hook(settings, "observing")
+    _owed("probe.durable")
+
+    with transaction.atomic():
+        deliver_pending(worker_id="w1")
+
+    assert AT_EXIT == [(True, False)]
+
+
+def test_a_base_exception_from_exit_propagates_and_the_success_stands(settings: Any) -> None:
+    """Only an ``Exception`` from ``__exit__`` is logged and swallowed. A
+    ``BaseException`` goes on up, as one from the receiver does, and the
+    success recorded before ``__exit__`` ran is kept."""
+    receiver(Unheard, key="probe.durable")(lambda event: None)
+    _hook(settings, "halting_on_exit")
+    row = _owed("probe.durable")
+
+    with pytest.raises(_Stop):
+        deliver_one(row.pk)
+
+    row.refresh_from_db()
+    assert (row.status, row.attempts) == (DeliveryStatus.SUCCEEDED, 1)
+
+
+class _Marker:
+    """A local of the receiver's frame, to see whether the frame was freed."""
+
+
+@pytest.mark.parametrize("name", [None, "quiet"], ids=["no-hook", "hook"])
+def test_a_failed_attempt_leaves_no_reference_cycle(settings: Any, name: str | None) -> None:
+    """The exception kept for ``__exit__`` holds its traceback, which holds the
+    delivery's frame, which holds the exception's keeper: a cycle only the
+    garbage collector frees, so every failed attempt's frames, with whatever
+    the receiver had in its locals, would outlive it. Run with the collector
+    off, so only reference counting can free them."""
+    alive: list[weakref.ref[_Marker]] = []
+
+    def fails(event: Unheard) -> None:
+        marker = _Marker()
+        alive.append(weakref.ref(marker))
+        raise ValueError("refused")
+
+    receiver(Unheard, key="probe.fails")(fails)
+    _hook(settings, name)
+    row = _owed("probe.fails")
+    gc.collect()
+    gc.disable()
+    try:
+        assert deliver_one(row.pk) == DeliveryStatus.FAILED
+        freed = [ref() is None for ref in alive]
+    finally:
+        gc.enable()
+
+    assert freed == [True]
+
+
+def test_a_hook_that_opens_a_transaction_rolls_back_the_recorded_failure(
+    settings: Any,
+) -> None:
+    """The hazard the docs warn about, held so the warning stays true: the
+    outcome is written after the receiver's transaction closes and before
+    ``__exit__``, so a transaction the hook opened holds that write, and exiting
+    it with the receiver's exception rolls the failure back after
+    ``on_failure`` was told and the warning was logged. The row is left as if
+    the attempt never happened, and what ``on_failure`` wrote goes with it."""
+    told: list[DeliveryStatus] = []
+
+    def fails(event: Unheard) -> None:
+        raise ValueError("refused")
+
+    def on_failure(failure: DeliveryFailure) -> None:
+        told.append(failure.status)
+        Group.objects.create(name="probe-failure-record")
+
+    receiver(Unheard, key="probe.fails", on_failure=on_failure)(fails)
+    _hook(settings, "opening_a_transaction")
+    row = _owed("probe.fails")
+
+    assert deliver_one(row.pk) == DeliveryStatus.FAILED
+
+    row.refresh_from_db()
+    assert told == [DeliveryStatus.FAILED]
+    assert (row.status, row.attempts) == (DeliveryStatus.PENDING, 0)
+    assert not Group.objects.filter(name="probe-failure-record").exists()
+
+
 # Enter: raising there fails the attempt, read as the receiver's own raise
 
 
@@ -840,6 +991,23 @@ def test_a_targets_callable_is_told_the_key_of_the_receiver_it_fans_out() -> Non
     _fire()
 
     assert sorted(map(str, seen)) == ["probe.also_fans_out", "probe.fans_out"]
+
+
+def test_replay_asks_a_targets_callable_with_its_key() -> None:
+    """``replay_events`` asks a fan-out receiver for its targets again, with a
+    context of its own: the same key as at fire time."""
+    seen: list[Any] = []
+
+    def targets(event: Unheard, context: DeliveryContext) -> list[str]:
+        seen.append(getattr(context, "receiver_key", None))
+        return ["a"]
+
+    receiver(Unheard, key="probe.fans_out", targets=targets)(lambda event: None)
+    event_id = _fire()
+
+    replay_events([event_id])
+
+    assert seen == ["probe.fans_out", "probe.fans_out"]
 
 
 def test_a_context_built_by_keyword_without_the_key_still_constructs() -> None:

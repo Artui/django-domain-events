@@ -208,7 +208,17 @@ callable, not a list; compose several with `contextlib.ExitStack`.
 Read on every delivery, not cached. A path that does not import, a value that
 is not a string, or a name that is not callable fails the system check `E011`
 rather than the first delivery. Entering the hook raising fails the attempt as
-the receiver raising would; `__exit__` raising is logged and changes nothing.
+the receiver raising would; an `Exception` from `__exit__` is logged and changes
+nothing.
+
+The hook must not open a transaction. The outcome is written after the
+receiver's transaction closes and before `__exit__` runs, so a
+`transaction.atomic()` the hook entered would hold that write, and exiting it
+with the receiver's exception would roll the recorded failure back after the
+log line and `on_failure` reported it. Set a tenant schema or role at session
+level (`SET search_path`, `SET ROLE`) and reset it on exit, rather than with
+`SET LOCAL`.
+
 The rules, and what it never wraps, are in
 [A hook around each delivery](delivery.md#a-hook-around-each-delivery).
 

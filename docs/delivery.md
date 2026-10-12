@@ -309,14 +309,27 @@ acknowledgement. The receiver runs, the outcome is recorded, and only then is
   traceback, so a span can take its error status.
 - **Its return value is ignored.** Returning `True` cannot suppress a failure,
   because the failure has already been recorded.
-- **An exception from `__exit__` is logged at `ERROR` and swallowed.** It cannot
-  roll back an acknowledgement for work already done, or turn a recorded success
-  into a failure that would run the work again.
+- **An `Exception` from `__exit__` is logged at `ERROR` and swallowed.** It
+  cannot undo an acknowledgement for work already done, or turn a recorded
+  success into a failure that would run the work again. A `BaseException` from
+  `__exit__` propagates, and the outcome recorded before it stands.
 - **`on_failure`, and the failure log line above, run inside the hook**, so a log
   context it sets is on those lines too.
 - **What the hook writes is not part of the receiver's transaction**, so it is
   not rolled back when the receiver raises. If it has to commit with the
   receiver's work, it belongs in the receiver.
+- **The hook must not open a transaction.** The outcome is written after the
+  receiver's transaction closes and before `__exit__` runs, so a
+  `transaction.atomic()` the hook entered would hold that write, and exiting it
+  with the receiver's exception would roll the recorded failure back after the
+  log line and `on_failure` reported it. Set a tenant schema or role at session
+  level (`SET search_path`, `SET ROLE`) and reset it on exit, rather than with
+  `SET LOCAL`.
+- **Recorded is not always committed.** Run from the relay or a task, the
+  delivery's transaction is the outermost one and has committed by the time
+  `__exit__` runs. Run inside a transaction of your own - `deliver_pending()`
+  under `atomic()` in a test, say - the outcome is written into that
+  transaction, which is still open.
 - **A `BaseException`** - `KeyboardInterrupt`, a task runner's timeout - reaches
   `__exit__` and then propagates. The row stays claimed until its lease lapses,
   as it would without the hook.

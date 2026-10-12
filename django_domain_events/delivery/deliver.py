@@ -218,8 +218,12 @@ def _deliver_one(
     # The AROUND_DELIVERY hook wraps the attempt from out here, outside the
     # transaction carrying the acknowledgement, and is driven by hand rather
     # than by a ``with`` statement: by the time ``__exit__`` runs, the outcome
-    # has been recorded and committed, so the hook can neither roll back an
-    # acknowledgement nor turn a recorded success into a failure.
+    # has been recorded, so the hook can neither undo an acknowledgement nor
+    # turn a recorded success into a failure. Recorded, not necessarily
+    # committed: a delivery run inside the caller's own ``atomic()`` writes into
+    # that transaction
+    # (test_the_outcome_is_committed_before_exit_runs,
+    # test_inside_a_callers_transaction_the_outcome_is_recorded_not_committed).
     around = _Around(context)
     try:
         # Entering is inside the try: a hook that cannot be entered fails the
@@ -339,15 +343,23 @@ class _Around:
         ``__exit__``'s return value is ignored: the failure it might suppress
         has already been recorded
         (test_exit_sees_the_receivers_exception_and_cannot_suppress_it). An
-        exception from it is logged and swallowed, and never reaches
+        ``Exception`` from it is logged and swallowed, and never reaches
         ``_fail``, which would overwrite a recorded success and run the work
         again
         (test_exit_raising_after_a_success_leaves_the_acknowledgement_and_is_logged).
+        A ``BaseException`` from it propagates, and the recorded outcome stands
+        (test_a_base_exception_from_exit_propagates_and_the_success_stands).
         """
+        # Both are dropped first, on every path, the no-hook one included. The
+        # exception holds its traceback, which holds ``_deliver_one``'s frame,
+        # which holds this object: kept here, that is a cycle only the garbage
+        # collector frees, and every failed attempt's frames, with whatever its
+        # receiver held in its locals, would outlive it
+        # (test_a_failed_attempt_leaves_no_reference_cycle).
         exit_, self._exit = self._exit, None
+        exc, self.raised = self.raised, None
         if exit_ is None:
             return
-        exc = self.raised
         try:
             if exc is None:
                 exit_(None, None, None)
