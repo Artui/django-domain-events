@@ -31,6 +31,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   errors can filter MySQLdb's warning 1300 where it writes that column.
 
 ### Added
+- `AROUND_DELIVERY` setting: a dotted path to a callable that takes the
+  attempt's `DeliveryContext` and returns a context manager, entered around
+  every durable attempt (relay, eager attempt, `deliver_pending`,
+  `drain_outbox`, `deliver_one`, and the task worker) and never around
+  `INLINE` or `ON_COMMIT` receivers, the relay's hand-off of a `site="task"`
+  row, or a row that never reaches its receiver. It sits outside the
+  transaction carrying the acknowledgement and is exited once the outcome is
+  recorded, so `on_failure` and the failure log line run inside it.
+  `__exit__` receives the receiver's exception, and its return value is
+  ignored. An `Exception` from `__exit__` is logged and swallowed; a
+  `BaseException` propagates, and the recorded outcome stands. An exception on
+  entering the hook, including a path that no longer imports, fails the
+  attempt as the receiver raising would. The hook must not open a transaction,
+  since one would hold the outcome's write. The path is read on every
+  delivery.
+- `DeliveryContext.receiver_key`: the key of the receiver the context was
+  built for. It is set on every durable delivery and on the contexts that
+  `INLINE` and `ON_COMMIT` receivers and `targets=` callables receive, at fire
+  time and on `replay_events`. It is last and defaulted, so constructing a
+  `DeliveryContext` by keyword is unchanged.
+- System check `E011`: `AROUND_DELIVERY` is not a string, does not import, or
+  names something not callable.
 - `async def` receivers run, at every mode, through `asgiref.sync.async_to_sync`.
   Its async ORM writes land in the transaction carrying the acknowledgement and
   roll back with it. `RetryAfter`, `NotYet` and `PermanentFailure` raised from
