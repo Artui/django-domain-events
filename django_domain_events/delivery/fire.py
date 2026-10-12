@@ -330,7 +330,12 @@ def run_to_completion(func: Callable[..., Any], *args: object) -> None:
 
 
 def _name(func: Callable[..., Any]) -> str:
-    """The callable's qualified name for a message, or its repr where it has none."""
+    """The callable's qualified name for a message, or its repr where it has none.
+
+    A ``functools.partial`` has no ``__qualname__``; without the fallback the
+    message would name ``None``
+    (``test_a_refused_callable_with_no_qualified_name_is_named_by_its_repr``).
+    """
     return getattr(func, "__qualname__", None) or repr(func)
 
 

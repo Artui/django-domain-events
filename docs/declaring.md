@@ -177,7 +177,7 @@ and each call pays for starting an event loop.
     fails on the second with `Event loop is closed`. Create the client inside
     the receiver, as above, or use a sync client. For the same reason, a task
     the coroutine starts with `asyncio.create_task` and does not await is
-    cancelled when the loop closes, so await what you start.
+    cancelled when the loop closes (outside ASGI), so await what you start.
 
     Under ASGI the rule bites late. An `INLINE` or `ON_COMMIT` receiver for an
     event fired in a request served over ASGI is scheduled on the server's own
