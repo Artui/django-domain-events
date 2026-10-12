@@ -16,12 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any field has a placeholder hook, and the target digest column inherited
   `BinaryField`'s. The field now has none, under either name Django has used
   for it. Its class path, column type and migrations are unchanged, as is the
-  SQL on SQLite and for single-row inserts, and so are the stored values but
-  for one edge that follows Django rather than this package: on Django 5.2.9
-  and 6.0.0 exactly, a receiver key longer than its 255-character column is
-  now truncated by the `UNNEST` cast where it raised `DataError`, as it
-  already was on 5.2.0 to 5.2.8. Django dropped the length from that cast in
-  5.2.10 and 6.0.1, where such a key raises again.
+  SQL on SQLite and for single-row inserts, and so are the stored values. The
+  one edge is a receiver key longer than its 255-character column: on Django
+  5.2.9 and 6.0.0 exactly the `UNNEST` cast truncates it where `VALUES` raised
+  `DataError`, as it already did on 5.2.0 to 5.2.8, and Django dropped the
+  length from that cast in 5.2.10 and 6.0.1. A declaration can no longer
+  produce such a key; see Changed.
 - On MySQL, as the cost of the fix above, an insert or update of a target
   digest no longer carries the `_binary` prefix, so each such write raises
   warning 1300, as every lookup on the column always did. The stored bytes are
@@ -47,6 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ends the process.
 
 ### Changed
+- A receiver whose key is longer than 255 characters, whether given as `key=`
+  or derived from the app label and function name, now raises `ValueError`
+  where it is declared, in every mode. Declaration runs at import, so a project
+  declaring one fails to start until the key is shortened. 255 is the width of
+  the column delivery rows store the key in. The length was never checked:
+  SQLite stores any length, so a `DURABLE` receiver with such a key worked
+  there, while Postgres either truncated the key in a bulk insert (Django 5.2.0
+  to 5.2.9 and 6.0.0, leaving the delivery orphaned as renamed, moved or
+  deleted) or raised `DataError` when an event fired. `INLINE` and `ON_COMMIT`
+  receivers store no key and worked on every backend; they are refused too, so
+  a key stays valid when its mode changes. The message names the key's length
+  and the limit; set a shorter `key=`.
 - A sync callable that returns an awaitable, and an `async def` with `yield` in
   its body, are refused at the call with a `TypeError` naming the fix. Earlier
   versions skipped their body silently. After upgrading, a `DURABLE` one's
