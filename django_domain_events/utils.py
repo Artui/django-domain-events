@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timedelta
 from typing import Any, cast
 
+from asgiref.sync import iscoroutinefunction
 from django.apps import apps
 from django.conf import settings
 from django.db import connections, models
@@ -105,6 +106,28 @@ def label_for(module: str, fallback_name: str) -> str:
             f"derived for {fallback_name!r}. Pass an explicit name= or key=."
         )
     return f"{config.label}.{fallback_name}"
+
+
+def is_async_callable(func: object) -> bool:
+    """Whether calling ``func`` gives a coroutine to run rather than a result.
+
+    asgiref's ``iscoroutinefunction`` rather than ``inspect``'s: it unwraps
+    ``functools.partial`` and honours ``asgiref.sync.markcoroutinefunction``,
+    which ``inspect`` has no equivalent of before Python 3.12. A callable
+    object is asked through its type's ``__call__``, never the instance's own
+    attribute: a class whose instances are async-callable is itself a sync
+    callable that builds one.
+
+    The type's ``__call__`` can always be read, even for ``None`` or a
+    ``timedelta``: where the class defines none, the lookup finds the
+    metaclass's, which constructs an instance and is not a coroutine function.
+
+    One branch arc, so each operand has a test that fails without it. The
+    function case is held by every plain ``async def`` receiver in
+    tests/delivery/test_async_receivers.py; the ``__call__`` case by the
+    ``_instance`` case of ``test_the_async_shapes_detection_accepts_all_run``.
+    """
+    return iscoroutinefunction(func) or iscoroutinefunction(type(func).__call__)
 
 
 def require_frozen_dataclass(event_class: type) -> None:

@@ -78,7 +78,10 @@ class _StopOnSignal:
     A second signal raises ``SystemExit``, a ``BaseException``, because the
     relay deliberately swallows every ``Exception`` a delivery raises and a
     receiver may swallow them too. The receiver's transaction rolls back with
-    it, and its row is reclaimed when the lease lapses.
+    it, and its row is reclaimed when the lease lapses. An ``async def``
+    receiver's transaction rolls back too, but its coroutine runs on a loop in
+    another thread that no signal reaches, and interpreter exit waits for that
+    thread: the process leaves once the coroutine returns, or at a third signal.
 
     The handlers that were installed before are put back on the way out,
     however the relay ends, so a command run inside a larger process does not

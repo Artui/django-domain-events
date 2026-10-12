@@ -128,6 +128,94 @@ or else when its event was recorded, and it is `None` wherever `delivery_id` is.
     A deploy that changes any of them changes it for the deliveries already
     owed.
 
+### Async receivers
+
+A receiver may be declared `async def`, at every `mode`, and so may its
+`on_failure` hook:
+
+```python
+@receiver(OrderPlaced, mode=DURABLE)
+async def notify_partner(evt: OrderPlaced) -> None:
+    async with httpx.AsyncClient() as client:
+        await client.post(PARTNER_URL, json={"order": evt.order_id})
+    await PartnerNotice.objects.acreate(order_id=evt.order_id)
+```
+
+It runs to completion where a function would be called - in `fire()` for
+`INLINE`, at commit for `ON_COMMIT`, in the relay, a task or an eager attempt
+for `DURABLE` - through `asgiref.sync.async_to_sync`, which Django already
+depends on. Everything else about the delivery is unchanged:
+
+- **Its writes are in the acknowledging transaction.** The coroutine runs on an
+  event loop in another thread while the calling thread waits for it, and
+  Django's async ORM calls hop back to the calling thread and its connection.
+  So `await Model.objects.acreate(...)` commits with the acknowledgement and is
+  rolled back with it when the receiver raises, exactly as a sync receiver's
+  write is.
+- **It reads its verdicts the same way.** `RetryAfter`, `NotYet` and
+  `PermanentFailure` raised from a coroutine reach the relay as the same
+  object, and an `INLINE` coroutine's raise reaches `fire()`'s caller.
+- **Causation reaches it.** An event it fires through
+  `sync_to_async(fire)(...)` records it as the cause, with nothing threaded
+  through.
+- **A coroutine that is cancelled is a failed attempt**, retried like any other,
+  rather than a row left claimed until its lease lapses.
+- **A signal cannot interrupt it.** The second signal that stops a relay at
+  once rolls an `async def` receiver's transaction back, but the coroutine runs
+  on a loop in another thread, and the process exits only once it returns; a
+  third signal ends it then. Give whatever the coroutine awaits a timeout. See
+  [Stopping it](operations.md#stopping-it).
+
+What it buys is the ability to call async libraries, **not concurrency**. The
+relay still runs one delivery at a time, in one transaction, on one connection,
+and each call pays for starting an event loop.
+
+!!! warning "Each call runs on a loop of its own"
+    The loop is new on every call and closed when the call returns, so nothing
+    bound to a loop can be shared between calls. A module-level
+    `httpx.AsyncClient` or aioboto session is bound to the first call's loop and
+    fails on the second with `Event loop is closed`. Create the client inside
+    the receiver, as above, or use a sync client. For the same reason, a task
+    the coroutine starts with `asyncio.create_task` and does not await is
+    cancelled when the loop closes (outside ASGI), so await what you start.
+
+    Under ASGI the rule bites late. An `INLINE` or `ON_COMMIT` receiver for an
+    event fired in a request served over ASGI is scheduled on the server's own
+    loop instead, so a shared client can work in development and then break
+    in the relay. Its writes still land in the request's transaction.
+
+**The coroutine runs on an event loop, so sync database calls are refused in
+it.** A sync ORM call raises `SynchronousOnlyOperation`, which fails the
+attempt loudly rather than corrupting anything. `transaction.atomic()` is a
+sync API and is refused the same way; a receiver needing a savepoint wraps a
+sync function in `sync_to_async` and does the work there.
+
+**Fire from sync code.** `fire()` writes through the sync ORM, so called inside
+a running event loop it raises `SynchronousOnlyOperation` before reaching any
+receiver, and `deliver_one` reads its row the same way, leaving the row
+untouched and no attempt spent. With `DJANGO_ALLOW_ASYNC_UNSAFE` set they get
+further, and asgiref then refuses to start a loop in a thread already running
+one: an `INLINE` receiver's `RuntimeError` reaches the caller, and a durable
+delivery records it as a failed attempt. From async code, wrap the call:
+`await sync_to_async(fire)(event)`.
+
+**A sync function that returns an awaitable is refused**, with a `TypeError`
+naming the fix, rather than recorded as done with its body never run. That is
+what a `functools.wraps` decorator around an `async def` looks like, and a
+lambda returning a coroutine. An `async def` with `yield` in its body is an
+async generator, which runs nothing when called, and is refused the same way. Declare the receiver `async def`, or mark the
+wrapper with `asgiref.sync.markcoroutinefunction`. The refusal is an ordinary
+failure, so a deploy that fixes the declaration drains the rows it failed. A
+callable object whose `__call__` is `async def`, and a `functools.partial` of
+an `async def`, are recognised as coroutine functions and run.
+
+**`targets=` and `due=` stay synchronous**, and an `async def` for either is
+refused at the decorator. Both run in the caller's transaction every time the
+event fires, so each would start an event loop per receiver per event inside
+somebody's request, for what is a database read best done with the sync ORM.
+A sync wrapper returning a coroutine cannot be seen at the decorator, and fails
+when the event fires: a coroutine is neither a list of targets nor a datetime.
+
 ## Every event: `AnyEvent`
 
 A receiver declared for `AnyEvent` is owed **every** event fired.

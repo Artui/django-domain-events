@@ -117,6 +117,11 @@ adding a little on top of it. Retrying a shared downstream at
 ceiling-plus-a-bit keeps every failed delivery in the same cohort, which is the
 thundering herd the backoff was meant to break up.
 
+An [`async def` receiver](declaring.md#async-receivers) fails the same way, and
+**a coroutine that is cancelled before it finishes counts as a failure**: the
+attempt is spent and the row retried, with a `RuntimeError` naming the receiver
+as `last_error`.
+
 **The backoff is a floor, not a schedule.** `available_at` is the earliest a
 retry can run, and the relay claims in order of `available_at` and then id, so a
 retry due in a minute also waits for every row that came due before it. With an

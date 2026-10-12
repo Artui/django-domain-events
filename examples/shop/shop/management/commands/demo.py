@@ -34,6 +34,7 @@ from shop.events import (
     REMINDER_QUIET_PERIOD,
     InvoiceSent,
     OrderCancelled,
+    OrderDelivered,
     OrderPlaced,
     ParcelDispatched,
 )
@@ -552,4 +553,23 @@ class Command(BaseCommand):
             (health.scheduled, [b.key for b in health.receivers if b.key == chase]),
             (0, []),
         )
+
+        head("17. A receiver declared async def runs to completion")
+        with transaction.atomic():
+            from django_domain_events import fire
+
+            delivered = fire(OrderDelivered(order_id=second.pk))
+        print(f"   {deliver_pending(worker_id='demo')}")
+        [review] = DeliveryRecord.objects.filter(
+            event=delivered, receiver_key="shop.ask_for_a_review"
+        )
+        asked = SentEmail.objects.filter(subject=f"How was order {second.pk}?").count()
+        print(f"   {review.receiver_key}: {review.status} after {review.attempts} attempt")
+        print(f"   review requests sent: {asked}   <- the coroutine's own write")
+        check(
+            "an async def receiver's delivery succeeds",
+            (review.status, review.attempts),
+            ("succeeded", 1),
+        )
+        check("and its body ran, sending the request once", asked, 1)
         print("\nEvery claim above was checked.")

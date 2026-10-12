@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import warnings
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from typing import Any
 from uuid import UUID
 
+from asgiref.sync import async_to_sync
 from django.db import transaction
 from django.utils import timezone
 
@@ -21,7 +25,12 @@ from django_domain_events.scope.suppressed import suppression_for
 from django_domain_events.settings import get_codec, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
-from django_domain_events.utils import in_project_time, resolve_due, resolve_targets
+from django_domain_events.utils import (
+    in_project_time,
+    is_async_callable,
+    resolve_due,
+    resolve_targets,
+)
 
 
 def fire(
@@ -242,13 +251,92 @@ def _deliver_eagerly(delivery_ids: list[int]) -> Callable[[], None]:
 
 
 def call_receiver(
-    func: Callable[..., None], takes_context: bool, event: object, context: DeliveryContext
+    func: Callable[..., Any], takes_context: bool, event: object, context: DeliveryContext
 ) -> None:
-    """Invoke a receiver with the arity its declaration promised."""
-    if takes_context:
-        func(event, context)
-    else:
-        func(event)
+    """Invoke a receiver with the arity its declaration promised, to completion.
+
+    The one function every execution site passes through - INLINE here in
+    ``fire()``, ON_COMMIT through ``_bind``, DURABLE in ``_deliver_one`` - so
+    running an ``async def`` receiver here runs it everywhere.
+    """
+    run_to_completion(func, *((event, context) if takes_context else (event,)))
+
+
+def run_to_completion(func: Callable[..., Any], *args: object) -> None:
+    """Call a sync or an ``async def`` callable and return once it has finished.
+
+    Shared by receivers and their ``on_failure`` hooks. Calling an ``async
+    def`` only builds a coroutine, so a caller that discarded what it returned
+    recorded the work as done with the body never entered. A coroutine
+    function is therefore run through ``async_to_sync``, in this thread's
+    stead: outside ASGI on a fresh event loop in a worker thread, and under
+    ASGI on the server's loop, while this thread serves
+    the coroutine's thread-sensitive ``sync_to_async`` calls - which is what
+    keeps Django's async ORM on this thread's connection, inside the
+    transaction carrying the acknowledgement. asgiref re-raises whatever the
+    coroutine raised, the same object, so ``RetryAfter``, ``NotYet`` and
+    ``PermanentFailure`` are read at the boundary exactly as from a function
+    (``test_a_verdict_raised_from_a_coroutine_is_read_as_from_a_function``).
+
+    A ``CancelledError`` out of the coroutine is re-raised as a
+    ``RuntimeError``, chained to it. It is a ``BaseException``, so every
+    ``except Exception`` on the way out would let it through: a durable row
+    would stay claimed until its lease lapsed, spend no attempt and take the
+    relay down with it, and be retried that way for ever
+    (``test_a_coroutine_that_cancels_itself_fails_its_attempt``). Whoever
+    cancelled it - the coroutine itself, or, on a server's loop, something
+    else running there - it did not finish, which is a failure. The cause is
+    kept, so a traceback still shows where it was cancelled
+    (``test_an_inline_coroutine_that_cancels_itself_raises_a_chained_runtime_error``).
+
+    A sync callable that returns an awaitable is refused rather than run
+    (``test_a_sync_wrapper_returning_a_coroutine_is_refused_and_retried``).
+    That is what a ``functools.wraps`` decorator around an ``async def``
+    looks like, and a lambda or a factory returning a coroutine: the exact
+    shape of the silent drop, and invisible to any detection before the
+    call. Not awaited instead, because an awaitable the callable did not
+    create fresh - a Task or Future bound to another loop - cannot be awaited
+    on this call's loop at all. A coroutine is closed first, so Python's
+    "never awaited" warning does not fire beside the error that explains it;
+    any other awaitable has nothing to close
+    (``test_a_sync_callable_returning_any_awaitable_is_refused``).
+
+    An async generator is refused the same way
+    (``test_an_async_generator_is_refused_without_a_warning``): an ``async
+    def`` containing ``yield`` is not a coroutine function, so calling it runs
+    nothing, and it is not awaitable either, so the check above cannot see it.
+    It is left to the garbage collector rather than closed, because a
+    generator that never started is dropped without a warning, where an
+    ``aclose()`` is itself a coroutine that would need awaiting.
+    """
+    if is_async_callable(func):
+        try:
+            async_to_sync(func)(*args)
+        except asyncio.CancelledError as exc:
+            raise RuntimeError(
+                f"{_name(func)} was cancelled before it finished, so it is recorded as a failure."
+            ) from exc
+        return
+    result = func(*args)
+    if inspect.isawaitable(result) or inspect.isasyncgen(result):
+        if inspect.iscoroutine(result):
+            result.close()
+        raise TypeError(
+            f"{_name(func)} returned {type(result).__name__} instead of finishing its work, "
+            f"so the work was not run. Declare it `async def` with no `yield` in its body, or, "
+            f"if it is a sync wrapper around a coroutine function, mark it with "
+            f"asgiref.sync.markcoroutinefunction."
+        )
+
+
+def _name(func: Callable[..., Any]) -> str:
+    """The callable's qualified name for a message, or its repr where it has none.
+
+    A ``functools.partial`` has no ``__qualname__``; without the fallback the
+    message would name ``None``
+    (``test_a_refused_callable_with_no_qualified_name_is_named_by_its_repr``).
+    """
+    return getattr(func, "__qualname__", None) or repr(func)
 
 
 def _bind(
