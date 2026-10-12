@@ -65,13 +65,28 @@ else:
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
-    "handlers": {"console": {"class": "logging.StreamHandler"}},
-    # The relay logs at WARNING when a worker loses a delivery, and names the
-    # receiver whose lease_seconds= to raise.
-    "loggers": {"django_domain_events": {"handlers": ["console"], "level": "WARNING"}},
+    # The filter puts the delivery and receiver ids the AROUND_DELIVERY hook
+    # set on every line logged during a delivery, and "-" on every other line.
+    "filters": {"delivery": {"()": "shop.delivery_log.DeliveryLogFilter"}},
+    "formatters": {"delivery": {"format": "   %(levelname)s [%(delivery)s] %(name)s: %(message)s"}},
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "filters": ["delivery"],
+            "formatter": "delivery",
+        }
+    },
+    "loggers": {
+        # The relay logs at WARNING when a worker loses a delivery, and names
+        # the receiver whose lease_seconds= to raise.
+        "django_domain_events": {"handlers": ["console"], "level": "WARNING"},
+        "shop": {"handlers": ["console"], "level": "INFO"},
+    },
 }
 
 DJANGO_DOMAIN_EVENTS = {
     "LEASE_SECONDS": 30,
     "RETENTION_DAYS": 30,
+    # Entered around every durable attempt; see shop/delivery_log.py.
+    "AROUND_DELIVERY": "shop.delivery_log.delivery_log_context",
 }

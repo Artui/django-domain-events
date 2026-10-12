@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import random
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -21,7 +22,7 @@ from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.utils import OnDeferral, claim_size, partition_by_lane
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.scope.causation import caused_by
-from django_domain_events.settings import get_task_backend, setting
+from django_domain_events.settings import get_around_delivery, get_task_backend, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_status import DeliveryStatus
@@ -210,8 +211,26 @@ def _deliver_one(
         delivery_id=delivery.pk,
         # NULL read as the event's recorded_at, as give_up_after reads it.
         due_at=delivery.due_at if delivery.due_at is not None else delivery.event.recorded_at,
+        # What a hook labels its span or log line by
+        # (test_a_durable_receiver_is_told_its_own_key).
+        receiver_key=receiver.key,
     )
+    # The AROUND_DELIVERY hook wraps the attempt from out here, outside the
+    # transaction carrying the acknowledgement, and is driven by hand rather
+    # than by a ``with`` statement: by the time ``__exit__`` runs, the outcome
+    # has been recorded, so the hook can neither undo an acknowledgement nor
+    # turn a recorded success into a failure. Recorded, not necessarily
+    # committed: a delivery run inside the caller's own ``atomic()`` writes into
+    # that transaction
+    # (test_the_outcome_is_committed_before_exit_runs,
+    # test_inside_a_callers_transaction_the_outcome_is_recorded_not_committed).
+    around = _Around(context)
     try:
+        # Entering is inside the try: a hook that cannot be entered fails the
+        # attempt exactly as the receiver raising would, without running it
+        # (test_entering_raising_fails_the_attempt_without_running_the_receiver),
+        # and a NotYet or RetryAfter from it is read as a receiver's would be.
+        around.enter()
         with (
             transaction.atomic(using=write_alias()),
             caused_by(delivery.event.pk, delivery.event.correlation_id),
@@ -237,7 +256,6 @@ def _deliver_one(
                     receiver.key,
                 )
                 transaction.set_rollback(True, using=write_alias())
-            return outcome
     except Exception as exc:
         # The receiver's verdict is read here, at the one boundary every
         # execution site shares, and nowhere else. Both are ordinary failures
@@ -247,6 +265,11 @@ def _deliver_one(
         # test_an_ordinary_exception_is_not_read_as_a_deferral (an exception
         # with no ``counts`` would raise AttributeError here), ``counts`` by
         # test_a_counting_retry_after_still_spends_its_attempt.
+        #
+        # Recorded while the hook is still open, so ``on_failure`` and the
+        # failure's log line run inside it
+        # (test_on_failure_and_the_failure_warning_run_inside_the_hook).
+        around.raised = exc
         if isinstance(exc, NotYet):
             return _reschedule(fence, delivery, exc)
         if isinstance(exc, RetryAfter) and not exc.counts:
@@ -261,6 +284,94 @@ def _deliver_one(
             requested_delay=exc.seconds if isinstance(exc, RetryAfter) else None,
             error_type=type(exc).__name__,
         )
+    except BaseException as exc:
+        # A KeyboardInterrupt or a task runner's timeout signal is not a
+        # verdict on the delivery. The hook sees it and it goes on up; the row
+        # stays CLAIMED until its lease lapses, as it did before the hook
+        # (test_a_base_exception_reaches_exit_and_propagates).
+        around.raised = exc
+        raise
+    finally:
+        # In a finally, so the hook is closed on every path out, including a
+        # failure to record the outcome: a relay thread lives for days, and a
+        # hook left open leaves its log context on every later line
+        # (test_the_hook_is_exited_even_when_recording_the_failure_raises).
+        around.exit()
+    return outcome
+
+
+class _Around:
+    """The ``AROUND_DELIVERY`` hook for one attempt, entered and exited by hand.
+
+    ``raised`` is the exception the attempt ended with, which ``exit`` hands to
+    ``__exit__`` as a ``with`` statement would, so a tracing span gets its error
+    status (test_exit_sees_the_receivers_exception_and_cannot_suppress_it).
+    """
+
+    def __init__(self, context: DeliveryContext) -> None:
+        self.context = context
+        self.raised: BaseException | None = None
+        # The entered manager's bound ``__exit__``, or None while nothing is open.
+        self._exit: Callable[..., object] | None = None
+
+    def enter(self) -> None:
+        """Resolve the hook, build its context manager and enter it.
+
+        Resolving and building are part of entering: a path that does not
+        import, or a factory that returns no context manager, fails the attempt
+        like a raising ``__enter__``
+        (test_a_hook_that_cannot_be_entered_at_all_fails_the_attempt). The
+        manager is kept only once ``__enter__`` has returned, so one whose
+        ``__enter__`` raised is never exited, which is the ``with`` statement's
+        rule too (test_entering_raising_fails_the_attempt_without_running_the_receiver).
+        ``__exit__`` is looked up before ``__enter__`` is called, as the
+        ``with`` statement looks it up, so an object with no ``__exit__`` is
+        refused before anything was entered
+        (test_a_manager_with_no_exit_is_refused_before_it_is_entered).
+        """
+        factory = get_around_delivery()
+        if factory is None:
+            return
+        manager = factory(self.context)
+        exit_ = manager.__exit__
+        manager.__enter__()
+        self._exit = exit_
+
+    def exit(self) -> None:
+        """Close the hook, if one was entered, after the outcome was recorded.
+
+        ``__exit__``'s return value is ignored: the failure it might suppress
+        has already been recorded
+        (test_exit_sees_the_receivers_exception_and_cannot_suppress_it). An
+        ``Exception`` from it is logged and swallowed, and never reaches
+        ``_fail``, which would overwrite a recorded success and run the work
+        again
+        (test_exit_raising_after_a_success_leaves_the_acknowledgement_and_is_logged).
+        A ``BaseException`` from it propagates, and the recorded outcome stands
+        (test_a_base_exception_from_exit_propagates_and_the_success_stands).
+        """
+        # Both are dropped first, on every path, the no-hook one included. The
+        # exception holds its traceback, which holds ``_deliver_one``'s frame,
+        # which holds this object: kept here, that is a cycle only the garbage
+        # collector frees, and every failed attempt's frames, with whatever its
+        # receiver held in its locals, would outlive it
+        # (test_a_failed_attempt_leaves_no_reference_cycle).
+        exit_, self._exit = self._exit, None
+        exc, self.raised = self.raised, None
+        if exit_ is None:
+            return
+        try:
+            if exc is None:
+                exit_(None, None, None)
+            else:
+                exit_(type(exc), exc, exc.__traceback__)
+        except Exception:
+            logger.exception(
+                "the AROUND_DELIVERY hook raised on exit from delivery %s of receiver %s; "
+                "the delivery's outcome was already recorded and stands",
+                self.context.delivery_id,
+                self.context.receiver_key,
+            )
 
 
 def _owed(delivery: Any, now: datetime) -> bool:

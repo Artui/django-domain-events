@@ -161,6 +161,7 @@ def check_settings_keys_are_known(**kwargs: Any) -> list[Any]:
     # Folded in here rather than registered on its own: it is the same silent
     # ineffective configuration, and the check is already wired.
     problems.extend(_wake_setting_problems())
+    problems.extend(_around_delivery_problems())
     problems.extend(_relay_prune_setting_problems())
     problems.extend(_prune_batch_problems())
     return problems
@@ -203,6 +204,46 @@ def _wake_setting_problems() -> list[Any]:
             )
         )
     return problems
+
+
+def _around_delivery_problems() -> list[Any]:
+    """``AROUND_DELIVERY`` is None, or a dotted path to something callable.
+
+    Checked here because the path is resolved on every delivery and nowhere
+    else: a typo would otherwise surface as the first durable delivery failing,
+    and every one after it, in the relay, possibly hours after the deploy.
+
+    The value is refused for three reasons, each held by one case of
+    ``test_a_hook_that_cannot_be_used_is_an_error``: not a string at all, by
+    the callable itself (the likeliest slip, since collaborators elsewhere are
+    objects, and ``import_string`` would raise out of the check rather than
+    report); not importable, by a missing attribute and a missing module; and
+    not callable, by a module constant.
+    """
+    path = setting("AROUND_DELIVERY")
+    if path is None:
+        return []
+    if not isinstance(path, str):
+        problem = f"is {path!r}, which is not a dotted path"
+    else:
+        try:
+            factory = import_string(path)
+        except ImportError as exc:
+            problem = f"is {path!r}, which cannot be imported: {exc}"
+        else:
+            if callable(factory):
+                return []
+            problem = f"is {path!r}, which is not callable"
+    return [
+        Error(
+            f"AROUND_DELIVERY {problem}. Every durable delivery would fail on entering it.",
+            hint=(
+                "Name a callable that takes a DeliveryContext and returns a context "
+                "manager, by its dotted path, or set it to None."
+            ),
+            id="django_domain_events.E011",
+        )
+    ]
 
 
 def _relay_prune_setting_problems() -> list[Any]:

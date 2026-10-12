@@ -199,6 +199,8 @@ def _targets_now(receiver: RegisteredReceiver, record: Any, event_class: type) -
         actor_key=record.actor_key,
         actor_label=record.actor_label,
         scope=record.scope,
+        # As at fire time (test_replay_asks_a_targets_callable_with_its_key).
+        receiver_key=receiver.key,
     )
     event = decode_payload(event_class, record.payload, record.version)
     return resolve_targets(receiver.key, receiver.targets, event, context)
