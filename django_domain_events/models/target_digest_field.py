@@ -49,6 +49,37 @@ class TargetDigestField(models.BinaryField):
             return "varbinary(32)"
         return super().db_type(connection)
 
+    # Django's PostgreSQL insert compiler writes a multi-row insert as one
+    # ``INSERT ... SELECT * FROM UNNEST(...)``, binding an array per column, and
+    # from 5.2.9 and 6.0 falls back to a VALUES tuple per row when any field
+    # has a placeholder hook, since a hook may answer a different placeholder
+    # for each value. BinaryField defines one - ``get_placeholder`` to 6.0,
+    # ``get_placeholder_sql`` from 6.1 - so inheriting it cost every fan-out
+    # the VALUES form. Each name is a property raising AttributeError, which
+    # is how ``hasattr``, ``getattr(..., None)`` and ``except AttributeError``
+    # - every way Django looks the hook up - see a field that has none. Both,
+    # because each version asks for its own name, and because on 6.1
+    # Field.__init_subclass__ turns a lone ``get_placeholder`` into a
+    # ``get_placeholder_sql`` that would be found.
+    #
+    # The base hook answers a bare ``%s`` on Postgres and SQLite, so neither
+    # binds anything different. MySQL's answers ``_binary %s``, which tells the
+    # server not to check the bytes as text; without it an insert or update of
+    # a digest that is not valid UTF-8 may raise warning 1300 again, as the
+    # ``WHERE`` of every lookup on this column always could, since lookups
+    # never went through the hook. Unverified against a real MySQL server, for
+    # the reason given in db_type above.
+    #
+    # Held by test_the_field_has_no_placeholder_hook_so_postgres_can_unnest_a_bulk_insert,
+    # one case per name, and by the UNNEST tests beside it.
+    @property
+    def get_placeholder(self) -> Any:
+        raise AttributeError("get_placeholder")
+
+    @property
+    def get_placeholder_sql(self) -> Any:
+        raise AttributeError("get_placeholder_sql")
+
     def pre_save(self, model_instance: Any, add: bool) -> bytes:
         digest = target_digest(model_instance.target)
         setattr(model_instance, self.attname, digest)

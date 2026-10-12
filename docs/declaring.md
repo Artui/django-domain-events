@@ -209,7 +209,8 @@ retries, and the receiver is told which one it is delivering to as
     one query per fired event per fan-out receiver. For a transport that would
     otherwise fire a second event per destination that is a clear saving. For
     one declared carelessly, it is a cost every write in the system pays. Index
-    the lookup, and return early for events you can rule out without one.
+    the lookup, and return early for events you can rule out without one. See
+    [what a fan-out costs](operations.md#what-a-fan-out-costs).
 
 `replay_events` calls the callable again, so a replay goes to the targets that
 exist at replay time; see [replay](operations.md#replay).

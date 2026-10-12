@@ -593,6 +593,26 @@ receiver.
     the receivers that asked for one, so configuring no backend cannot break
     receivers that never wanted it. Neither case silently runs in the relay.
 
+## What a fan-out costs
+
+A [fan-out](declaring.md#fan-out-one-delivery-per-target) writes its rows inside
+`fire()`, so the write that fired the event pays for them, in its transaction.
+On Postgres they go in as **one statement whatever the count**: from Django 5.2
+the insert binds one array per column and reads the rows back out of `UNNEST`,
+where the alternative is a `VALUES` tuple per row, with a placeholder per column
+per row for the server to parse and plan. From 5.2.9 Django keeps that form only
+while no field in the insert has a placeholder hook, and the delivery row's
+target digest column has none for that reason. On one consumer's measurements a fan-out cost
+about 130 microseconds a target while its insert was `VALUES`, and roughly half
+that as `UNNEST`. SQLite, and Django before 5.2, write `VALUES` for every
+multi-row insert.
+
+The rest of the cost is the `targets=` callable, which runs once per fired event
+for every fan-out receiver owed it. Make it **one `SELECT`** returning the
+strings - `values_list("pk", flat=True)`, as in the example on the declaring
+page - rather than a loop over model instances, which builds an object per
+target only to discard it, or a query per candidate.
+
 ## Knowing it is working
 
 ```bash

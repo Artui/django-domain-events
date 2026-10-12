@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- On Postgres with Django 5.2.9 or later, every multi-row insert of delivery
+  rows - a fan-out in `fire()`, and the rows `replay_events` writes for
+  targets it finds missing - was one `VALUES` tuple per row rather than
+  Django's single `UNNEST` statement, at about twice the cost per row. Django gives that form up for a whole insert when
+  any field has a placeholder hook, and the target digest column inherited
+  `BinaryField`'s. The field now has none, under either name Django has used
+  for it. Its class path, column type, stored values and migrations are
+  unchanged, as is the SQL on SQLite and for single-row inserts. On MySQL an
+  insert or update of a digest no longer carries the `_binary` prefix, which
+  only tells the server not to check the bytes as text, and which lookups on
+  the column never carried; the suite does not run on MySQL, so this is
+  unverified against a server.
+
 ## [0.11.2] — 2026-10-12
 
 ### Fixed
