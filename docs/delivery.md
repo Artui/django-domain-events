@@ -236,6 +236,12 @@ the give-up that ends one. There is no traceback: the message is in the row's
 each time. Nor is it rate limited - the attempt budget and the backoff already
 bound how often one delivery can fail.
 
+A payload that will not decode is logged too, naming the decoder's exception, as
+the row goes straight to `dead`; the receiver never ran, so its `on_failure` is
+not told. A row whose receiver is no longer registered goes to `orphaned` and is
+deliberately not logged as a failed attempt: no attempt is counted, and no
+receiver failed.
+
 It follows the same rule as the hook: a worker whose lease lapsed recorded
 nothing and logs nothing, so the log never shows an attempt the row does not.
 An attempt whose connection was lost before anything could be written is not

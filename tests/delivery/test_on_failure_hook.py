@@ -291,6 +291,69 @@ def test_a_worker_that_lost_the_row_logs_no_failure(caplog: pytest.LogCaptureFix
     assert _failure_logs(caplog) == []
 
 
+def _fire_undecodable(key: str, seen: list[DeliveryFailure]) -> None:
+    """Fire an event whose stored payload the codec can no longer rebuild."""
+    receiver(Unheard, key=key, on_failure=seen.append)(lambda event: None)
+    with transaction.atomic():
+        fire(Unheard(value=1))
+    EventRecord.objects.update(payload={})
+
+
+def test_a_payload_that_will_not_decode_is_logged_as_it_is_dead_lettered(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The attempt is counted and the row goes straight to ``dead``, so it is a
+    failed attempt the relay recorded, and the line says so. The hook is not
+    told: the receiver never ran, and whether it should hear about a payload it
+    was never handed is a separate decision from logging it."""
+    seen: list[DeliveryFailure] = []
+    _fire_undecodable("probe.undecodable", seen)
+
+    with caplog.at_level(logging.WARNING, logger=DELIVER_LOGGER):
+        drain_outbox(limit=10)
+
+    row = DeliveryRecord.objects.get(receiver_key="probe.undecodable")
+    assert row.status == DeliveryStatus.DEAD
+    assert [r.getMessage() for r in _failure_logs(caplog)] == [
+        f"receiver probe.undecodable failed delivery {row.pk} on attempt 1 with TypeError; "
+        f"the row is dead",
+    ]
+    assert seen == []
+
+
+def test_a_dead_letter_for_an_undecodable_payload_this_worker_could_not_record_logs_nothing(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """As at every other failure: the line follows the write, and a worker
+    whose write did not land recorded no attempt to log."""
+    _fire_undecodable("probe.undecodable_lost", [])
+    monkeypatch.setattr(
+        "django_domain_events.delivery.deliver._Fence.write", lambda self, **fields: None
+    )
+
+    with caplog.at_level(logging.WARNING, logger=DELIVER_LOGGER):
+        drain_outbox(limit=10)
+
+    assert _failure_logs(caplog) == []
+
+
+def test_a_row_whose_receiver_is_gone_is_orphaned_without_a_failure_line(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Orphaning counts no attempt and no receiver failed, so the failure log,
+    which promises one line per failed attempt, stays out of it."""
+    from tests.conftest import receiver_deleted
+
+    receiver(Unheard, key="probe.gone")(lambda event: None)
+    with transaction.atomic():
+        fire(Unheard(value=1))
+    with receiver_deleted("probe.gone"), caplog.at_level(logging.WARNING, logger=DELIVER_LOGGER):
+        drain_outbox(limit=10)
+
+    assert DeliveryRecord.objects.get(receiver_key="probe.gone").status == DeliveryStatus.ORPHANED
+    assert _failure_logs(caplog) == []
+
+
 def test_a_failure_no_exception_raised_says_so(caplog: pytest.LogCaptureFixture) -> None:
     """An event nobody registers any more fails without the receiver running,
     so there is no exception type to name, and the line says that rather than

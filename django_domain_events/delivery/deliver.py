@@ -178,12 +178,25 @@ def _deliver_one(
     except Exception as exc:
         # Terminal: it will not decode on the next attempt either, and one
         # undecodable row must not stop the other four thousand.
-        return fence.write(
+        outcome = fence.write(
             status=DeliveryStatus.DEAD,
             attempts=delivery.attempts + 1,
             last_error=f"{type(exc).__name__}: {exc}"[:2000],
             completed_at=timezone.now(),
         )
+        # It counted an attempt and dead-lettered the row, so it is logged like
+        # any other failed attempt, and only once the write landed
+        # (test_a_dead_letter_for_an_undecodable_payload_this_worker_could_not_record_logs_nothing).
+        # The receiver's ``on_failure`` is not told: it was never handed this
+        # payload, and opting it into hearing about one is a separate decision.
+        if outcome is not None:
+            _log_failure(
+                delivery,
+                status=DeliveryStatus.DEAD,
+                attempt=delivery.attempts + 1,
+                error_type=type(exc).__name__,
+            )
+        return outcome
 
     attempt = delivery.attempts + 1
     context = DeliveryContext(
@@ -718,6 +731,17 @@ def _report_failure(
     and the backoff, and a deferral that spends no attempt by
     ``give_up_after`` (``test_a_deferral_and_its_give_up_are_logged_too``).
     """
+    _log_failure(row, status=status, attempt=attempt, error_type=error_type)
+    _notify_failure(row, status=status, attempt=attempt, error=error)
+
+
+def _log_failure(row: Any, *, status: DeliveryStatus, attempt: int, error_type: str | None) -> None:
+    """The one warning line a failed attempt writes, in one shape everywhere.
+
+    Apart from ``_report_failure`` because a payload that will not decode is
+    logged without telling the receiver's hook
+    (``test_a_payload_that_will_not_decode_is_logged_as_it_is_dead_lettered``).
+    """
     logger.warning(
         "receiver %s failed delivery %s on attempt %s with %s; the row is %s",
         row.receiver_key,
@@ -726,7 +750,6 @@ def _report_failure(
         error_type if error_type is not None else "no exception",
         status,
     )
-    _notify_failure(row, status=status, attempt=attempt, error=error)
 
 
 def _notify_failure(row: Any, *, status: DeliveryStatus, attempt: int, error: str) -> None:
