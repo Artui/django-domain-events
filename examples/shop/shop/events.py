@@ -6,6 +6,7 @@ something a real application would want.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -92,6 +93,14 @@ class InvoiceSent:
     earlier than when the shop records it. A receiver's `due=` delay counts
     from that time, the domain's own, rather than from the recording.
     """
+
+    order_id: int
+
+
+@event(name="shop.OrderDelivered")
+@dataclass(frozen=True, slots=True)
+class OrderDelivered:
+    """The carrier confirmed the parcel arrived, so the customer can review it."""
 
     order_id: int
 
@@ -374,3 +383,29 @@ def chase_unpaid_invoice(evt: InvoiceSent, ctx: DeliveryContext) -> None:
         if quiet_until > max(ctx.due_at, timezone.now()):
             raise NotYet(quiet_until, reason="the customer heard from us in the last three days")
     SentEmail.objects.create(to=to, subject=f"Reminder: the invoice for order {order.pk} is unpaid")
+
+
+@receiver(OrderDelivered, mode=DURABLE, key="shop.ask_for_a_review")
+async def ask_for_a_review(evt: OrderDelivered) -> None:
+    """`async def`, because the review platform's client only comes in async.
+
+    It runs to completion wherever its delivery runs - in the relay here - on
+    an event loop of its own, and its writes go through Django's async ORM,
+    which hops back to the relay's thread and connection: the request it
+    records commits with the delivery's acknowledgement, and would roll back
+    with it if the receiver raised. Everything else about the delivery -
+    attempts, backoff, dead letters - is what a sync receiver gets.
+
+    A real client is made inside the call, never at module level: each call
+    runs on a fresh loop, closed when it returns, so a client bound to the
+    last call's loop fails on the next with `Event loop is closed`.
+    """
+    from shop.models import Order, SentEmail
+
+    order = await Order.objects.select_related("customer").aget(pk=evt.order_id)
+    # Stands in for awaiting the review platform's client.
+    await asyncio.sleep(0)
+    await SentEmail.objects.acreate(
+        to=order.customer.email or "nobody@example.com",
+        subject=f"How was order {order.pk}?",
+    )

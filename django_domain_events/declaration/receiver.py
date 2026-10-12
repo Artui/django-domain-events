@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import datetime, timedelta
 from typing import Literal, TypeVar, overload
 
@@ -9,12 +9,14 @@ from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_receiver import DEFAULT_LANE, RegisteredReceiver
-from django_domain_events.utils import label_for
+from django_domain_events.utils import is_async_callable, label_for
 
 E = TypeVar("E")
 
-Plain = Callable[[E], None]
-WithContext = Callable[[E, DeliveryContext], None]
+# A receiver may be ``async def``, so its return is None or an awaitable of it.
+# Without the awaitable, a checker rejects every async receiver at the decorator.
+Plain = Callable[[E], Awaitable[None] | None]
+WithContext = Callable[[E, DeliveryContext], Awaitable[None] | None]
 Targets = Callable[[E, DeliveryContext], Iterable[str]]
 Due = Callable[[E], datetime]
 
@@ -100,6 +102,22 @@ def receiver(
     on-commit latency, at the cost of a duplicate when the process dies
     mid-receiver - which at-least-once already required everyone to tolerate.
 
+    The receiver may be declared ``async def``, at every ``mode``. It is run to
+    completion where a function would be called - in ``fire()`` for INLINE, at
+    commit for ON_COMMIT, in the relay, a task or an eager attempt for DURABLE -
+    through ``asgiref.sync.async_to_sync``: on a fresh event loop of its own,
+    while the calling thread serves its ``sync_to_async`` calls, so Django's
+    async ORM writes land in the transaction carrying the acknowledgement and
+    roll back with it. What it buys is the ability to call async libraries,
+    not concurrency: the relay still runs one delivery at a time. Because the
+    loop is new on every call, a client bound to a loop cannot be shared
+    between calls. A coroutine that is cancelled is a failed attempt. A sync
+    callable that returns an awaitable - a ``functools.wraps`` decorator around
+    an ``async def`` - is refused at the call with ``TypeError``, rather than
+    recorded as done with its body never run; mark such a wrapper with
+    ``asgiref.sync.markcoroutinefunction``. ``on_failure`` may be ``async def``
+    on the same terms. ``targets`` and ``due`` may not; see below.
+
     ``on_failure`` is called after a failed attempt has been recorded, outside
     the transaction that was just rolled back, so a receiver can keep a durable
     record of its own failure. It could not before: everything a receiver writes
@@ -148,6 +166,10 @@ def receiver(
 
     ``replay_events`` calls it again, so a replay goes to the targets that exist
     at replay time.
+
+    It must be a plain function, not ``async def``, and so must a ``due``
+    callable: each would cost an event loop per receiver per fire, inside the
+    caller's request, for what is a database read. Either is refused here.
 
     ``backoff_base_seconds`` and ``backoff_cap_seconds`` override
     ``BACKOFF_BASE_SECONDS`` and ``BACKOFF_CAP_SECONDS`` for this receiver alone,
@@ -231,6 +253,22 @@ def receiver(
         # Refused here rather than at the first fire, which would raise inside
         # somebody's business transaction for a declaration mistake.
         raise TypeError(f"targets must be callable, got {type(targets).__name__}")
+    for name, resolver in (("targets", targets), ("due", due)):
+        if is_async_callable(resolver):
+            # Both run in the caller's transaction on every fire, so each would
+            # start an event loop per receiver per event inside somebody's
+            # request, for work the docs tell it to do with the sync ORM. Both
+            # already fail at the first fire - a coroutine is neither iterable
+            # nor a datetime - so refusing moves that failure to import. A sync
+            # wrapper returning a coroutine cannot be seen here, and still fails
+            # at the fire. One guard per name, held by
+            # test_an_async_targets_callable_is_refused and
+            # test_an_async_due_callable_is_refused.
+            raise TypeError(
+                f"{name}= must be a plain function, not async def. It runs inside the "
+                f"caller's transaction every time the event fires, so it is not run "
+                f"on an event loop; read what it needs with the sync ORM."
+            )
     if lease_seconds is not None and lease_seconds <= 0:
         # A zero lease expires the instant before the receiver starts, so a
         # second relay reclaims the row immediately and both run it - the exact

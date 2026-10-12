@@ -13,7 +13,7 @@ from django.utils import timezone
 from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
-from django_domain_events.delivery.fire import call_receiver
+from django_domain_events.delivery.fire import call_receiver, run_to_completion
 from django_domain_events.delivery.hand_back import hand_back
 from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.permanent_failure import PermanentFailure
@@ -774,7 +774,12 @@ def _notify_failure(row: Any, *, status: DeliveryStatus, attempt: int, error: st
     if receiver is None or receiver.on_failure is None:
         return
     try:
-        receiver.on_failure(
+        # Through the receivers' adapter, so an ``async def`` hook runs rather
+        # than being built and dropped, and a cancelled or refused one is an
+        # ``Exception`` the line below can swallow
+        # (test_an_async_on_failure_hook_that_fails_is_logged_and_swallowed).
+        run_to_completion(
+            receiver.on_failure,
             DeliveryFailure(
                 delivery_id=row.pk,
                 event_id=row.event_id,
@@ -784,7 +789,7 @@ def _notify_failure(row: Any, *, status: DeliveryStatus, attempt: int, error: st
                 status=status,
                 error=error,
                 target=row.target,
-            )
+            ),
         )
     except Exception:
         logger.exception(

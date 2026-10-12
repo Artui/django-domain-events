@@ -345,3 +345,50 @@ def test_a_due_time_runs_through_a_task_as_through_the_relay() -> None:
         assert registry.receiver_for_key("tests.task_due").site == "task"
     finally:
         registry._receivers.pop("tests.task_due", None)
+
+
+# targets= and due= stay synchronous
+
+
+async def _async_targets(evt: OrderPlaced, ctx: DeliveryContext) -> list[str]:
+    return ["a"]
+
+
+async def _async_when(evt: OrderPlaced) -> datetime:
+    return evt.placed_at
+
+
+class _AsyncTargets:
+    async def __call__(self, evt: OrderPlaced, ctx: DeliveryContext) -> list[str]:
+        return ["a"]
+
+
+@pytest.mark.parametrize("targets", [_async_targets, _AsyncTargets()], ids=["function", "object"])
+def test_an_async_targets_callable_is_refused(targets: object) -> None:
+    """It runs in the caller's transaction on every fire, where a fresh event
+    loop per receiver per event is a cost paid by every write, and it would
+    fail at the first fire anyway: a coroutine is not iterable."""
+    with pytest.raises(TypeError, match="targets= must be a plain function"):
+        receiver(OrderPlaced, key="tests.async_targets", targets=targets)
+    assert registry.receiver_for_key("tests.async_targets") is None
+
+
+def test_an_async_due_callable_is_refused() -> None:
+    """Resolved in the caller's transaction for the same reason, and a coroutine
+    is not a datetime, so it would fail at the first fire."""
+    with pytest.raises(TypeError, match="due= must be a plain function"):
+        receiver(OrderPlaced, key="tests.async_due", due=_async_when)
+    assert registry.receiver_for_key("tests.async_due") is None
+
+
+def test_an_async_receiver_is_accepted() -> None:
+    """Only the two callables resolved at fire time are refused; the receiver
+    itself may be ``async def``."""
+
+    @receiver(OrderPlaced, key="tests.async_receiver")
+    async def handler(evt: OrderPlaced) -> None: ...
+
+    try:
+        assert registry.receiver_for_key("tests.async_receiver").func is handler
+    finally:
+        registry._receivers.pop("tests.async_receiver", None)
