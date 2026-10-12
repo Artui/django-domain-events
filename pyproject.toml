@@ -160,7 +160,7 @@ skip-magic-trailing-comma = false
 root = ["./django_domain_events"]
 
 [tool.bumpversion]
-current_version = "0.11.2"
+current_version = "0.12.0"
 allow_dirty = false
 commit = false
 tag = false
