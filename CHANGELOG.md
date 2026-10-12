@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that ends one are logged too, and so is a payload that will not decode, as
   it is dead-lettered (its receiver's `on_failure` is not told, since the
   receiver never ran). A row orphaned because its receiver is gone counts no
-  attempt and is not logged. As with `on_failure`, a worker whose lease lapsed
+  attempt and is not logged as a failed attempt. As with `on_failure`, a worker whose lease lapsed
   logs nothing.
 - `ReceiverBacklog.claimed`: how many of a receiver's owed rows a worker holds,
   the per-receiver half of `OutboxHealth.claimed`, from the same grouped query.
