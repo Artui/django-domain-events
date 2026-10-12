@@ -12,9 +12,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
+import django
 import pytest
 from django.contrib.auth.models import User
-from django.db import transaction
+from django.db import connection, transaction
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone as django_timezone
 
 from django_domain_events.declaration.event import event
@@ -284,6 +286,41 @@ def test_one_target_is_enough_to_wake_the_relay() -> None:
         fire(Unheard(value=1))
 
     notify.assert_called_once_with()
+
+
+@pytest.mark.skipif(
+    connection.vendor != "postgresql" or django.VERSION < (5, 2, 9),
+    reason=(
+        "needs a PostgreSQL server; Django's PostgreSQL compiler writes UNNEST from "
+        "5.2 and refuses it to a field with a placeholder hook from 5.2.9; earlier "
+        "versions cannot tell"
+    ),
+)
+def test_a_fan_out_is_written_by_one_unnest_insert_on_postgres() -> None:
+    """The rows fire writes, not only a bare ``bulk_create``: any value the
+    compiler has to render as SQL, such as an expression for a due time, would
+    send the whole insert back to one VALUES tuple per row, and so would a
+    field with a placeholder hook."""
+    targets = [f"endpoint-{n}" for n in range(5)]
+    receiver(Unheard, key="probe.unnest", targets=lambda event, context: targets)(
+        lambda event: None
+    )
+    table = DeliveryRecord._meta.db_table
+
+    with CaptureQueriesContext(connection) as queries, transaction.atomic():
+        fire(Unheard(value=1))
+
+    [insert] = [
+        q["sql"] for q in queries.captured_queries if q["sql"].startswith(f'INSERT INTO "{table}"')
+    ]
+    assert "UNNEST" in insert
+    assert "VALUES" not in insert
+    stored = DeliveryRecord.objects.filter(receiver_key="probe.unnest").values_list(
+        "target", "target_digest"
+    )
+    assert {target: bytes(digest) for target, digest in stored} == {
+        target: hashlib.sha256(target.encode()).digest() for target in targets
+    }
 
 
 def test_the_callable_is_handed_the_event_and_the_fire_time_context() -> None:

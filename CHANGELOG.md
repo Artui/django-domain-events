@@ -7,6 +7,141 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-10-12
+
+### Fixed
+- On Postgres with Django 5.2.9 or later, every multi-row insert of delivery
+  rows - a fan-out in `fire()`, and the rows `replay_events` writes for
+  targets it finds missing - was written as a `VALUES` tuple per row rather
+  than Django's `UNNEST` form, which binds one array per column, at about
+  twice the cost per row. Django gives that form up for a whole insert when
+  any field has a placeholder hook, and the target digest column inherited
+  `BinaryField`'s. The field now has none, under either name Django has used
+  for it. Its class path, column type and migrations are unchanged, as is the
+  SQL on SQLite and for single-row inserts, and so are the stored values. The
+  one edge is a receiver key longer than its 255-character column: on Django
+  5.2.9 and 6.0.0 exactly the `UNNEST` cast truncates it where `VALUES` raised
+  `DataError`, as it already did on 5.2.0 to 5.2.8, and Django dropped the
+  length from that cast in 5.2.10 and 6.0.1. A declaration can no longer
+  produce such a key; see Changed.
+- On MySQL, as the cost of the fix above, an insert or update of a target
+  digest no longer carries the `_binary` prefix, so each such write raises
+  warning 1300, as every lookup on the column always did. The stored bytes are
+  unchanged. Checked by hand against MySQL 9.6 with mysqlclient 2.3.0 under
+  the default strict `sql_mode`, not in CI; not tested on MariaDB, PyMySQL,
+  MySQL 8.x or a `utf8mb4` connection charset. A project running warnings as
+  errors can filter MySQLdb's warning 1300 where it writes that column.
+
+### Added
+- `AROUND_DELIVERY` setting: a dotted path to a callable that takes the
+  attempt's `DeliveryContext` and returns a context manager, entered around
+  every durable attempt (relay, eager attempt, `deliver_pending`,
+  `drain_outbox`, `deliver_one`, and the task worker) and never around
+  `INLINE` or `ON_COMMIT` receivers, the relay's hand-off of a `site="task"`
+  row, or a row that never reaches its receiver. It sits outside the
+  transaction carrying the acknowledgement and is exited once the outcome is
+  recorded, so `on_failure` and the failure log line run inside it.
+  `__exit__` receives the receiver's exception, and its return value is
+  ignored. An `Exception` from `__exit__` is logged and swallowed; a
+  `BaseException` propagates, and the recorded outcome stands. An exception on
+  entering the hook, including a path that no longer imports, fails the
+  attempt as the receiver raising would. The hook must not open a transaction,
+  since one would hold the outcome's write. The path is read on every
+  delivery.
+- `DeliveryContext.receiver_key`: the key of the receiver the context was
+  built for. It is set on every durable delivery and on the contexts that
+  `INLINE` and `ON_COMMIT` receivers and `targets=` callables receive, at fire
+  time and on `replay_events`. It is last and defaulted, so constructing a
+  `DeliveryContext` by keyword is unchanged.
+- System check `E011`: `AROUND_DELIVERY` is not a string, does not import, or
+  names something not callable.
+- `async def` receivers run, at every mode, through `asgiref.sync.async_to_sync`.
+  Its async ORM writes land in the transaction carrying the acknowledgement and
+  roll back with it. `RetryAfter`, `NotYet` and `PermanentFailure` raised from
+  it are read exactly as from a function, and events it fires through
+  `sync_to_async(fire)` record it as their cause. A coroutine that is cancelled
+  is a failed attempt, recorded with a `RuntimeError` naming the receiver, and
+  retried. An `on_failure` hook may be `async def` too. Outside ASGI each call
+  runs on an event loop of its own, closed when it returns, so a task it starts
+  and does not await is cancelled; under ASGI an `INLINE` or `ON_COMMIT`
+  coroutine runs on the server's loop. Either way a client bound to a loop
+  cannot be shared between calls. What it buys is the ability to call async
+  libraries, not concurrency. A relay's second signal, which ends a sync
+  receiver at once, waits for an in-flight coroutine to return; a third signal
+  ends the process.
+
+### Changed
+- A receiver whose key is longer than 255 characters, whether given as `key=`
+  or derived from the app label and function name, now raises `ValueError`
+  where it is declared, in every mode. Declaration runs at import, so a project
+  declaring one fails to start until the key is shortened. 255 is the width of
+  the column delivery rows store the key in. The length was never checked:
+  SQLite stores any length, so a `DURABLE` receiver with such a key worked
+  there, while Postgres either truncated the key in a bulk insert (Django 5.2.0
+  to 5.2.8, and 5.2.9 and 6.0.0 once the fix above lets them use `UNNEST`,
+  leaving the delivery orphaned as renamed, moved or deleted) or raised `DataError` when an event fired. `INLINE` and `ON_COMMIT`
+  receivers store no key and worked on every backend; they are refused too, so
+  a key stays valid when its mode changes. The message names the key's length
+  and the limit; set a shorter `key=`.
+- An event whose name is longer than 255 characters, given as `name=` or
+  derived from the app label and class name, now raises `ValueError` where it
+  is declared, as a receiver key longer than its column does, above. The
+  column is `EventRecord.name`. SQLite stores any length, so such an event
+  worked there; on Postgres every `fire()` of it raised `DataError` from the
+  insert, inside the caller's transaction. An existing declaration over the
+  limit was therefore already broken on Postgres, and after upgrading it fails
+  at startup instead of at the first fire. The message names the name's length
+  and the limit; set a shorter `name=`.
+- A sync callable that returns an awaitable, and an `async def` with `yield` in
+  its body, are refused at the call with a `TypeError` naming the fix. Earlier
+  versions skipped their body silently. After upgrading, a `DURABLE` one's
+  deliveries fail, are retried and dead-letter after `max_attempts`; an
+  `ON_COMMIT` one logs the error; an `INLINE` one raises from `fire()` and rolls
+  back the caller's transaction. `targets=` and `due=` refuse an `async def` at
+  the decorator with `TypeError`; both already failed at the first fire.
+- Upgrade note: `async def` receivers already declared start running on
+  upgrade, and an `INLINE` one can now veto by raising. `DURABLE` deliveries
+  that earlier versions recorded `succeeded` for such a receiver never ran.
+  `replay_events(event_ids, receiver_keys=[key])` reopens them, for events not
+  yet pruned; the ids are `DeliveryRecord.objects.filter(receiver_key=key,
+  status="succeeded").values_list("event_id", flat=True)`. `INLINE` and
+  `ON_COMMIT` runs left no row and cannot be replayed.
+- A claim leases its rows for the lease its lane needs, with 10 percent of
+  headroom: `lease_seconds` times 1.1 where every durable receiver it can take
+  declares the same lease, and `LEASE_SECONDS` times 1.1 otherwise, never
+  more. A delivery whose claimed lease is still its receiver's own - between
+  that lease and 1.1 times it from now, under this worker - starts without
+  extending it, in the relay, `deliver_pending`, the eager attempt, at the
+  task hand-off and in the task worker. The extension writes an indexed
+  column, so on Postgres each skip is one non-HOT update fewer. Measured on
+  Postgres 16 over 5,000 deliveries of a no-op receiver in batches of 50, all
+  in the band: the relay went from 3 to 2 non-HOT updates and from 20.8 to
+  13.3 WAL records per delivery, and the task site from 4 to 2 and from 31.0
+  to 15.9; the take stays a HOT update. WAL bytes per delivery went from 1757
+  to 1310 on the relay (25 percent less) and from 2597 to 1533 at the task
+  site in a steady state, and from 2163 to 2010 (7 percent) and from 3043 to
+  1991 just after a checkpoint. A lane mixing leases and a relay on a clock
+  moved forward are unchanged. A real lane skips only the rows that start
+  within a tenth of the lease of their claim, so a large batch of slow sends
+  saves less.
+- Upgrade note: an unstarted row of a crashed relay is claimable again after
+  its lane's lease times 1.1 - 66 seconds in a lane of `lease_seconds=60`
+  receivers, where it waited out `LEASE_SECONDS` - and the default lane with
+  no overrides goes from 300 to 330 seconds. A lane whose receivers declare a
+  lease longer than `LEASE_SECONDS` recovers in `LEASE_SECONDS` times 1.1, as
+  the default lane does (330 seconds), not in its own lease times 1.1: a claim
+  stamps `LEASE_SECONDS` times 1.1 at most. A lane whose receivers all
+  declare a short lease now has to start a whole batch inside that lease
+  times 1.1 rather than inside `LEASE_SECONDS`, and that binds every claim of
+  it: a relay's batch, a `deliver_events --once --limit` claim, a
+  `deliver_pending()` batch and the eager attempt. Past it, another worker
+  takes the tail. Relays with worker ids of their own never both run a row:
+  the first logs that it lost the row before running it, and the relays
+  churn. Two `deliver_pending()` callers left on its default `worker_id`
+  cannot be told apart and can both run the tail, as they always could once a
+  claim lapsed, now after 66 seconds rather than 300; give each its own. See
+  "The lease a claim stamps" in the operations docs.
+
 ## [0.11.2] — 2026-10-12
 
 ### Fixed
@@ -771,7 +906,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.11.2...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/Artui/django-domain-events/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/Artui/django-domain-events/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/Artui/django-domain-events/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/Artui/django-domain-events/compare/v0.10.0...v0.11.0

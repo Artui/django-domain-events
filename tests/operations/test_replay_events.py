@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from datetime import datetime, timedelta
 from unittest import mock
 
+import django
 import pytest
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
@@ -237,6 +238,43 @@ def test_a_fan_out_replay_goes_to_the_targets_that_exist_now(owed_targets: list[
         ("b", DeliveryStatus.PENDING, 0),
         ("c", DeliveryStatus.PENDING, 0),
     ]
+
+
+@pytest.mark.skipif(
+    connection.vendor != "postgresql" or django.VERSION < (5, 2, 9),
+    reason=(
+        "needs a PostgreSQL server; Django's PostgreSQL compiler writes UNNEST from "
+        "5.2 and refuses it to a field with a placeholder hook from 5.2.9; earlier "
+        "versions cannot tell"
+    ),
+)
+def test_the_targets_a_replay_adds_are_written_by_one_unnest_insert_on_postgres(
+    owed_targets: list[str],
+) -> None:
+    """Replay's own insert, with ``ignore_conflicts`` and the due time it
+    computes: a value the compiler had to render as SQL, or a field with a
+    placeholder hook, would send it back to a VALUES tuple per row. Three
+    missing targets, since one row is VALUES whatever the fields."""
+    with transaction.atomic():
+        event_id = fire(Unheard(value=1))
+    owed_targets[:] = ["a", "b", "c", "d", "e"]
+    table = DeliveryRecord._meta.db_table
+
+    with CaptureQueriesContext(connection) as queries:
+        assert replay_events([event_id]) == {"reopened": 0, "added": 3}
+
+    [insert] = [
+        q["sql"] for q in queries.captured_queries if q["sql"].startswith(f'INSERT INTO "{table}"')
+    ]
+    assert "UNNEST" in insert
+    assert "ON CONFLICT DO NOTHING" in insert
+    assert "VALUES" not in insert
+    stored = DeliveryRecord.objects.filter(receiver_key="probe.fan").values_list(
+        "target", "target_digest"
+    )
+    assert {target: bytes(digest) for target, digest in stored} == {
+        target: hashlib.sha256(target.encode()).digest() for target in "abcde"
+    }
 
 
 def test_a_blank_row_from_before_the_receiver_fanned_out_is_left_alone() -> None:

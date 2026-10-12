@@ -6,6 +6,8 @@ something a real application would want.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -27,6 +29,8 @@ from django_domain_events import (
     fire,
     receiver,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @event(name="shop.OrderPlaced", version=2)
@@ -96,6 +100,14 @@ class InvoiceSent:
     order_id: int
 
 
+@event(name="shop.OrderDelivered")
+@dataclass(frozen=True, slots=True)
+class OrderDelivered:
+    """The carrier confirmed the parcel arrived, so the customer can review it."""
+
+    order_id: int
+
+
 @receiver(OrderPlaced, mode=INLINE)
 def refuse_orders_we_cannot_fill(evt: OrderPlaced) -> None:
     """INLINE, because this one is allowed to veto the sale.
@@ -120,11 +132,16 @@ def reserve_stock(evt: OrderPlaced) -> None:
     at-least-once entitles you to cannot be observed here. It also fires a
     follow-up event, which the relay automatically records as caused by this
     one - no plumbing at the call site.
+
+    Its log line says nothing about which delivery it is, and needs not to:
+    the AROUND_DELIVERY hook in ``shop/delivery_log.py`` puts the delivery and
+    receiver ids on it.
     """
     from shop.models import Order, Reservation, StockLevel
 
     order = Order.objects.get(pk=evt.order_id)
     Reservation.objects.get_or_create(order=order, defaults={"quantity": evt.quantity})
+    logger.info("reserved %s of %s for order %s", evt.quantity, evt.sku, evt.order_id)
     StockLevel.objects.filter(sku=evt.sku).update(available=F("available") - evt.quantity)
     fire(StockReserved(order_id=evt.order_id, sku=evt.sku, quantity=evt.quantity))
 
@@ -374,3 +391,29 @@ def chase_unpaid_invoice(evt: InvoiceSent, ctx: DeliveryContext) -> None:
         if quiet_until > max(ctx.due_at, timezone.now()):
             raise NotYet(quiet_until, reason="the customer heard from us in the last three days")
     SentEmail.objects.create(to=to, subject=f"Reminder: the invoice for order {order.pk} is unpaid")
+
+
+@receiver(OrderDelivered, mode=DURABLE, key="shop.ask_for_a_review")
+async def ask_for_a_review(evt: OrderDelivered) -> None:
+    """`async def`, because the review platform's client only comes in async.
+
+    It runs to completion wherever its delivery runs - in the relay here - on
+    an event loop of its own, and its writes go through Django's async ORM,
+    which hops back to the relay's thread and connection: the request it
+    records commits with the delivery's acknowledgement, and would roll back
+    with it if the receiver raised. Everything else about the delivery -
+    attempts, backoff, dead letters - is what a sync receiver gets.
+
+    A real client is made inside the call, never at module level: each call
+    runs on a fresh loop, closed when it returns, so a client bound to the
+    last call's loop fails on the next with `Event loop is closed`.
+    """
+    from shop.models import Order, SentEmail
+
+    order = await Order.objects.select_related("customer").aget(pk=evt.order_id)
+    # Stands in for awaiting the review platform's client.
+    await asyncio.sleep(0)
+    await SentEmail.objects.acreate(
+        to=order.customer.email or "nobody@example.com",
+        subject=f"How was order {order.pk}?",
+    )

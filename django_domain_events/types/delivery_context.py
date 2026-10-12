@@ -7,7 +7,10 @@ from typing import Any
 
 @dataclass(frozen=True, slots=True)
 class DeliveryContext:
-    """Delivery metadata, passed only to receivers declaring ``takes_context``.
+    """Delivery metadata, passed to receivers declaring ``takes_context``.
+
+    Also to a ``targets=`` callable, at fire time, and to the
+    ``AROUND_DELIVERY`` hook, once per durable attempt.
 
     Frozen data read off the event row, never a live handle: a durable delivery
     can run in another process hours after the scope that produced it has gone.
@@ -58,4 +61,14 @@ class DeliveryContext:
     replay or requeue reopened it, or else when its event was recorded.
 
     None where no row exists, as for ``delivery_id``. Optional and last for the
+    same reason as ``target``."""
+
+    receiver_key: str = ""
+    """The key of the receiver this context was built for.
+
+    Set wherever a receiver is known: on every durable delivery, on the context
+    an INLINE or ON_COMMIT receiver receives, and on the one a ``targets=``
+    callable is asked with. What an ``AROUND_DELIVERY`` hook labels a span, a
+    metric or a log line by, since the hook is handed this context and not the
+    receiver. Blank only on a context built by hand. Optional and last for the
     same reason as ``target``."""

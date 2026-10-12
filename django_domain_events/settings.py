@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from typing import Any
 
 from django.conf import settings
 from django.utils.module_loading import import_string
 
 from django_domain_events.codecs.payload_codec import PayloadCodec
+from django_domain_events.types.delivery_context import DeliveryContext
 
 SETTINGS_NAME = "DJANGO_DOMAIN_EVENTS"
 
@@ -25,6 +28,7 @@ DEFAULTS: dict[str, Any] = {
     "RELAY_PRUNE": True,
     "RELAY_PRUNE_SECONDS": 60,
     "TASK_BACKEND": None,
+    "AROUND_DELIVERY": None,
 }
 
 
@@ -62,3 +66,15 @@ def get_codec() -> PayloadCodec:
     another, silently.
     """
     return import_string(setting("CODEC"))()
+
+
+def get_around_delivery() -> Callable[[DeliveryContext], AbstractContextManager[Any]] | None:
+    """The configured ``AROUND_DELIVERY`` factory, or None when there is none.
+
+    Resolved on every delivery and not cached, for the reason ``get_codec``
+    gives (``test_the_path_is_read_on_every_delivery``). A path that does not
+    import raises here, inside the attempt, which fails it: the system check
+    ``E011`` is what catches the typo before a delivery does.
+    """
+    path = setting("AROUND_DELIVERY")
+    return None if path is None else import_string(path)

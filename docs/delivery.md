@@ -117,6 +117,11 @@ adding a little on top of it. Retrying a shared downstream at
 ceiling-plus-a-bit keeps every failed delivery in the same cohort, which is the
 thundering herd the backoff was meant to break up.
 
+An [`async def` receiver](declaring.md#async-receivers) fails the same way, and
+**a coroutine that is cancelled before it finishes counts as a failure**: the
+attempt is spent and the row retried, with a `RuntimeError` naming the receiver
+as `last_error`.
+
 **The backoff is a floor, not a schedule.** `available_at` is the earliest a
 retry can run, and the relay claims in order of `available_at` and then id, so a
 retry due in a minute also waits for every row that came due before it. With an
@@ -248,6 +253,125 @@ An attempt whose connection was lost before anything could be written is not
 logged either, because nothing recorded it; the lease lapsing is what puts it
 back in the queue. See
 [Side effects inside the acknowledging transaction](operations.md#side-effects-inside-the-acknowledging-transaction).
+
+## A hook around each delivery
+
+Tracing, a log context, a tenant schema or a database role: anything that has to
+be in place for the length of one attempt, for every receiver, goes in the
+[`AROUND_DELIVERY`](settings.md#around_delivery) setting rather than in each
+receiver. It names a callable that takes the attempt's `DeliveryContext` and
+returns a context manager:
+
+```python
+# myproject/delivery_log.py
+import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+from django_domain_events import DeliveryContext
+
+current_delivery: ContextVar[str] = ContextVar("current_delivery", default="-")
+
+
+@contextmanager
+def delivery_log_context(ctx: DeliveryContext) -> Iterator[None]:
+    token = current_delivery.set(f"delivery={ctx.delivery_id} receiver={ctx.receiver_key}")
+    try:
+        yield
+    finally:
+        current_delivery.reset(token)
+
+
+class DeliveryLogFilter(logging.Filter):
+    """Put the ids on every line logged while a delivery runs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.delivery = current_delivery.get()
+        return True
+```
+
+```python
+DJANGO_DOMAIN_EVENTS = {"AROUND_DELIVERY": "myproject.delivery_log.delivery_log_context"}
+```
+
+`DeliveryContext.receiver_key` is there for this: the hook is handed the
+context, not the receiver, and the key is what a span, a metric or a log line is
+labelled by. The path is read on every delivery and not cached, as `CODEC` is,
+so `override_settings` in a test takes effect at once. A path that does not
+import, or that names something not callable, fails the system check `E011`.
+
+**Where it sits.** Around the attempt, outside the transaction that carries the
+acknowledgement. The receiver runs, the outcome is recorded, and only then is
+`__exit__` called. So:
+
+- **`__exit__` sees the receiver's exception**, the same object, with its
+  traceback, so a span can take its error status.
+- **Its return value is ignored.** Returning `True` cannot suppress a failure,
+  because the failure has already been recorded.
+- **An `Exception` from `__exit__` is logged at `ERROR` and swallowed.** It
+  cannot undo an acknowledgement for work already done, or turn a recorded
+  success into a failure that would run the work again. A `BaseException` from
+  `__exit__` propagates, and the outcome recorded before it stands.
+- **`on_failure`, and the failure log line above, run inside the hook**, so a log
+  context it sets is on those lines too.
+- **What the hook writes is not part of the receiver's transaction**, so it is
+  not rolled back when the receiver raises. If it has to commit with the
+  receiver's work, it belongs in the receiver.
+- **The hook must not open a transaction.** The outcome is written after the
+  receiver's transaction closes and before `__exit__` runs, so a
+  `transaction.atomic()` the hook entered would hold that write, and exiting it
+  with the receiver's exception would roll the recorded failure back after the
+  log line and `on_failure` reported it. Set a tenant schema or role at session
+  level (`SET search_path`, `SET ROLE`) and reset it on exit, rather than with
+  `SET LOCAL`.
+- **Recorded is not always committed.** Run from the relay or a task, the
+  delivery's transaction is the outermost one and has committed by the time
+  `__exit__` runs. Run inside a transaction of your own - `deliver_pending()`
+  under `atomic()` in a test, say - the outcome is written into that
+  transaction, which is still open.
+- **A `BaseException`** - `KeyboardInterrupt`, a task runner's timeout - reaches
+  `__exit__` and then propagates. The row stays claimed until its lease lapses,
+  as it would without the hook.
+- **An `async def` receiver changes none of this.** The hook is entered on the
+  calling thread, before the coroutine starts, a `ContextVar` it sets is visible
+  inside the coroutine, and `__exit__` gets the coroutine's own exception.
+
+**Entering it fails the attempt if it raises.** The receiver does not run, the
+attempt counts, the row records the hook's error and `on_failure` is told: read
+exactly as if the receiver had raised. That is deliberate. A hook that sets the
+tenant a receiver writes to must not let the receiver run without it, and a
+broken tracer dead-lettering loudly is recoverable with `requeue_dead`, where
+receivers writing to the wrong tenant are not. So an instrumentation hook should
+guard its own exporter calls. A path that no longer imports, or a factory
+returning something that is not a context manager, fails the attempt the same
+way. Because the verdict is read as a receiver's, a hook raising `NotYet` or
+`RetryAfter` on entry gets their semantics.
+
+**What it wraps.** Durable deliveries, each attempt once, wherever they run: the
+relay, the eager attempt after commit, `deliver_pending`, `drain_outbox`,
+`deliver_one`, and the task worker for a `site="task"` receiver. The relay's
+hand-off of a `site="task"` row runs no receiver and is not wrapped, so that row
+is wrapped once, in the worker. **What it never wraps:** `INLINE` and
+`ON_COMMIT` receivers, which run in the caller's own request under whatever
+context it already has, and a row that never reaches its receiver - orphaned,
+undecodable, for an event no longer declared, not owed, lost to another worker,
+or a task message whose claim is stale. Each of those is logged already.
+
+**One callable.** Several hooks compose in your own callable, with
+`contextlib.ExitStack`:
+
+```python
+from contextlib import ExitStack
+
+
+@contextmanager
+def around_delivery(ctx: DeliveryContext) -> Iterator[None]:
+    with ExitStack() as stack:
+        stack.enter_context(delivery_log_context(ctx))
+        stack.enter_context(tracing_span(ctx))
+        yield
+```
 
 ## When the receiver knows better
 

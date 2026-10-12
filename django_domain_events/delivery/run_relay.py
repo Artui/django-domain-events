@@ -90,7 +90,13 @@ def run_relay(
     also sizes prune batches and requeue chunks. Every row of a batch is
     claimed under one lease, and a row still waiting its turn when that lease
     lapses is taken by another relay, so a slow lane wants a batch it can work
-    through inside ``LEASE_SECONDS``.
+    through inside the lease its claim stamps. That is the lane's own lease
+    plus 10 percent where every durable receiver in it shares one no longer
+    than ``LEASE_SECONDS``, and ``LEASE_SECONDS`` plus 10 percent otherwise: 66 seconds, not
+    ``LEASE_SECONDS``, for a lane of receivers declaring ``lease_seconds=60``.
+    A row that starts while its claimed lease is still its receiver's own
+    starts without extending it, which saves a write per delivery, so a batch
+    whose rows all start inside a tenth of the lease costs the fewest.
 
     A relay that finds nothing to claim also prunes, so an event declared to be
     deleted on consumption goes within minutes without a ``prune_events`` cron
@@ -138,7 +144,6 @@ def run_relay(
         )
     registry.require_lane(lane)
 
-    lease = timedelta(seconds=setting("LEASE_SECONDS"))
     batch_size = claim_size(batch_size)
     poll = setting("POLL_SECONDS")
     sweep = setting("RELAY_PRUNE")
@@ -178,7 +183,11 @@ def run_relay(
                 else claim_batch(
                     worker_id=worker_id,
                     now=claimed_at,
-                    lease=lease,
+                    # The lane's own lease with its headroom, read per claim as
+                    # its membership is (test_a_relay_claims_a_uniform_lane_under_its_own_lease).
+                    lease=timedelta(
+                        seconds=registry.claim_lease_seconds(lane, default=setting("LEASE_SECONDS"))
+                    ),
                     limit=batch_size,
                     lane=lane,
                     exclude_lanes=paused.keys(),

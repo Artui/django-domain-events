@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import datetime, timedelta
 from typing import Literal, TypeVar, overload
 
@@ -9,12 +9,22 @@ from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_receiver import DEFAULT_LANE, RegisteredReceiver
-from django_domain_events.utils import label_for
+from django_domain_events.utils import is_async_callable, label_for
 
 E = TypeVar("E")
 
-Plain = Callable[[E], None]
-WithContext = Callable[[E, DeliveryContext], None]
+# The width of ``DeliveryRecord.receiver_key`` and ``ReceiverLastSuccess.receiver_key``,
+# both ``CharField(max_length=255)``. Carried as a number rather than read off the
+# field because a decorator runs while apps are still loading - declaring a receiver
+# with an explicit ``key=`` works before ``django.setup()`` - and importing a model
+# there raises ``AppRegistryNotReady``. Held to the columns by
+# test_the_limit_is_the_width_of_both_columns_that_store_the_key.
+_MAX_KEY_LENGTH = 255
+
+# A receiver may be ``async def``, so its return is None or an awaitable of it.
+# Without the awaitable, a checker rejects every async receiver at the decorator.
+Plain = Callable[[E], Awaitable[None] | None]
+WithContext = Callable[[E, DeliveryContext], Awaitable[None] | None]
 Targets = Callable[[E, DeliveryContext], Iterable[str]]
 Due = Callable[[E], datetime]
 
@@ -30,7 +40,7 @@ def receiver(
     eager: bool = False,
     site: str = "relay",
     lease_seconds: int | None = None,
-    on_failure: Callable[[DeliveryFailure], None] | None = None,
+    on_failure: Callable[[DeliveryFailure], Awaitable[None] | None] | None = None,
     targets: Targets[E] | None = None,
     backoff_base_seconds: float | None = None,
     backoff_cap_seconds: float | None = None,
@@ -49,7 +59,7 @@ def receiver(
     eager: bool = False,
     site: str = "relay",
     lease_seconds: int | None = None,
-    on_failure: Callable[[DeliveryFailure], None] | None = None,
+    on_failure: Callable[[DeliveryFailure], Awaitable[None] | None] | None = None,
     targets: Targets[E] | None = None,
     backoff_base_seconds: float | None = None,
     backoff_cap_seconds: float | None = None,
@@ -67,7 +77,7 @@ def receiver(
     eager: bool = False,
     site: str = "relay",
     lease_seconds: int | None = None,
-    on_failure: Callable[[DeliveryFailure], None] | None = None,
+    on_failure: Callable[[DeliveryFailure], Awaitable[None] | None] | None = None,
     targets: Targets[E] | None = None,
     backoff_base_seconds: float | None = None,
     backoff_cap_seconds: float | None = None,
@@ -86,6 +96,15 @@ def receiver(
     declaring one and writing the other fails at the decorator rather than in
     the relay hours later.
 
+    ``key`` is written onto every delivery row of a ``DURABLE`` receiver and is
+    what the row is found by, so it may not be longer than the column that holds
+    it, 255 characters. A longer one - explicit, or derived from a very long
+    function name - is refused here with ``ValueError``, because the database
+    either truncates it, orphaning the delivery, or raises at fire time; SQLite
+    enforces nothing, so it would pass a test suite and fail in production. The
+    rule holds at every ``mode``, though ``INLINE`` and ``ON_COMMIT`` store no
+    key, so that a key stays valid when its mode changes.
+
     ``max_attempts`` is copied onto each delivery row at fire time.
 
     ``site`` is the execution knob, separate from ``mode`` on purpose: timing is
@@ -99,6 +118,24 @@ def receiver(
     loses. It is what stops ``DURABLE`` feeling slow: outbox durability at
     on-commit latency, at the cost of a duplicate when the process dies
     mid-receiver - which at-least-once already required everyone to tolerate.
+
+    The receiver may be declared ``async def``, at every ``mode``. It is run to
+    completion where a function would be called - in ``fire()`` for INLINE, at
+    commit for ON_COMMIT, in the relay, a task or an eager attempt for DURABLE -
+    through ``asgiref.sync.async_to_sync``, while the calling thread serves its
+    ``sync_to_async`` calls, so Django's async ORM writes land in the
+    transaction carrying the acknowledgement and roll back with it. Outside
+    ASGI each call runs on a fresh event loop of its own, closed when it
+    returns; under ASGI an INLINE or ON_COMMIT coroutine runs on the server's
+    loop. Either way a client bound to a loop cannot be shared between calls.
+    What it buys is the ability to call async libraries, not concurrency: the
+    relay still runs one delivery at a time. A coroutine that is cancelled is
+    a failed attempt. A sync callable that returns an awaitable - a
+    ``functools.wraps`` decorator around an ``async def`` - or an ``async def``
+    containing ``yield`` is refused at the call with ``TypeError``, rather than
+    recorded as done with its body never run; mark such a wrapper with
+    ``asgiref.sync.markcoroutinefunction``. ``on_failure`` may be ``async def``
+    on the same terms. ``targets`` and ``due`` may not; see below.
 
     ``on_failure`` is called after a failed attempt has been recorded, outside
     the transaction that was just rolled back, so a receiver can keep a durable
@@ -115,7 +152,10 @@ def receiver(
     offering the receiver a way to extend its lease from the inside, because
     that cannot work: the receiver runs inside the transaction that carries its
     acknowledgement, so anything it writes is invisible to every other worker
-    until it has already finished.
+    until it has already finished. Where every durable receiver in its lane
+    declares the same lease, it is also the lease the lane's claims stamp - at
+    most ``LEASE_SECONDS``, plus 10 percent of headroom - so it changes how big
+    a batch the lane can work through before the batch's tail lapses.
 
     ``targets`` makes the receiver a **fan-out**: a callable taking the event and
     a ``DeliveryContext``, returning the strings this event is owed to - endpoint
@@ -148,6 +188,10 @@ def receiver(
 
     ``replay_events`` calls it again, so a replay goes to the targets that exist
     at replay time.
+
+    It must be a plain function, not ``async def``, and so must a ``due``
+    callable: each would cost an event loop per receiver per fire, inside the
+    caller's request, for what is a database read. Either is refused here.
 
     ``backoff_base_seconds`` and ``backoff_cap_seconds`` override
     ``BACKOFF_BASE_SECONDS`` and ``BACKOFF_CAP_SECONDS`` for this receiver alone,
@@ -231,6 +275,22 @@ def receiver(
         # Refused here rather than at the first fire, which would raise inside
         # somebody's business transaction for a declaration mistake.
         raise TypeError(f"targets must be callable, got {type(targets).__name__}")
+    for name, resolver in (("targets", targets), ("due", due)):
+        if is_async_callable(resolver):
+            # Both run in the caller's transaction on every fire, so each would
+            # start an event loop per receiver per event inside somebody's
+            # request, for work the docs tell it to do with the sync ORM. Both
+            # already fail at the first fire - a coroutine is neither iterable
+            # nor a datetime - so refusing moves that failure to import. A sync
+            # wrapper returning a coroutine cannot be seen here, and still fails
+            # at the fire. One guard per name, held by
+            # test_an_async_targets_callable_is_refused and
+            # test_an_async_due_callable_is_refused.
+            raise TypeError(
+                f"{name}= must be a plain function, not async def. It runs inside the "
+                f"caller's transaction every time the event fires, so it is not run "
+                f"on an event loop; read what it needs with the sync ORM."
+            )
     if lease_seconds is not None and lease_seconds <= 0:
         # A zero lease expires the instant before the receiver starts, so a
         # second relay reclaims the row immediately and both run it - the exact
@@ -342,9 +402,28 @@ def receiver(
                 )
 
     def decorate(func: Callable[..., None]) -> Callable[..., None]:
+        resolved_key = key if key is not None else _derived_key(func)
+        if len(resolved_key) > _MAX_KEY_LENGTH:
+            # Checked on the final key so an explicit and a derived one are held
+            # alike, and before anything is registered. Postgres truncates the key
+            # in the bulk insert (Django 5.2.0-5.2.9, 6.0.0) or raises DataError
+            # at fire time; SQLite enforces nothing. INLINE and ON_COMMIT write no
+            # row, and are held to the rule anyway so a key stays valid when its
+            # mode changes. Three things the coverage gate cannot see: the boundary -
+            # test_a_key_of_exactly_the_limit_is_accepted fails on ``>=``; the derived
+            # path, which test_a_derived_key_over_the_limit_is_refused fails without;
+            # and the mode, which test_a_long_key_is_refused_in_every_mode fails
+            # without (a check scoped to DURABLE).
+            raise ValueError(
+                f"Receiver key {resolved_key[:60]!r}... is {len(resolved_key)} characters; "
+                f"the limit is {_MAX_KEY_LENGTH}, the width of the column delivery rows "
+                f"store a key in, and it applies in every mode so that a key stays valid "
+                f"when its mode changes. A longer one is truncated or rejected by the "
+                f"database only when an event fires. Set a shorter key=."
+            )
         registry.register_receiver(
             RegisteredReceiver(
-                key=key if key is not None else _derived_key(func),
+                key=resolved_key,
                 event_class=event_class,
                 func=func,
                 mode=mode,

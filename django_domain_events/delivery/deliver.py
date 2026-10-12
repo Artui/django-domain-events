@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import random
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -10,10 +11,10 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from django.utils import timezone
 
-from django_domain_events.declaration.registry import registry
+from django_domain_events.declaration.registry import LEASE_HEADROOM, registry
 from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
-from django_domain_events.delivery.fire import call_receiver
+from django_domain_events.delivery.fire import call_receiver, run_to_completion
 from django_domain_events.delivery.hand_back import hand_back
 from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.permanent_failure import PermanentFailure
@@ -21,7 +22,7 @@ from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.utils import OnDeferral, claim_size, partition_by_lane
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.scope.causation import caused_by
-from django_domain_events.settings import get_task_backend, setting
+from django_domain_events.settings import get_around_delivery, get_task_backend, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_status import DeliveryStatus
@@ -57,7 +58,8 @@ def deliver_one(
     at-least-once, as promised.
 
     Every write here is a compare-and-set against the claim this call read, and
-    the lease is extended to cover this one delivery before the receiver runs.
+    the lease is extended to cover this one delivery before the receiver runs,
+    unless the claim already leased it for this receiver.
     Both exist for the same reason: a claim can lapse while its worker is still
     alive, and a worker that has lost its row must not go on to write a verdict
     over whoever legitimately took it. Losing the row returns ``None`` rather
@@ -138,9 +140,18 @@ def _deliver_one(
     # says how long the lease should be. A registry lookup touches no rows, so
     # nothing is written before ownership has been re-established.
     receiver = registry.receiver_for_key(delivery.receiver_key)
-    seconds = setting("LEASE_SECONDS") if receiver is None else receiver.lease_seconds
+    seconds = _lease_seconds(receiver)
 
-    if delivery.status == DeliveryStatus.CLAIMED and not fence.extend_lease(now, seconds):
+    # A row the claim already leased for this receiver starts without the
+    # extension, which would rewrite the lease to what it already is at the
+    # cost of a non-HOT update. The status is the band's fourth condition: a
+    # row that is not CLAIMED is extended by nobody
+    # (test_an_unclaimed_row_passed_directly_writes_no_lease).
+    if (
+        delivery.status == DeliveryStatus.CLAIMED
+        and not fence.leased_for(delivery, now, seconds)
+        and not fence.extend_lease(now, seconds)
+    ):
         logger.warning(
             "worker %s lost delivery %s before running it; its lease had lapsed "
             "and another worker holds the row",
@@ -210,8 +221,26 @@ def _deliver_one(
         delivery_id=delivery.pk,
         # NULL read as the event's recorded_at, as give_up_after reads it.
         due_at=delivery.due_at if delivery.due_at is not None else delivery.event.recorded_at,
+        # What a hook labels its span or log line by
+        # (test_a_durable_receiver_is_told_its_own_key).
+        receiver_key=receiver.key,
     )
+    # The AROUND_DELIVERY hook wraps the attempt from out here, outside the
+    # transaction carrying the acknowledgement, and is driven by hand rather
+    # than by a ``with`` statement: by the time ``__exit__`` runs, the outcome
+    # has been recorded, so the hook can neither undo an acknowledgement nor
+    # turn a recorded success into a failure. Recorded, not necessarily
+    # committed: a delivery run inside the caller's own ``atomic()`` writes into
+    # that transaction
+    # (test_the_outcome_is_committed_before_exit_runs,
+    # test_inside_a_callers_transaction_the_outcome_is_recorded_not_committed).
+    around = _Around(context)
     try:
+        # Entering is inside the try: a hook that cannot be entered fails the
+        # attempt exactly as the receiver raising would, without running it
+        # (test_entering_raising_fails_the_attempt_without_running_the_receiver),
+        # and a NotYet or RetryAfter from it is read as a receiver's would be.
+        around.enter()
         with (
             transaction.atomic(using=write_alias()),
             caused_by(delivery.event.pk, delivery.event.correlation_id),
@@ -237,7 +266,6 @@ def _deliver_one(
                     receiver.key,
                 )
                 transaction.set_rollback(True, using=write_alias())
-            return outcome
     except Exception as exc:
         # The receiver's verdict is read here, at the one boundary every
         # execution site shares, and nowhere else. Both are ordinary failures
@@ -247,6 +275,11 @@ def _deliver_one(
         # test_an_ordinary_exception_is_not_read_as_a_deferral (an exception
         # with no ``counts`` would raise AttributeError here), ``counts`` by
         # test_a_counting_retry_after_still_spends_its_attempt.
+        #
+        # Recorded while the hook is still open, so ``on_failure`` and the
+        # failure's log line run inside it
+        # (test_on_failure_and_the_failure_warning_run_inside_the_hook).
+        around.raised = exc
         if isinstance(exc, NotYet):
             return _reschedule(fence, delivery, exc)
         if isinstance(exc, RetryAfter) and not exc.counts:
@@ -261,6 +294,94 @@ def _deliver_one(
             requested_delay=exc.seconds if isinstance(exc, RetryAfter) else None,
             error_type=type(exc).__name__,
         )
+    except BaseException as exc:
+        # A KeyboardInterrupt or a task runner's timeout signal is not a
+        # verdict on the delivery. The hook sees it and it goes on up; the row
+        # stays CLAIMED until its lease lapses, as it did before the hook
+        # (test_a_base_exception_reaches_exit_and_propagates).
+        around.raised = exc
+        raise
+    finally:
+        # In a finally, so the hook is closed on every path out, including a
+        # failure to record the outcome: a relay thread lives for days, and a
+        # hook left open leaves its log context on every later line
+        # (test_the_hook_is_exited_even_when_recording_the_failure_raises).
+        around.exit()
+    return outcome
+
+
+class _Around:
+    """The ``AROUND_DELIVERY`` hook for one attempt, entered and exited by hand.
+
+    ``raised`` is the exception the attempt ended with, which ``exit`` hands to
+    ``__exit__`` as a ``with`` statement would, so a tracing span gets its error
+    status (test_exit_sees_the_receivers_exception_and_cannot_suppress_it).
+    """
+
+    def __init__(self, context: DeliveryContext) -> None:
+        self.context = context
+        self.raised: BaseException | None = None
+        # The entered manager's bound ``__exit__``, or None while nothing is open.
+        self._exit: Callable[..., object] | None = None
+
+    def enter(self) -> None:
+        """Resolve the hook, build its context manager and enter it.
+
+        Resolving and building are part of entering: a path that does not
+        import, or a factory that returns no context manager, fails the attempt
+        like a raising ``__enter__``
+        (test_a_hook_that_cannot_be_entered_at_all_fails_the_attempt). The
+        manager is kept only once ``__enter__`` has returned, so one whose
+        ``__enter__`` raised is never exited, which is the ``with`` statement's
+        rule too (test_entering_raising_fails_the_attempt_without_running_the_receiver).
+        ``__exit__`` is looked up before ``__enter__`` is called, as the
+        ``with`` statement looks it up, so an object with no ``__exit__`` is
+        refused before anything was entered
+        (test_a_manager_with_no_exit_is_refused_before_it_is_entered).
+        """
+        factory = get_around_delivery()
+        if factory is None:
+            return
+        manager = factory(self.context)
+        exit_ = manager.__exit__
+        manager.__enter__()
+        self._exit = exit_
+
+    def exit(self) -> None:
+        """Close the hook, if one was entered, after the outcome was recorded.
+
+        ``__exit__``'s return value is ignored: the failure it might suppress
+        has already been recorded
+        (test_exit_sees_the_receivers_exception_and_cannot_suppress_it). An
+        ``Exception`` from it is logged and swallowed, and never reaches
+        ``_fail``, which would overwrite a recorded success and run the work
+        again
+        (test_exit_raising_after_a_success_leaves_the_acknowledgement_and_is_logged).
+        A ``BaseException`` from it propagates, and the recorded outcome stands
+        (test_a_base_exception_from_exit_propagates_and_the_success_stands).
+        """
+        # Both are dropped first, on every path, the no-hook one included. The
+        # exception holds its traceback, which holds ``_deliver_one``'s frame,
+        # which holds this object: kept here, that is a cycle only the garbage
+        # collector frees, and every failed attempt's frames, with whatever its
+        # receiver held in its locals, would outlive it
+        # (test_a_failed_attempt_leaves_no_reference_cycle).
+        exit_, self._exit = self._exit, None
+        exc, self.raised = self.raised, None
+        if exit_ is None:
+            return
+        try:
+            if exc is None:
+                exit_(None, None, None)
+            else:
+                exit_(type(exc), exc, exc.__traceback__)
+        except Exception:
+            logger.exception(
+                "the AROUND_DELIVERY hook raised on exit from delivery %s of receiver %s; "
+                "the delivery's outcome was already recorded and stands",
+                self.context.delivery_id,
+                self.context.receiver_key,
+            )
 
 
 def _owed(delivery: Any, now: datetime) -> bool:
@@ -291,6 +412,17 @@ def _owed(delivery: Any, now: datetime) -> bool:
     if delivery.status in TERMINAL:
         return False
     return not (delivery.status in RETRYABLE and delivery.available_at > now)
+
+
+def _lease_seconds(receiver: RegisteredReceiver | None) -> int:
+    """The lease this receiver's delivery needs: its own, or ``LEASE_SECONDS``.
+
+    A row whose receiver is gone gets the setting, which is what the claim of
+    the default lane, where such rows drain, falls back to as well.
+    """
+    if receiver is None or receiver.lease_seconds is None:
+        return setting("LEASE_SECONDS")
+    return receiver.lease_seconds
 
 
 def _take(delivery_id: int, claimed_by: str | None, claimed_at: str | None, worker_id: str) -> bool:
@@ -347,6 +479,52 @@ class _Fence:
             pk=self.pk, claimed_by=self.claimed_by, claimed_at=self.claimed_at
         )
 
+    def leased_for(self, delivery: Any, now: datetime, seconds: int) -> bool:
+        """Whether the row as loaded is this call's, under the lease it needs.
+
+        True when the row names the owner this call believes it is and its
+        lease runs out between ``seconds`` and ``seconds`` times the headroom
+        from ``now``: what the extension would write, give or take the
+        headroom a claim stamps. The caller then skips the extension, which is
+        a write to ``lease_expires_at``, a column ``dde_claimed_by_lease`` is
+        keyed on, so never a HOT update.
+
+        Read from the row already loaded, so it costs no query. The extension's
+        compare-and-set checks ownership a moment later than this read does,
+        but a check at any instant before the receiver runs proves nothing
+        past that instant: what keeps the row this call's from then on is the
+        lease. A lease at least ``seconds`` ahead on this clock is one no other
+        claimer can take before then unless its clock runs that far ahead of
+        this one, which is what the extension assumed too, since it wrote
+        ``now`` plus the same ``seconds`` on this clock. A takeover past that is
+        caught by the final fenced write, as one past a lapsed lease always
+        was.
+
+        ``now`` is the clock the caller reads, ``timezone.now()``, naive under
+        ``USE_TZ = False`` as the column is. A lease written on an injected
+        clock moved forward, or back by more than a tenth of the lease, lies
+        outside the band, so the extension runs as it always did. Hence the
+        upper bound as well as the lower one. A clock moved back by less
+        leaves it inside, and the row starts under a lease still at least
+        ``seconds`` ahead, which is all the extension would have written
+        (``test_a_row_claimed_on_a_slightly_earlier_clock_starts_without_extending``).
+
+        The caller checks the status, the band's fourth condition. Each other
+        condition is in one arc, so each names its test in
+        ``tests/delivery/test_lease_band.py``: the owner -
+        ``test_a_row_another_worker_took_in_band_is_not_run`` and
+        ``test_a_row_another_worker_took_in_band_is_not_enqueued``; a lease at
+        all - ``test_a_claimed_row_with_no_lease_is_extended_and_delivered``;
+        the lower bound - ``test_a_row_started_late_in_its_batch_is_extended``;
+        the upper bound - ``test_a_row_claimed_on_a_later_clock_is_extended``.
+        """
+        if delivery.claimed_by != self.claimed_by or delivery.lease_expires_at is None:
+            return False
+        remaining = delivery.lease_expires_at - now
+        return (
+            timedelta(seconds=seconds) <= remaining <= timedelta(seconds=seconds * LEASE_HEADROOM)
+        )
+
     def extend_lease(self, now: datetime, seconds: int | None = None) -> bool:
         """Push the lease out to cover this delivery alone.
 
@@ -354,9 +532,11 @@ class _Fence:
         then delivers them one at a time; without this the lease is a budget for
         the whole batch and runs out partway through it.
 
-        ``seconds`` is the receiver's own override when it declared one. This is
-        the only moment a lease can be sized to the work, because it is the last
-        one before the receiver's transaction opens and stops publishing.
+        ``seconds`` is the receiver's own lease, ``LEASE_SECONDS`` when None.
+        This is the only moment a lease can be sized to the work, because it is
+        the last one before the receiver's transaction opens and stops
+        publishing. A row the claim already leased for the receiver needs none
+        (``leased_for``).
         """
         lease = timedelta(seconds=seconds if seconds is not None else setting("LEASE_SECONDS"))
         return bool(self._owned().update(lease_expires_at=now + lease))
@@ -391,7 +571,10 @@ def dispatch_one(
     The lease is extended here for the same reason ``deliver_one`` extends it,
     and it matters more: the row now has to survive the queue's backlog as well
     as the receiver's own runtime, and this is the last moment before the relay
-    stops looking at it.
+    stops looking at it. A row handed off soon after its claim that already holds
+    the receiver's lease, within the claim's headroom, is handed off as it
+    is; the task then finds the same lease after its take and, if the queue was
+    quick, starts without extending it either.
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
 
@@ -422,8 +605,14 @@ def dispatch_one(
     # handed off: an unclaimed row has no claim to carry, and the task taking it
     # would be refused. Each half has its own test, since the two are one arc:
     # test_an_unclaimed_row_is_not_enqueued and test_a_lost_row_is_not_enqueued.
-    if delivery.status != DeliveryStatus.CLAIMED or not fence.extend_lease(
-        timezone.now(), receiver.lease_seconds
+    # A row the claim already leased for this receiver is handed off without the
+    # extension, under the same band as in ``_deliver_one``, and the queue still
+    # has at least the receiver's lease
+    # (test_a_hand_off_right_after_the_claim_writes_no_lease).
+    now = timezone.now()
+    seconds = _lease_seconds(receiver)
+    if delivery.status != DeliveryStatus.CLAIMED or not (
+        fence.leased_for(delivery, now, seconds) or fence.extend_lease(now, seconds)
     ):
         logger.warning(
             "worker %s does not hold delivery %s, so it was not enqueued", worker_id, delivery_id
@@ -774,7 +963,12 @@ def _notify_failure(row: Any, *, status: DeliveryStatus, attempt: int, error: st
     if receiver is None or receiver.on_failure is None:
         return
     try:
-        receiver.on_failure(
+        # Through the receivers' adapter, so an ``async def`` hook runs rather
+        # than being built and dropped, and a cancelled or refused one is an
+        # ``Exception`` the line below can swallow
+        # (test_an_async_on_failure_hook_that_fails_is_logged_and_swallowed).
+        run_to_completion(
+            receiver.on_failure,
             DeliveryFailure(
                 delivery_id=row.pk,
                 event_id=row.event_id,
@@ -784,7 +978,7 @@ def _notify_failure(row: Any, *, status: DeliveryStatus, attempt: int, error: st
                 status=status,
                 error=error,
                 target=row.target,
-            )
+            ),
         )
     except Exception:
         logger.exception(
@@ -843,7 +1037,6 @@ def deliver_pending(
             f"would be ignored. Pass one or the other."
         )
     registry.require_lane(lane)
-    lease = timedelta(seconds=setting("LEASE_SECONDS"))
     batch_size = claim_size(batch_size)
 
     counts: dict[DeliveryStatus, int] = {}
@@ -880,7 +1073,12 @@ def deliver_pending(
         ids = claim_batch(
             worker_id=worker_id,
             now=claimed_at,
-            lease=lease,
+            # The lane's own lease with its headroom, so a row that starts
+            # soon after the claim needs no extension; read per claim, as the
+            # lane's membership is (test_a_uniform_lane_is_claimed_under_its_own_lease).
+            lease=timedelta(
+                seconds=registry.claim_lease_seconds(lane, default=setting("LEASE_SECONDS"))
+            ),
             limit=limit if limit is not None else batch_size,
             ignore_backoff=ignore_backoff,
             lane=lane,

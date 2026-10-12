@@ -54,10 +54,11 @@ python manage.py deliver_events --lane mail --batch-size 5
 - **`--batch-size` sizes this process's claims** in place of `BATCH_SIZE`, which
   also sizes prune batches and requeue chunks. Every row of a batch is claimed
   under one lease, and a row still waiting its turn when the lease lapses is
-  taken by another relay, so a slow lane wants a batch it can send inside
-  `LEASE_SECONDS`. With `--once` it cannot be combined with `--limit`, which is
-  one claim of exactly that many rows; the pair is refused rather than the
-  batch silently ignored.
+  taken by another relay, so a slow lane wants a batch it can work through
+  inside the lease its claim stamps: see
+  [the lease a claim stamps](#the-lease-a-claim-stamps). With `--once` it
+  cannot be combined with `--limit`, which is one claim of exactly that many
+  rows; the pair is refused rather than the batch silently ignored.
 - **An `eager=True` attempt still runs in the firing process**, whatever the
   lane: the lane decides which relay picks up what eager delivery did not
   finish.
@@ -95,18 +96,85 @@ command: ["python", "manage.py", "deliver_events", "--lane", "mail", "--batch-si
 replicas: 4
 ```
 
+### The lease a claim stamps
+
+Each delivery needs its receiver's lease: its `lease_seconds=`, or
+`LEASE_SECONDS` where it declares none. A claim stamps one lease across every
+row it takes, so it stamps the lease its lane needs, with a fixed 10 percent
+of headroom:
+
+| What the claim takes | It stamps |
+| --- | --- |
+| A lane whose durable receivers all need the same lease, s, no longer than `LEASE_SECONDS` | s x 1.1 |
+| A lane whose receivers all need the same lease, longer than `LEASE_SECONDS` | `LEASE_SECONDS` x 1.1 |
+| A lane mixing leases, or every lane at once (`lane=None`) | `LEASE_SECONDS` x 1.1 |
+| The default lane | as above, over the receivers declared in no named lane |
+| The `eager=True` attempt after commit | as above, over every eager receiver |
+
+So a claim never stamps more than `LEASE_SECONDS` x 1.1. A lane of receivers
+declaring a longer lease, `lease_seconds=1800` say, is claimed for
+`LEASE_SECONDS` x 1.1 like the default lane, and each row is extended to its
+own lease when it starts: a relay killed holding such a batch leaves its
+unstarted rows for 330 seconds, not 1980.
+
+Before it runs a row, the relay extends the row's lease to the receiver's own,
+unless the lease the claim stamped still is that: between s and s x 1.1 from
+now, on the relay's clock, and still naming this relay as the owner. A row
+started within s x 0.1 of its claim therefore needs no extension. On Postgres
+the extension is a write to an indexed column and never a HOT update, so each
+row that skips it costs one non-HOT update fewer. A row whose receiver needs a
+different lease from the one its claim stamped is extended as before: a
+60-second receiver in a mixed lane holds 60 seconds, not 330. So is every row
+claimed on a moved clock, `run_relay(now=...)` or `drain_outbox(now=...)`,
+when the clock was moved forward, or back by more than a tenth of the lease:
+either puts the stamped lease outside the band on the real clock. A clock
+moved back by less leaves it inside, and the row starts without the extension,
+under a lease still at least its receiver's own.
+
+What it means for a lane of receivers that all declare `lease_seconds=60`,
+when `LEASE_SECONDS` is the default 300:
+
+- **A crashed relay's unstarted rows are claimable again after 66 seconds**,
+  where every row but the one in flight used to wait out `LEASE_SECONDS`. The
+  default lane with no overrides goes from 300 seconds to 330.
+- **A row in flight may hold up to 66 seconds** rather than 60.
+- **The batch has to start inside 66 seconds, not inside `LEASE_SECONDS`**:
+  batch size times seconds per delivery stays under s x 1.1. That binds every
+  claim of the lane, not only a relay's: a `deliver_events --once --limit`
+  claim of that many rows, a `deliver_pending()` batch, and the eager attempt,
+  which claims every eager row of one `fire()` at once. Past that, the tail of
+  the batch lapses while it waits its turn and another worker takes it.
+  Relays with worker ids of their own never both run a row: the first finds
+  the row gone when it tries to extend the lease, and logs that it lost the row
+  before running it, but the relays churn over each other's batches. Two
+  callers sharing one worker id cannot be told apart, so two
+  `deliver_pending()` calls left on its default `worker_id` can both run the
+  tail. They always could, once a claim lapsed; in such a lane it now lapses
+  after 66 seconds rather than 300. Give each its own `worker_id`.
+- **Every row skips the extension when the batch starts inside s x 0.1**:
+  batch size at most s x 0.1 / seconds per delivery, plus one. At a second a
+  send that is 7 rows for a 60-second lane, which also fits 66 rows inside
+  the lease; `--batch-size 5` does both. Rows past that are extended as
+  before, so a bigger batch costs writes, not correctness.
+
 ### Stopping it
 
 `SIGTERM`, or `SIGINT` from Ctrl-C, asks the relay to stop. It finishes the
 delivery it is running, gives back the rest of the batch it claimed, and exits.
 A row given back keeps its place at the head of the queue and any other relay
-can claim it at once, rather than when its lease lapses (`LEASE_SECONDS`, five
+can claim it at once, rather than when its lease lapses
+([the lease its claim stamped](#the-lease-a-claim-stamps), five and a half
 minutes by default). Giving a row back is expiring its lease, so until another
 relay takes it, it is counted in `outbox_health().lapsed_leases`.
 
 A second signal exits at once, with status 128 plus the signal number. The
 receiver running at that moment is interrupted and its transaction rolls back.
 Its row is reclaimed when the lease lapses, as a crashed worker's would be.
+
+An `async def` receiver is the exception: its transaction rolls back, but the
+coroutine runs on an event loop in another thread that a signal cannot reach,
+and the process exits only once that coroutine returns. A third signal ends it
+then. Give whatever the coroutine awaits a timeout.
 
 How long a stop takes:
 
@@ -553,11 +621,13 @@ cover the queue's backlog as well as the receiver's own run.
 
 #### The lease has to outlast the queue
 
-The lease the relay sets at the hand-off is the time the message has to reach
-a worker. The task extends it again before the receiver runs, so the run is
-covered on its own; what the hand-off lease has to cover is the wait in the
-queue, which is the backlog ahead of the message divided by the rate the
-workers drain it:
+The lease the row holds at the hand-off is the time the message has to reach
+a worker: at least the receiver's `lease_seconds=`, whether the claim stamped
+it or the relay extended it there. The task extends it again before the
+receiver runs, unless the queue delivered it soon enough that the lease still
+is the receiver's own, so the run is covered on its own; what the hand-off
+lease has to cover is the wait in the queue, which is the backlog ahead of the
+message divided by the rate the workers drain it:
 
 ```
 lease_seconds > messages ahead / (workers x tasks per second per worker)
@@ -592,6 +662,39 @@ receiver.
     anywhere. A missing `TASK_BACKEND` is refused **at delivery**, and only for
     the receivers that asked for one, so configuring no backend cannot break
     receivers that never wanted it. Neither case silently runs in the relay.
+
+## What a fan-out costs
+
+A [fan-out](declaring.md#fan-out-one-delivery-per-target) writes its rows inside
+`fire()`, so the write that fired the event pays for them, in its transaction.
+They go in as one `INSERT` on Postgres. From Django 5.2 that statement binds
+**one array per column** and reads the rows back out of `UNNEST`, where the
+alternative is a `VALUES` tuple per row with a placeholder per cell, for the
+driver to bind and the server to parse and plan. From 5.2.9 Django keeps the
+`UNNEST` form only while no field in the insert has a placeholder hook, and the
+delivery row's target digest column has none for that reason. SQLite, and
+Django before 5.2, write `VALUES` for every multi-row insert.
+
+One consumer measured `fire()` at about 130 microseconds a target while the
+insert was `VALUES`. Timing `bulk_create` of delivery rows alone, on Postgres
+16, gives about 55 to 75 microseconds a row as `VALUES` and about 30 as
+`UNNEST`, from a thousand rows to twenty thousand.
+
+!!! note "On MySQL, a digest write raises warning 1300"
+    The hook the digest column no longer has is also what put MySQL's
+    `_binary` prefix on it, so every insert or update of a digest raises
+    warning 1300, as every lookup on the column always has. The stored bytes
+    are unchanged. This was checked by hand against MySQL 9.6 with mysqlclient
+    2.3.0 under the default strict `sql_mode`, not in CI, and not on MariaDB,
+    PyMySQL, MySQL 8.x or a `utf8mb4` connection charset. A project that runs
+    warnings as errors will see these, and can filter MySQLdb's warning 1300
+    where it writes the `target_digest` column.
+
+The rest of the cost is the `targets=` callable, which runs once per fired event
+for every fan-out receiver owed it. Make it **one `SELECT`** returning the
+strings - `values_list("pk", flat=True)`, as in the example on the declaring
+page - rather than a loop over model instances, which builds an object per
+target only to discard it, or a query per candidate.
 
 ## Knowing it is working
 
