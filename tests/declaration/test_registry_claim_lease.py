@@ -61,6 +61,19 @@ def test_a_receiver_declaring_no_lease_counts_as_the_default() -> None:
     assert same.claim_lease_seconds("mail", default=SETTING) == SETTING * LEASE_HEADROOM
 
 
+def test_a_lane_sharing_a_lease_longer_than_the_default_is_claimed_under_the_default() -> None:
+    """Capped, so a lane of long receivers recovers a crashed batch's unstarted
+    rows as soon as it did before rather than after their own half hour."""
+    registry = _registry(
+        {"lane": "reports", "lease_seconds": 1800}, {"lane": "reports", "lease_seconds": 1800}
+    )
+    assert registry.claim_lease_seconds("reports", default=SETTING) == SETTING * LEASE_HEADROOM
+    eager = _registry({"eager": True, "lease_seconds": 1800})
+    assert eager.claim_lease_seconds(None, default=SETTING, eager=True) == (
+        SETTING * LEASE_HEADROOM
+    )
+
+
 def test_no_durable_receiver_is_claimed_under_the_default() -> None:
     assert Registry().claim_lease_seconds(None, default=SETTING) == SETTING * LEASE_HEADROOM
 
@@ -79,7 +92,7 @@ def test_a_named_lane_counts_only_its_own_receivers() -> None:
         {"lane": "mail", "lease_seconds": 60}, {"lane": "reports", "lease_seconds": 1800}
     )
     assert registry.claim_lease_seconds("mail", default=SETTING) == 60 * LEASE_HEADROOM
-    assert registry.claim_lease_seconds("reports", default=SETTING) == 1800 * LEASE_HEADROOM
+    assert registry.claim_lease_seconds("reports", default=SETTING) == SETTING * LEASE_HEADROOM
 
 
 def test_the_default_lane_counts_the_receivers_in_no_named_lane() -> None:

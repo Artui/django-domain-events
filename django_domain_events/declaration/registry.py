@@ -119,6 +119,14 @@ class Registry:
         one, and None is every receiver. ``eager`` narrows them to the eager
         ones, for the attempt after commit, which claims only their rows.
 
+        The base never exceeds ``default``. A lane of receivers declaring a
+        longer lease than ``LEASE_SECONDS`` is claimed under the setting, as
+        before, and each row extended to its own lease when it starts: stamped
+        with theirs, the unstarted tail of a batch a relay was killed holding
+        would wait out half an hour rather than five and a half minutes
+        (``test_a_long_lease_lane_recovers_in_the_setting``). Such a lane gains
+        no skip, and loses no recovery time.
+
         ``default`` is ``LEASE_SECONDS``, passed in rather than read here so the
         registry stays free of settings. Asked on every claim, as lane
         membership is, so it is whatever the declarations say at that moment.
@@ -136,8 +144,8 @@ class Registry:
             and (r.eager or not eager)
             and (lane is None or r.lane == lane)
         }
-        base = leases.pop() if len(leases) == 1 else default
-        return base * LEASE_HEADROOM
+        shared = leases.pop() if len(leases) == 1 else default
+        return min(shared, default) * LEASE_HEADROOM
 
     def require_lane(self, lane: str | None) -> None:
         """Refuse a lane no receiver is declared in.

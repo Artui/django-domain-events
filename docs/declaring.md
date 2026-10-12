@@ -58,7 +58,7 @@ def reserve_stock(evt: OrderPlaced) -> None: ...
 | `max_attempts` | `5` | Copied onto each row **at fire time**. |
 | `eager` | `False` | Also attempt immediately after commit, relay as fallback. |
 | `site` | `"relay"` | Where the code runs. `"task"` hands it to a task backend. |
-| `lease_seconds` | `None` | Override `LEASE_SECONDS` for a receiver that runs long. |
+| `lease_seconds` | `None` | Override `LEASE_SECONDS` for a receiver that runs long. Where its whole lane declares the same lease, it is also what the lane's claims stamp, capped at `LEASE_SECONDS`, and so how big a batch fits: see [the lease a claim stamps](operations.md#the-lease-a-claim-stamps). |
 | `takes_context` | `False` | Receive a second `DeliveryContext` argument. |
 | `on_failure` | `None` | Called after a failed attempt is recorded. See [delivery](delivery.md#recording-a-failed-attempt). |
 | `targets` | `None` | One delivery per target this returns. See [fan-out](#fan-out-one-delivery-per-target). |

@@ -105,10 +105,16 @@ of headroom:
 
 | What the claim takes | It stamps |
 | --- | --- |
-| A lane whose durable receivers all need the same lease, s | s x 1.1 |
+| A lane whose durable receivers all need the same lease, s, no longer than `LEASE_SECONDS` | s x 1.1 |
+| A lane whose receivers all need the same lease, longer than `LEASE_SECONDS` | `LEASE_SECONDS` x 1.1 |
 | A lane mixing leases, or every lane at once (`lane=None`) | `LEASE_SECONDS` x 1.1 |
-| The default lane | either of the above, over the receivers declared in no named lane |
-| The `eager=True` attempt after commit | either of the above, over every eager receiver |
+| The default lane | as above, over the receivers declared in no named lane |
+| The `eager=True` attempt after commit | as above, over every eager receiver |
+
+So a claim never stamps more than `LEASE_SECONDS` x 1.1. A lane of receivers
+declaring a longer lease, `lease_seconds=1800` say, is claimed as it always
+was, and each row is extended to its own lease when it starts: a relay killed
+holding such a batch leaves its unstarted rows for 330 seconds, not 1980.
 
 Before it runs a row, the relay extends the row's lease to the receiver's own,
 unless the lease the claim stamped still is that: between s and s x 1.1 from
@@ -119,20 +125,31 @@ row that skips it costs one non-HOT update fewer. A row whose receiver needs a
 different lease from the one its claim stamped is extended as before: a
 60-second receiver in a mixed lane holds 60 seconds, not 330. So is every row
 claimed on a moved clock, `run_relay(now=...)` or `drain_outbox(now=...)`,
-whose lease is nowhere near what the real clock reads.
+when the clock was moved forward, or back by more than a tenth of the lease:
+either puts the stamped lease outside the band on the real clock. A clock
+moved back by less leaves it inside, and the row starts without the extension,
+under a lease still at least its receiver's own.
 
-What it means for a lane of receivers that all declare `lease_seconds=60`:
+What it means for a lane of receivers that all declare `lease_seconds=60`,
+when `LEASE_SECONDS` is the default 300:
 
 - **A crashed relay's unstarted rows are claimable again after 66 seconds**,
   where every row but the one in flight used to wait out `LEASE_SECONDS`. The
   default lane with no overrides goes from 300 seconds to 330.
 - **A row in flight may hold up to 66 seconds** rather than 60.
 - **The batch has to start inside 66 seconds, not inside `LEASE_SECONDS`**:
-  batch size times seconds per delivery stays under s x 1.1. Past that, the
-  tail of the batch lapses while it waits its turn and another relay of the
-  lane takes it. Nothing is sent twice - the first relay finds the row gone
-  when it tries to extend the lease, and logs that it lost the row before
-  running it - but the relays churn over each other's batches.
+  batch size times seconds per delivery stays under s x 1.1. That binds every
+  claim of the lane, not only a relay's: a `deliver_events --once --limit`
+  claim of that many rows, a `deliver_pending()` batch, and the eager attempt,
+  which claims every eager row of one `fire()` at once. Past that, the tail of
+  the batch lapses while it waits its turn and another worker takes it.
+  Relays with worker ids of their own never both run a row: the first finds
+  the row gone when it tries to extend the lease, and logs that it lost the row
+  before running it, but the relays churn over each other's batches. Two
+  callers sharing one worker id cannot be told apart, so two
+  `deliver_pending()` calls left on its default `worker_id` can both run the
+  tail. They always could, once a claim lapsed; in such a lane it now lapses
+  after 66 seconds rather than 300. Give each its own `worker_id`.
 - **Every row skips the extension when the batch starts inside s x 0.1**:
   batch size at most s x 0.1 / seconds per delivery, plus one. At a second a
   send that is 7 rows for a 60-second lane, which also fits 66 rows inside

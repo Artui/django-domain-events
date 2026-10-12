@@ -58,7 +58,8 @@ def deliver_one(
     at-least-once, as promised.
 
     Every write here is a compare-and-set against the claim this call read, and
-    the lease is extended to cover this one delivery before the receiver runs.
+    the lease is extended to cover this one delivery before the receiver runs,
+    unless the claim already leased it for this receiver.
     Both exist for the same reason: a claim can lapse while its worker is still
     alive, and a worker that has lost its row must not go on to write a verdict
     over whoever legitimately took it. Losing the row returns ``None`` rather
@@ -501,9 +502,12 @@ class _Fence:
 
         ``now`` is the clock the caller reads, ``timezone.now()``, naive under
         ``USE_TZ = False`` as the column is. A lease written on an injected
-        clock lies outside the band whichever way that clock was moved, so the
-        extension runs as it always did. Hence the upper bound as well as the
-        lower one.
+        clock moved forward, or back by more than a tenth of the lease, lies
+        outside the band, so the extension runs as it always did. Hence the
+        upper bound as well as the lower one. A clock moved back by less
+        leaves it inside, and the row starts under a lease still at least
+        ``seconds`` ahead, which is all the extension would have written
+        (``test_a_row_claimed_on_a_slightly_earlier_clock_starts_without_extending``).
 
         The caller checks the status, the band's fourth condition. Each other
         condition is in one arc, so each names its test in

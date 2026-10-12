@@ -18,7 +18,7 @@ are changing.
 | `CODEC` | `...DataclassCodec` | Encodes and decodes payloads. See [codecs](declaring.md#codecs). |
 | `WARN_OUTSIDE_ATOMIC` | `True` | Warn when `fire()` is called with no transaction open. |
 | `BATCH_SIZE` | `50` | Rows per claim and per requeue chunk. A relay may override it for its claims. |
-| `LEASE_SECONDS` | `300` | How long a claim is held before another worker may steal it. |
+| `LEASE_SECONDS` | `300` | The lease a delivery needs where its receiver declares none; a claim stamps its lane's lease x 1.1 ([operations](operations.md#the-lease-a-claim-stamps)). |
 | `POLL_SECONDS` | `1.0` | Relay poll interval, and the floor under `LISTEN`/`NOTIFY`. |
 | `WAKE` | `"notify"` | `"notify"` or `"poll"`. `"poll"` sends no `NOTIFY` and the relay does not `LISTEN`; latency is then `POLL_SECONDS`. |
 | `NOTIFY_COALESCE_SECONDS` | `0.5` | A process sends at most one `NOTIFY` per this long, per database. `0` sends every one. |
@@ -126,8 +126,9 @@ bad deploy.
 A relay can size its own claims without moving the other two:
 `deliver_events --batch-size 5`, or `run_relay(batch_size=5)`. That is the
 knob for a [lane](operations.md#lanes-a-relay-per-kind-of-work) of slow
-receivers, which wants a batch it can work through inside `LEASE_SECONDS`
-while pruning keeps its larger statements.
+receivers, which wants a batch it can work through inside the lease its claim
+stamps ([operations](operations.md#the-lease-a-claim-stamps)) while pruning
+keeps its larger statements.
 
 ### `PRUNE_BATCH_ROWS`
 

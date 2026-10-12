@@ -292,6 +292,26 @@ def test_a_row_claimed_on_a_later_clock_is_extended() -> None:
     assert _rows()[0].lease_expires_at - before < timedelta(seconds=61)
 
 
+@pytest.mark.parametrize(("back", "writes"), [(3, 0), (10, 1)])
+def test_a_row_claimed_on_a_slightly_earlier_clock_starts_without_extending(
+    back: int, writes: int
+) -> None:
+    """A clock moved back by less than a tenth of the lease leaves the stamped
+    lease inside the band - at least the receiver's 60 s still ahead - so the
+    row starts as it is. Moved back by more, it falls below and is extended."""
+    _probe("a", lease_seconds=60)
+    _fire()
+    # Owed well before the moved clock, so the claim on it takes the row.
+    DeliveryRecord.objects.update(available_at=django_timezone.now() - timedelta(hours=1))
+    earlier = django_timezone.now() - timedelta(seconds=back)
+
+    with CaptureQueriesContext(connection) as queries:
+        deliver_pending(lane="mail", now=earlier)
+
+    assert RAN == ["a"]
+    assert _lease_writes(queries) == writes
+
+
 def test_a_relay_on_a_later_clock_extends_on_the_real_one() -> None:
     _probe("a", lease_seconds=60)
     _fire()
@@ -370,6 +390,56 @@ def test_a_dead_relays_unstarted_rows_are_claimable_after_their_lanes_lease() ->
 
     assert take(claimed + timedelta(seconds=65)) == []
     assert len(take(claimed + timedelta(seconds=67))) == 2
+
+
+def test_a_long_lease_lane_recovers_in_the_setting() -> None:
+    """A lane of receivers declaring 1800 s is claimed under ``LEASE_SECONDS``
+    and its headroom, 330 s, as its rows were before: a killed relay's
+    unstarted tail is not held for 1980 s."""
+    _probe("a", lease_seconds=1800)
+    _fire(2)
+    claimed = django_timezone.now()
+
+    def die(*args: object, **kwargs: object) -> None:
+        raise _RelayDied
+
+    with mock.patch.object(run_relay_module, "_deliver_or_survive", die), pytest.raises(_RelayDied):
+        _relay(now=lambda: claimed)
+
+    def take(at: datetime) -> list[int]:
+        return claim_batch(
+            worker_id="next", now=at, lease=timedelta(seconds=330), limit=10, lane="mail"
+        )
+
+    assert take(claimed + timedelta(seconds=329)) == []
+    assert len(take(claimed + timedelta(seconds=331))) == 2
+
+
+def test_an_eager_attempt_for_long_lease_receivers_recovers_in_the_setting() -> None:
+    """The same cap on the attempt after commit, when every eager receiver
+    shares one lease longer than ``LEASE_SECONDS``."""
+    _probe("eager", eager=True, lease_seconds=1800)
+
+    def die(*args: object, **kwargs: object) -> None:
+        raise _RelayDied
+
+    with (
+        receiver_deleted("testapp.eager"),
+        _claimed_leases(claim_module) as leases,
+        mock.patch.object(deliver_module, "dispatch_one", die),
+        pytest.raises(_RelayDied),
+    ):
+        _fire()
+
+    assert leases == [timedelta(seconds=330)]
+    row = _rows()[0]
+    assert row.status == DeliveryStatus.CLAIMED
+
+    def take(at: datetime) -> list[int]:
+        return claim_batch(worker_id="next", now=at, lease=timedelta(seconds=330), limit=10)
+
+    assert take(row.claimed_at + timedelta(seconds=329)) == []
+    assert take(row.claimed_at + timedelta(seconds=331)) == [row.pk]
 
 
 def test_a_batch_tail_another_relay_took_is_not_sent_twice(caplog: Any) -> None:
