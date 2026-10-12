@@ -95,14 +95,21 @@ def fire_order(order: Order) -> None:
 
 
 class _Collect(logging.Handler):
-    """Keeps the warnings the relay logs, so a step can check one was written."""
+    """Keeps the warnings the relay logs, so a step can check one was written.
+
+    With the delivery each was stamped with by the AROUND_DELIVERY hook, so a
+    step can check the relay's own lines carry it too.
+    """
 
     def __init__(self) -> None:
         super().__init__(level=logging.WARNING)
+        self.addFilter(DeliveryLogFilter())
         self.messages: list[str] = []
+        self.stamps: list[str] = []
 
     def emit(self, record: logging.LogRecord) -> None:
         self.messages.append(record.getMessage())
+        self.stamps.append(getattr(record, "delivery", ""))
 
 
 class _Lines(logging.Handler):
@@ -271,6 +278,15 @@ class Command(BaseCommand):
         print(f"         {gone.last_error}")
         check("PermanentFailure dead-letters on the attempt that raised it", gone.status, "dead")
         check("having spent one attempt of five", (gone.attempts, gone.max_attempts), (1, 5))
+        check(
+            "the relay's warning for it carries the ids the AROUND_DELIVERY hook set",
+            [
+                stamp
+                for stamp, message in zip(warnings.stamps, warnings.messages, strict=True)
+                if f"failed delivery {gone.pk} " in message
+            ],
+            [f"delivery={gone.pk} receiver=shop.notify_marketplace"],
+        )
 
         head("10. A receiver told when to come back is retried then, within a ceiling")
         limited = DeliveryRecord.objects.get(receiver_key="shop.register_tracking")

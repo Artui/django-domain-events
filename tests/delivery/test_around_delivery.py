@@ -13,6 +13,7 @@ too, and assert the hook was entered for that one and for nothing else.
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable, Iterator
 from contextvars import ContextVar
 from datetime import timedelta
@@ -52,6 +53,9 @@ EVENTS: list[tuple[Any, ...]] = []
 #: would set a request id.
 CURRENT: ContextVar[str | None] = ContextVar("CURRENT", default=None)
 
+#: The thread each probe hook was entered on.
+ENTERED_ON: list[int] = []
+
 
 class _Stop(BaseException):
     """Stands in for a worker's timeout signal: not an ``Exception``."""
@@ -75,6 +79,7 @@ class _Probe:
 
     def __enter__(self) -> None:
         EVENTS.append(("enter", self.context))
+        ENTERED_ON.append(threading.get_ident())
         if self.enter_raises is not None:
             raise self.enter_raises
         self.token = CURRENT.set(
@@ -133,6 +138,17 @@ def writing(context: DeliveryContext) -> _Probe:
     return _Writes(context)
 
 
+class _NoExit:
+    """Has ``__enter__`` and no ``__exit__``: it could be entered and never left."""
+
+    def __enter__(self) -> None:
+        EVENTS.append(("enter", None))
+
+
+def enter_without_exit(context: DeliveryContext) -> _NoExit:
+    return _NoExit()
+
+
 def not_a_context_manager(context: DeliveryContext) -> None:
     EVENTS.append(("factory", context))
 
@@ -144,8 +160,10 @@ def _clean() -> Iterator[None]:
     Nothing else listens to ``Unheard``, and two unrelated tests assert that.
     """
     EVENTS.clear()
+    ENTERED_ON.clear()
     yield
     EVENTS.clear()
+    ENTERED_ON.clear()
     for key in [key for key in registry._receivers if key.startswith("probe.")]:
         registry._receivers.pop(key)
 
@@ -581,6 +599,24 @@ def test_a_hook_that_cannot_be_entered_at_all_fails_the_attempt(
     assert row.last_error.startswith(f"{error}: ")
 
 
+def test_a_manager_with_no_exit_is_refused_before_it_is_entered(settings: Any) -> None:
+    """``__exit__`` is looked up before ``__enter__`` is called, as a ``with``
+    statement looks it up. Entered first, a hook setting a tenant would be set
+    and never reset, on a relay thread that serves every later delivery."""
+    ran: list[Any] = []
+    receiver(Unheard, key="probe.guarded")(_record(ran))
+    _hook(settings, "enter_without_exit")
+    row = _owed("probe.guarded")
+
+    assert deliver_one(row.pk) == DeliveryStatus.FAILED
+
+    row.refresh_from_db()
+    assert ran == []
+    assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 1)
+    assert row.last_error.startswith("AttributeError: ")
+    assert _entered() == []
+
+
 # What runs inside it
 
 
@@ -629,10 +665,12 @@ def test_an_async_receiver_sees_the_hooks_context_and_its_exception_reaches_exit
     coroutine; asgiref copies the context into it, and re-raises what the
     coroutine raised, the same object."""
     ran: list[Any] = []
+    ran_on: list[int] = []
     failure = ValueError("the review platform refused")
 
     async def asks(event: Unheard) -> None:
         ran.append(CURRENT.get())
+        ran_on.append(threading.get_ident())
         raise failure
 
     receiver(Unheard, key="probe.async")(asks)
@@ -643,6 +681,12 @@ def test_an_async_receiver_sees_the_hooks_context_and_its_exception_reaches_exit
 
     assert ran == [f"{row.pk}:probe.async"]
     assert [(exc_type, exc) for exc_type, exc, _ in _exits()] == [(ValueError, failure)]
+    # Entered on the thread that called deliver_one, whose connection holds
+    # the acknowledging transaction; the coroutine ran on a thread of its own.
+    here = threading.get_ident()
+    assert list(ENTERED_ON) == [here]
+    assert len(ran_on) == 1
+    assert ran_on[0] != here
 
 
 # Where it does not run

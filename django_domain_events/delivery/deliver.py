@@ -322,7 +322,8 @@ class _Around:
         rule too (test_entering_raising_fails_the_attempt_without_running_the_receiver).
         ``__exit__`` is looked up before ``__enter__`` is called, as the
         ``with`` statement looks it up, so an object with no ``__exit__`` is
-        refused before anything was entered.
+        refused before anything was entered
+        (test_a_manager_with_no_exit_is_refused_before_it_is_entered).
         """
         factory = get_around_delivery()
         if factory is None:
