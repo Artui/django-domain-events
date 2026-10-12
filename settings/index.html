@@ -661,6 +661,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#around_delivery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AROUND_DELIVERY
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -871,6 +882,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#around_delivery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AROUND_DELIVERY
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -960,7 +982,7 @@ are changing.</p>
 <tr>
 <td><code>LEASE_SECONDS</code></td>
 <td><code>300</code></td>
-<td>How long a claim is held before another worker may steal it.</td>
+<td>The lease a delivery needs where its receiver declares none; a claim stamps its lane's lease x 1.1 (<a href="../operations/#the-lease-a-claim-stamps">operations</a>).</td>
 </tr>
 <tr>
 <td><code>POLL_SECONDS</code></td>
@@ -1016,6 +1038,11 @@ are changing.</p>
 <td><code>TASK_BACKEND</code></td>
 <td><code>None</code></td>
 <td>Dotted path, or a <code>{"BACKEND": ..., **options}</code> mapping.</td>
+</tr>
+<tr>
+<td><code>AROUND_DELIVERY</code></td>
+<td><code>None</code></td>
+<td>Dotted path to a callable taking a <code>DeliveryContext</code> and returning a context manager, entered around each durable attempt.</td>
 </tr>
 </tbody>
 </table>
@@ -1090,8 +1117,9 @@ bad deploy.</p>
 <p>A relay can size its own claims without moving the other two:
 <code>deliver_events --batch-size 5</code>, or <code>run_relay(batch_size=5)</code>. That is the
 knob for a <a href="../operations/#lanes-a-relay-per-kind-of-work">lane</a> of slow
-receivers, which wants a batch it can work through inside <code>LEASE_SECONDS</code>
-while pruning keeps its larger statements.</p>
+receivers, which wants a batch it can work through inside the lease its claim
+stamps (<a href="../operations/#the-lease-a-claim-stamps">operations</a>) while pruning
+keeps its larger statements.</p>
 <h3 id="prune_batch_rows"><code>PRUNE_BATCH_ROWS</code><a class="headerlink" href="#prune_batch_rows" title="Permanent link">&para;</a></h3>
 <p>How many rows one prune transaction deletes, counting each event's delivery rows
 and the event row itself. A setting of its own, rather than <code>BATCH_SIZE</code>, because
@@ -1139,6 +1167,29 @@ only a subclass could use it.</p>
 </span></code></pre></div>
 <p>The Celery worker also needs the task module in its <code>imports</code>; see
 <a href="../operations/#celery">Celery</a>.</p>
+<h3 id="around_delivery"><code>AROUND_DELIVERY</code><a class="headerlink" href="#around_delivery" title="Permanent link">&para;</a></h3>
+<p>A dotted path to a callable that takes the attempt's <code>DeliveryContext</code> and
+returns a synchronous context manager. The package enters it around every
+durable attempt, outside the transaction that carries the acknowledgement, and
+exits it once the outcome is recorded: the place for a tracing span, a log
+context carrying <code>delivery_id</code> and <code>receiver_key</code>, or a tenant schema. One
+callable, not a list; compose several with <code>contextlib.ExitStack</code>.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="s2">"AROUND_DELIVERY"</span><span class="p">:</span> <span class="s2">"myproject.delivery_log.delivery_log_context"</span><span class="p">,</span>
+</span></code></pre></div>
+<p>Read on every delivery, not cached. A path that does not import, a value that
+is not a string, or a name that is not callable fails the system check <code>E011</code>
+rather than the first delivery. Entering the hook raising fails the attempt as
+the receiver raising would; an <code>Exception</code> from <code>__exit__</code> is logged and changes
+nothing.</p>
+<p>The hook must not open a transaction. The outcome is written after the
+receiver's transaction closes and before <code>__exit__</code> runs, so a
+<code>transaction.atomic()</code> the hook entered would hold that write, and exiting it
+with the receiver's exception would roll the recorded failure back after the
+log line and <code>on_failure</code> reported it. Set a tenant schema or role at session
+level (<code>SET search_path</code>, <code>SET ROLE</code>) and reset it on exit, rather than with
+<code>SET LOCAL</code>.</p>
+<p>The rules, and what it never wraps, are in
+<a href="../delivery/#a-hook-around-each-delivery">A hook around each delivery</a>.</p>
 <h2 id="use_tz-false"><code>USE_TZ = False</code><a class="headerlink" href="#use_tz-false" title="Permanent link">&para;</a></h2>
 <p>Supported. Every datetime the package writes or compares follows the project's
 setting: "now" is <code>django.utils.timezone.now()</code>, so it is aware under
@@ -1177,11 +1228,11 @@ as standard time, and an ambiguous one as the later of its two instants.</p>
 <p>Everything that opens a transaction asks the router for the alias, rather than
 hardcoding <code>default</code>. Give the event log its own database and the guarantee still
 holds:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">EventRouter</span><span class="p">:</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">db_for_write</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="o">**</span><span class="n">hints</span><span class="p">):</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>        <span class="k">if</span> <span class="n">model</span><span class="o">.</span><span class="n">_meta</span><span class="o">.</span><span class="n">app_label</span> <span class="o">==</span> <span class="s2">"django_domain_events"</span><span class="p">:</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>            <span class="k">return</span> <span class="s2">"events"</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>        <span class="k">return</span> <span class="kc">None</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">EventRouter</span><span class="p">:</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">db_for_write</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="o">**</span><span class="n">hints</span><span class="p">):</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>        <span class="k">if</span> <span class="n">model</span><span class="o">.</span><span class="n">_meta</span><span class="o">.</span><span class="n">app_label</span> <span class="o">==</span> <span class="s2">"django_domain_events"</span><span class="p">:</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>            <span class="k">return</span> <span class="s2">"events"</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>        <span class="k">return</span> <span class="kc">None</span>
 </span></code></pre></div>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>

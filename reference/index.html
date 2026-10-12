@@ -1155,6 +1155,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_context.DeliveryContext.receiver_key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        receiver_key
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2462,6 +2473,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_context.DeliveryContext.receiver_key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        receiver_key
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3204,7 +3226,10 @@
 
         <p>Register a frozen dataclass as an event, bare or called.</p>
 <p>The default name is <code>&lt;app_label&gt;.&lt;ClassName&gt;</code>. Pin it with <code>name=</code> when
-renaming the class would otherwise strand rows written under the old one.</p>
+renaming the class would otherwise strand rows written under the old one.
+A name may not be longer than the column that holds it, 255 characters,
+whether given or derived: a longer one is refused here with <code>ValueError</code>,
+because Postgres raises at <code>fire()</code> time while SQLite enforces nothing.</p>
 <p><code>retention</code> says how long <code>prune_events</code> keeps this event's rows: a
 <code>timedelta</code> for a window of its own, <code>Retention.SUCCEEDED</code> or
 <code>Retention.SETTLED</code> to delete it once consumed, or None for
@@ -3235,7 +3260,7 @@ later change here does not reach events already recorded.</p>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">eager</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">site</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"relay"</span><span class="p">,</span>
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">lease_seconds</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">on_failure</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">DeliveryFailure</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">on_failure</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">DeliveryFailure</span><span class="p">],</span> <span class="n">Awaitable</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">targets</span><span class="p">:</span> <span class="n">Targets</span><span class="p">[</span><span class="n">E</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">backoff_base_seconds</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="n">backoff_cap_seconds</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -3253,7 +3278,7 @@ later change here does not reach events already recorded.</p>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">eager</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">site</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"relay"</span><span class="p">,</span>
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">lease_seconds</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">on_failure</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">DeliveryFailure</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">on_failure</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">DeliveryFailure</span><span class="p">],</span> <span class="n">Awaitable</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">targets</span><span class="p">:</span> <span class="n">Targets</span><span class="p">[</span><span class="n">E</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">backoff_base_seconds</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="n">backoff_cap_seconds</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -3272,7 +3297,7 @@ later change here does not reach events already recorded.</p>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">eager</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">site</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"relay"</span><span class="p">,</span>
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">lease_seconds</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">on_failure</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">DeliveryFailure</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">on_failure</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">DeliveryFailure</span><span class="p">],</span> <span class="n">Awaitable</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">targets</span><span class="p">:</span> <span class="n">Targets</span><span class="p">[</span><span class="n">E</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">backoff_base_seconds</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="n">backoff_cap_seconds</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -3292,6 +3317,14 @@ after it. See <code>AnyEvent</code> for what that is for and what it costs.</p>
 idea. The overloads make a checker enforce the arity it implies, so
 declaring one and writing the other fails at the decorator rather than in
 the relay hours later.</p>
+<p><code>key</code> is written onto every delivery row of a <code>DURABLE</code> receiver and is
+what the row is found by, so it may not be longer than the column that holds
+it, 255 characters. A longer one - explicit, or derived from a very long
+function name - is refused here with <code>ValueError</code>, because the database
+either truncates it, orphaning the delivery, or raises at fire time; SQLite
+enforces nothing, so it would pass a test suite and fail in production. The
+rule holds at every <code>mode</code>, though <code>INLINE</code> and <code>ON_COMMIT</code> store no
+key, so that a key stays valid when its mode changes.</p>
 <p><code>max_attempts</code> is copied onto each delivery row at fire time.</p>
 <p><code>site</code> is the execution knob, separate from <code>mode</code> on purpose: timing is
 what a receiver promises about the transaction, and where its code runs is a
@@ -3303,6 +3336,23 @@ firing process, with the relay as the fallback for whatever process death
 loses. It is what stops <code>DURABLE</code> feeling slow: outbox durability at
 on-commit latency, at the cost of a duplicate when the process dies
 mid-receiver - which at-least-once already required everyone to tolerate.</p>
+<p>The receiver may be declared <code>async def</code>, at every <code>mode</code>. It is run to
+completion where a function would be called - in <code>fire()</code> for INLINE, at
+commit for ON_COMMIT, in the relay, a task or an eager attempt for DURABLE -
+through <code>asgiref.sync.async_to_sync</code>, while the calling thread serves its
+<code>sync_to_async</code> calls, so Django's async ORM writes land in the
+transaction carrying the acknowledgement and roll back with it. Outside
+ASGI each call runs on a fresh event loop of its own, closed when it
+returns; under ASGI an INLINE or ON_COMMIT coroutine runs on the server's
+loop. Either way a client bound to a loop cannot be shared between calls.
+What it buys is the ability to call async libraries, not concurrency: the
+relay still runs one delivery at a time. A coroutine that is cancelled is
+a failed attempt. A sync callable that returns an awaitable - a
+<code>functools.wraps</code> decorator around an <code>async def</code> - or an <code>async def</code>
+containing <code>yield</code> is refused at the call with <code>TypeError</code>, rather than
+recorded as done with its body never run; mark such a wrapper with
+<code>asgiref.sync.markcoroutinefunction</code>. <code>on_failure</code> may be <code>async def</code>
+on the same terms. <code>targets</code> and <code>due</code> may not; see below.</p>
 <p><code>on_failure</code> is called after a failed attempt has been recorded, outside
 the transaction that was just rolled back, so a receiver can keep a durable
 record of its own failure. It could not before: everything a receiver writes
@@ -3317,7 +3367,10 @@ rolled back - correct, and entirely wasted. Declaring it here rather than
 offering the receiver a way to extend its lease from the inside, because
 that cannot work: the receiver runs inside the transaction that carries its
 acknowledgement, so anything it writes is invisible to every other worker
-until it has already finished.</p>
+until it has already finished. Where every durable receiver in its lane
+declares the same lease, it is also the lease the lane's claims stamp - at
+most <code>LEASE_SECONDS</code>, plus 10 percent of headroom - so it changes how big
+a batch the lane can work through before the batch's tail lapses.</p>
 <p><code>targets</code> makes the receiver a <strong>fan-out</strong>: a callable taking the event and
 a <code>DeliveryContext</code>, returning the strings this event is owed to - endpoint
 ids, tenant slugs, anything that names a destination. <code>fire()</code> writes one
@@ -3346,6 +3399,9 @@ every write in the system. Make the lookup indexed, and make it return
 early for events it can rule out without one.</p>
 <p><code>replay_events</code> calls it again, so a replay goes to the targets that exist
 at replay time.</p>
+<p>It must be a plain function, not <code>async def</code>, and so must a <code>due</code>
+callable: each would cost an event loop per receiver per fire, inside the
+caller's request, for what is a database read. Either is refused here.</p>
 <p><code>backoff_base_seconds</code> and <code>backoff_cap_seconds</code> override
 <code>BACKOFF_BASE_SECONDS</code> and <code>BACKOFF_CAP_SECONDS</code> for this receiver alone,
 as <code>lease_seconds</code> overrides <code>LEASE_SECONDS</code>. They are read when an
@@ -3716,7 +3772,13 @@ a relay, so a lane that must go faster runs more relays with the same
 also sizes prune batches and requeue chunks. Every row of a batch is
 claimed under one lease, and a row still waiting its turn when that lease
 lapses is taken by another relay, so a slow lane wants a batch it can work
-through inside <code>LEASE_SECONDS</code>.</p>
+through inside the lease its claim stamps. That is the lane's own lease
+plus 10 percent where every durable receiver in it shares one no longer
+than <code>LEASE_SECONDS</code>, and <code>LEASE_SECONDS</code> plus 10 percent otherwise: 66 seconds, not
+<code>LEASE_SECONDS</code>, for a lane of receivers declaring <code>lease_seconds=60</code>.
+A row that starts while its claimed lease is still its receiver's own
+starts without extending it, which saves a write per delivery, so a batch
+whose rows all start inside a tenth of the lease costs the fewest.</p>
 <p>A relay that finds nothing to claim also prunes, so an event declared to be
 deleted on consumption goes within minutes without a <code>prune_events</code> cron
 line. The sweep is <code>prune_events()</code> with its defaults, run from the idle
@@ -3781,7 +3843,8 @@ touching only this database is effectively once: the duplicate at-least-once
 owes you cannot be observed. Side effects outside the database are
 at-least-once, as promised.</p>
 <p>Every write here is a compare-and-set against the claim this call read, and
-the lease is extended to cover this one delivery before the receiver runs.
+the lease is extended to cover this one delivery before the receiver runs,
+unless the claim already leased it for this receiver.
 Both exist for the same reason: a claim can lapse while its worker is still
 alive, and a worker that has lost its row must not go on to write a verdict
 over whoever legitimately took it. Losing the row returns <code>None</code> rather
@@ -4239,7 +4302,10 @@ than waiting for it.</p>
 
     </div>
 
-</div><h2 id="operations">Operations<a class="headerlink" href="#operations" title="Permanent link">&para;</a></h2>
+</div><p>The hook around each durable attempt is a setting rather than a symbol: see
+<a href="../settings/#around_delivery"><code>AROUND_DELIVERY</code></a>. It is handed the
+<code>DeliveryContext</code> below, whose <code>receiver_key</code> names the receiver.</p>
+<h2 id="operations">Operations<a class="headerlink" href="#operations" title="Permanent link">&para;</a></h2>
 
 
 <div class="doc doc-object doc-function">
@@ -5137,7 +5203,9 @@ for <code>requeue_dead</code> or the dead-letter counts to find.</p>
 
 
 
-        <p>Delivery metadata, passed only to receivers declaring <code>takes_context</code>.</p>
+        <p>Delivery metadata, passed to receivers declaring <code>takes_context</code>.</p>
+<p>Also to a <code>targets=</code> callable, at fire time, and to the
+<code>AROUND_DELIVERY</code> hook, once per durable attempt.</p>
 <p>Frozen data read off the event row, never a live handle: a durable delivery
 can run in another process hours after the scope that produced it has gone.</p>
 
@@ -5247,6 +5315,37 @@ written (the offer was extended), answer with <code>NotYet</code> rather than do
 the work early. For any other row, when it became owed: the moment a
 replay or requeue reopened it, or else when its event was recorded.</p>
 <p>None where no row exists, as for <code>delivery_id</code>. Optional and last for the
+same reason as <code>target</code>.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="django_domain_events.types.delivery_context.DeliveryContext.receiver_key" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">receiver_key</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+<a href="#django_domain_events.types.delivery_context.DeliveryContext.receiver_key" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">receiver_key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">''</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>The key of the receiver this context was built for.</p>
+<p>Set wherever a receiver is known: on every durable delivery, on the context
+an INLINE or ON_COMMIT receiver receives, and on the one a <code>targets=</code>
+callable is asked with. What an <code>AROUND_DELIVERY</code> hook labels a span, a
+metric or a log line by, since the hook is handed this context and not the
+receiver. Blank only on a context built by hand. Optional and last for the
 same reason as <code>target</code>.</p>
 
     </div>
@@ -6608,7 +6707,7 @@ the check-constraint keyword changed inside the supported Django range
   </span>
 
 <a href="#django_domain_events.types.registered_receiver.RegisteredReceiver.on_failure" class="headerlink" title="Permanent link">&para;</a></h3>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">on_failure</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">DeliveryFailure</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">on_failure</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">DeliveryFailure</span><span class="p">],</span> <span class="n">Awaitable</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 </span></code></pre></div>
 
     <div class="doc doc-contents ">

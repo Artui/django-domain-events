@@ -370,6 +370,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Receivers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#async-receivers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Async receivers
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -714,6 +731,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Receivers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#async-receivers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Async receivers
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -831,6 +865,9 @@ would strand rows written under the old name:</p>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">slots</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">OrderSubmitted</span><span class="p">:</span> <span class="o">...</span>
 </span></code></pre></div>
+<p>A name is at most 255 characters, the width of the column event rows store it
+in, whether given as <code>name=</code> or derived from the app label and class name; a
+longer one is refused at the decorator.</p>
 <p>An event is kept for <code>RETENTION_DAYS</code> unless its declaration says otherwise:
 <code>retention=timedelta(...)</code> for a window of its own, or <code>Retention.SUCCEEDED</code> or
 <code>Retention.SETTLED</code> to delete it, with its delivery rows, as soon as it has been
@@ -869,7 +906,7 @@ orphaned.</p>
 <tr>
 <td><code>key</code></td>
 <td><code>&lt;app_label&gt;.&lt;func_name&gt;</code></td>
-<td>The identity delivery rows address.</td>
+<td>The identity delivery rows address. At most 255 characters, the width of the column delivery rows store it in; a longer one is refused at the decorator, in every mode.</td>
 </tr>
 <tr>
 <td><code>max_attempts</code></td>
@@ -889,7 +926,7 @@ orphaned.</p>
 <tr>
 <td><code>lease_seconds</code></td>
 <td><code>None</code></td>
-<td>Override <code>LEASE_SECONDS</code> for a receiver that runs long.</td>
+<td>Override <code>LEASE_SECONDS</code> for a receiver that runs long. Where its whole lane declares the same lease, it is also what the lane's claims stamp, capped at <code>LEASE_SECONDS</code>, and so how big a batch fits: see <a href="../operations/#the-lease-a-claim-stamps">the lease a claim stamps</a>.</td>
 </tr>
 <tr>
 <td><code>takes_context</code></td>
@@ -989,14 +1026,93 @@ claims, the bound when a deferral arrives - and never copied onto the row.
 A deploy that changes any of them changes it for the deliveries already
 owed.</p>
 </div>
+<h3 id="async-receivers">Async receivers<a class="headerlink" href="#async-receivers" title="Permanent link">&para;</a></h3>
+<p>A receiver may be declared <code>async def</code>, at every <code>mode</code>, and so may its
+<code>on_failure</code> hook:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="n">DURABLE</span><span class="p">)</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">notify_partner</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="k">async</span> <span class="k">with</span> <span class="n">httpx</span><span class="o">.</span><span class="n">AsyncClient</span><span class="p">()</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>        <span class="k">await</span> <span class="n">client</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="n">PARTNER_URL</span><span class="p">,</span> <span class="n">json</span><span class="o">=</span><span class="p">{</span><span class="s2">"order"</span><span class="p">:</span> <span class="n">evt</span><span class="o">.</span><span class="n">order_id</span><span class="p">})</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="k">await</span> <span class="n">PartnerNotice</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">acreate</span><span class="p">(</span><span class="n">order_id</span><span class="o">=</span><span class="n">evt</span><span class="o">.</span><span class="n">order_id</span><span class="p">)</span>
+</span></code></pre></div>
+<p>It runs to completion where a function would be called - in <code>fire()</code> for
+<code>INLINE</code>, at commit for <code>ON_COMMIT</code>, in the relay, a task or an eager attempt
+for <code>DURABLE</code> - through <code>asgiref.sync.async_to_sync</code>, which Django already
+depends on. Everything else about the delivery is unchanged:</p>
+<ul>
+<li><strong>Its writes are in the acknowledging transaction.</strong> The coroutine runs on an
+  event loop in another thread while the calling thread waits for it, and
+  Django's async ORM calls hop back to the calling thread and its connection.
+  So <code>await Model.objects.acreate(...)</code> commits with the acknowledgement and is
+  rolled back with it when the receiver raises, exactly as a sync receiver's
+  write is.</li>
+<li><strong>It reads its verdicts the same way.</strong> <code>RetryAfter</code>, <code>NotYet</code> and
+  <code>PermanentFailure</code> raised from a coroutine reach the relay as the same
+  object, and an <code>INLINE</code> coroutine's raise reaches <code>fire()</code>'s caller.</li>
+<li><strong>Causation reaches it.</strong> An event it fires through
+  <code>sync_to_async(fire)(...)</code> records it as the cause, with nothing threaded
+  through.</li>
+<li><strong>A coroutine that is cancelled is a failed attempt</strong>, retried like any other,
+  rather than a row left claimed until its lease lapses.</li>
+<li><strong>A signal cannot interrupt it.</strong> The second signal that stops a relay at
+  once rolls an <code>async def</code> receiver's transaction back, but the coroutine runs
+  on a loop in another thread, and the process exits only once it returns; a
+  third signal ends it then. Give whatever the coroutine awaits a timeout. See
+  <a href="../operations/#stopping-it">Stopping it</a>.</li>
+</ul>
+<p>What it buys is the ability to call async libraries, <strong>not concurrency</strong>. The
+relay still runs one delivery at a time, in one transaction, on one connection,
+and each call pays for starting an event loop.</p>
+<div class="admonition warning">
+<p class="admonition-title">Each call runs on a loop of its own</p>
+<p>The loop is new on every call and closed when the call returns, so nothing
+bound to a loop can be shared between calls. A module-level
+<code>httpx.AsyncClient</code> or aioboto session is bound to the first call's loop and
+fails on the second with <code>Event loop is closed</code>. Create the client inside
+the receiver, as above, or use a sync client. For the same reason, a task
+the coroutine starts with <code>asyncio.create_task</code> and does not await is
+cancelled when the loop closes (outside ASGI), so await what you start.</p>
+<p>Under ASGI the rule bites late. An <code>INLINE</code> or <code>ON_COMMIT</code> receiver for an
+event fired in a request served over ASGI is scheduled on the server's own
+loop instead, so a shared client can work in development and then break
+in the relay. Its writes still land in the request's transaction.</p>
+</div>
+<p><strong>The coroutine runs on an event loop, so sync database calls are refused in
+it.</strong> A sync ORM call raises <code>SynchronousOnlyOperation</code>, which fails the
+attempt loudly rather than corrupting anything. <code>transaction.atomic()</code> is a
+sync API and is refused the same way; a receiver needing a savepoint wraps a
+sync function in <code>sync_to_async</code> and does the work there.</p>
+<p><strong>Fire from sync code.</strong> <code>fire()</code> writes through the sync ORM, so called inside
+a running event loop it raises <code>SynchronousOnlyOperation</code> before reaching any
+receiver, and <code>deliver_one</code> reads its row the same way, leaving the row
+untouched and no attempt spent. With <code>DJANGO_ALLOW_ASYNC_UNSAFE</code> set they get
+further, and asgiref then refuses to start a loop in a thread already running
+one: an <code>INLINE</code> receiver's <code>RuntimeError</code> reaches the caller, and a durable
+delivery records it as a failed attempt. From async code, wrap the call:
+<code>await sync_to_async(fire)(event)</code>.</p>
+<p><strong>A sync function that returns an awaitable is refused</strong>, with a <code>TypeError</code>
+naming the fix, rather than recorded as done with its body never run. That is
+what a <code>functools.wraps</code> decorator around an <code>async def</code> looks like, and a
+lambda returning a coroutine. An <code>async def</code> with <code>yield</code> in its body is an
+async generator, which runs nothing when called, and is refused the same way. Declare the receiver <code>async def</code>, or mark the
+wrapper with <code>asgiref.sync.markcoroutinefunction</code>. The refusal is an ordinary
+failure, so a deploy that fixes the declaration drains the rows it failed. A
+callable object whose <code>__call__</code> is <code>async def</code>, and a <code>functools.partial</code> of
+an <code>async def</code>, are recognised as coroutine functions and run.</p>
+<p><strong><code>targets=</code> and <code>due=</code> stay synchronous</strong>, and an <code>async def</code> for either is
+refused at the decorator. Both run in the caller's transaction every time the
+event fires, so each would start an event loop per receiver per event inside
+somebody's request, for what is a database read best done with the sync ORM.
+A sync wrapper returning a coroutine cannot be seen at the decorator, and fails
+when the event fires: a coroutine is neither a list of targets nor a datetime.</p>
 <h2 id="every-event-anyevent">Every event: <code>AnyEvent</code><a class="headerlink" href="#every-event-anyevent" title="Permanent link">&para;</a></h2>
 <p>A receiver declared for <code>AnyEvent</code> is owed <strong>every</strong> event fired.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">AnyEvent</span><span class="p">,</span> <span class="n">DeliveryContext</span><span class="p">,</span> <span class="n">receiver</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">AnyEvent</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="s2">"bridge.forward"</span><span class="p">,</span> <span class="n">takes_context</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="nb">object</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DeliveryContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">broker</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">event_name</span><span class="p">,</span> <span class="n">evt</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">AnyEvent</span><span class="p">,</span> <span class="n">DeliveryContext</span><span class="p">,</span> <span class="n">receiver</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">AnyEvent</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="s2">"bridge.forward"</span><span class="p">,</span> <span class="n">takes_context</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="nb">object</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DeliveryContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="n">broker</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">event_name</span><span class="p">,</span> <span class="n">evt</span><span class="p">)</span>
 </span></code></pre></div>
 <p>It is for a <strong>transport</strong> - something that forwards events without knowing what
 they are. The wildcard is matched when an event is fired, not expanded when the
@@ -1017,19 +1133,19 @@ exactly them.</p>
 <p><code>targets=</code> makes a durable receiver owe each event to <strong>several destinations
 that live in data</strong> - endpoint rows, tenants, subscriptions - with a delivery row
 of its own for each.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">endpoints_owed</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="nb">object</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DeliveryContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="k">return</span> <span class="p">[</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>        <span class="nb">str</span><span class="p">(</span><span class="n">pk</span><span class="p">)</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>        <span class="k">for</span> <span class="n">pk</span> <span class="ow">in</span> <span class="n">Endpoint</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>            <span class="n">active</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">subscriptions__event_name</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">event_name</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>        <span class="p">)</span><span class="o">.</span><span class="n">values_list</span><span class="p">(</span><span class="s2">"pk"</span><span class="p">,</span> <span class="n">flat</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="p">]</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">AnyEvent</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="s2">"hooks.deliver"</span><span class="p">,</span> <span class="n">takes_context</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">targets</span><span class="o">=</span><span class="n">endpoints_owed</span><span class="p">)</span>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="k">def</span><span class="w"> </span><span class="nf">deliver</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="nb">object</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DeliveryContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>    <span class="n">endpoint</span> <span class="o">=</span> <span class="n">Endpoint</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">pk</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">target</span><span class="p">)</span>
-</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>    <span class="o">...</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">endpoints_owed</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="nb">object</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DeliveryContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="k">return</span> <span class="p">[</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>        <span class="nb">str</span><span class="p">(</span><span class="n">pk</span><span class="p">)</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>        <span class="k">for</span> <span class="n">pk</span> <span class="ow">in</span> <span class="n">Endpoint</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>            <span class="n">active</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">subscriptions__event_name</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">event_name</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>        <span class="p">)</span><span class="o">.</span><span class="n">values_list</span><span class="p">(</span><span class="s2">"pk"</span><span class="p">,</span> <span class="n">flat</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    <span class="p">]</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">AnyEvent</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="s2">"hooks.deliver"</span><span class="p">,</span> <span class="n">takes_context</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">targets</span><span class="o">=</span><span class="n">endpoints_owed</span><span class="p">)</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="k">def</span><span class="w"> </span><span class="nf">deliver</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="nb">object</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DeliveryContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>    <span class="n">endpoint</span> <span class="o">=</span> <span class="n">Endpoint</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">pk</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">target</span><span class="p">)</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>    <span class="o">...</span>
 </span></code></pre></div>
 <p><code>fire()</code> calls the callable with the event and a <code>DeliveryContext</code>, and writes one
 row per string it returns. Each row has its own attempt count, backoff and
@@ -1062,7 +1178,8 @@ a wildcard, <strong>every event fired</strong> - so a callable that reads a tabl
 one query per fired event per fan-out receiver. For a transport that would
 otherwise fire a second event per destination that is a clear saving. For
 one declared carelessly, it is a cost every write in the system pays. Index
-the lookup, and return early for events you can rule out without one.</p>
+the lookup, and return early for events you can rule out without one. See
+<a href="../operations/#what-a-fan-out-costs">what a fan-out costs</a>.</p>
 </div>
 <p><code>replay_events</code> calls the callable again, so a replay goes to the targets that
 exist at replay time; see <a href="../operations/#replay">replay</a>.</p>
@@ -1121,15 +1238,15 @@ sentence good enough to be the dead-letter reason. That message lands in
 loop: one undecodable row must not stop the other four thousand.</p>
 <h3 id="upgrade-the-escape-from-the-two-breaking-cases"><code>upgrade()</code> - the escape from the two breaking cases<a class="headerlink" href="#upgrade-the-escape-from-the-two-breaking-cases" title="Permanent link">&para;</a></h3>
 <p>Declare it on the event class and an older row is migrated before it is decoded:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nd">@event</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">"orders.OrderPlaced"</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">slots</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">OrderPlaced</span><span class="p">:</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="n">order_id</span><span class="p">:</span> <span class="nb">int</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="n">currency</span><span class="p">:</span> <span class="nb">str</span>  <span class="c1"># added in v2, with no default</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    <span class="nd">@staticmethod</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">upgrade</span><span class="p">(</span><span class="n">payload</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">from_version</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>        <span class="k">return</span> <span class="p">{</span><span class="o">**</span><span class="n">payload</span><span class="p">,</span> <span class="s2">"currency"</span><span class="p">:</span> <span class="s2">"EUR"</span><span class="p">}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nd">@event</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">"orders.OrderPlaced"</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">slots</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">OrderPlaced</span><span class="p">:</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="n">order_id</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="n">currency</span><span class="p">:</span> <span class="nb">str</span>  <span class="c1"># added in v2, with no default</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    <span class="nd">@staticmethod</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">upgrade</span><span class="p">(</span><span class="n">payload</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">from_version</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>        <span class="k">return</span> <span class="p">{</span><span class="o">**</span><span class="n">payload</span><span class="p">,</span> <span class="s2">"currency"</span><span class="p">:</span> <span class="s2">"EUR"</span><span class="p">}</span>
 </span></code></pre></div>
 <ul>
 <li>It must be a <strong><code>staticmethod</code> or <code>classmethod</code></strong>, checked at the decorator. An
@@ -1160,9 +1277,9 @@ another.</p>
 the sequence type that belongs in one - a <code>list</code> field is a mutable field in a
 nominally immutable object. JSON has no tuple, so a tuple is written as a list
 and read back as a tuple; the annotation is what decides.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    <span class="s2">"CODEC"</span><span class="p">:</span> <span class="s2">"django_domain_events.codecs.dacite_codec.DaciteCodec"</span><span class="p">,</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="p">}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="s2">"CODEC"</span><span class="p">:</span> <span class="s2">"django_domain_events.codecs.dacite_codec.DaciteCodec"</span><span class="p">,</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>Two <a href="../introspection/#system-checks">system checks</a> run at startup rather than
 letting the problem first surface as a failed delivery in a worker: one verifies

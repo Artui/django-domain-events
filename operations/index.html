@@ -482,6 +482,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#the-lease-a-claim-stamps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The lease a claim stamps
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#stopping-it" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -677,6 +688,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-a-fan-out-costs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a fan-out costs
+      
+    </span>
+  </a>
   
 </li>
       
@@ -868,6 +890,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#the-lease-a-claim-stamps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The lease a claim stamps
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#stopping-it" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1067,6 +1100,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#what-a-fan-out-costs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a fan-out costs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#knowing-it-is-working" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1158,10 +1202,11 @@ rest of the outbox for hours. A lane gives it relays of its own:</p>
 <li><strong><code>--batch-size</code> sizes this process's claims</strong> in place of <code>BATCH_SIZE</code>, which
   also sizes prune batches and requeue chunks. Every row of a batch is claimed
   under one lease, and a row still waiting its turn when the lease lapses is
-  taken by another relay, so a slow lane wants a batch it can send inside
-  <code>LEASE_SECONDS</code>. With <code>--once</code> it cannot be combined with <code>--limit</code>, which is
-  one claim of exactly that many rows; the pair is refused rather than the
-  batch silently ignored.</li>
+  taken by another relay, so a slow lane wants a batch it can work through
+  inside the lease its claim stamps: see
+  <a href="#the-lease-a-claim-stamps">the lease a claim stamps</a>. With <code>--once</code> it
+  cannot be combined with <code>--limit</code>, which is one claim of exactly that many
+  rows; the pair is refused rather than the batch silently ignored.</li>
 <li><strong>An <code>eager=True</code> attempt still runs in the firing process</strong>, whatever the
   lane: the lane decides which relay picks up what eager delivery did not
   finish.</li>
@@ -1194,16 +1239,100 @@ another its own <code>lane=</code>, and run relays for each.</p>
 </span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"python"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"manage.py"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"deliver_events"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"--lane"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"mail"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"--batch-size"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"5"</span><span class="p p-Indicator">]</span>
 </span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
 </span></code></pre></div>
+<h3 id="the-lease-a-claim-stamps">The lease a claim stamps<a class="headerlink" href="#the-lease-a-claim-stamps" title="Permanent link">&para;</a></h3>
+<p>Each delivery needs its receiver's lease: its <code>lease_seconds=</code>, or
+<code>LEASE_SECONDS</code> where it declares none. A claim stamps one lease across every
+row it takes, so it stamps the lease its lane needs, with a fixed 10 percent
+of headroom:</p>
+<table>
+<thead>
+<tr>
+<th>What the claim takes</th>
+<th>It stamps</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A lane whose durable receivers all need the same lease, s, no longer than <code>LEASE_SECONDS</code></td>
+<td>s x 1.1</td>
+</tr>
+<tr>
+<td>A lane whose receivers all need the same lease, longer than <code>LEASE_SECONDS</code></td>
+<td><code>LEASE_SECONDS</code> x 1.1</td>
+</tr>
+<tr>
+<td>A lane mixing leases, or every lane at once (<code>lane=None</code>)</td>
+<td><code>LEASE_SECONDS</code> x 1.1</td>
+</tr>
+<tr>
+<td>The default lane</td>
+<td>as above, over the receivers declared in no named lane</td>
+</tr>
+<tr>
+<td>The <code>eager=True</code> attempt after commit</td>
+<td>as above, over every eager receiver</td>
+</tr>
+</tbody>
+</table>
+<p>So a claim never stamps more than <code>LEASE_SECONDS</code> x 1.1. A lane of receivers
+declaring a longer lease, <code>lease_seconds=1800</code> say, is claimed for
+<code>LEASE_SECONDS</code> x 1.1 like the default lane, and each row is extended to its
+own lease when it starts: a relay killed holding such a batch leaves its
+unstarted rows for 330 seconds, not 1980.</p>
+<p>Before it runs a row, the relay extends the row's lease to the receiver's own,
+unless the lease the claim stamped still is that: between s and s x 1.1 from
+now, on the relay's clock, and still naming this relay as the owner. A row
+started within s x 0.1 of its claim therefore needs no extension. On Postgres
+the extension is a write to an indexed column and never a HOT update, so each
+row that skips it costs one non-HOT update fewer. A row whose receiver needs a
+different lease from the one its claim stamped is extended as before: a
+60-second receiver in a mixed lane holds 60 seconds, not 330. So is every row
+claimed on a moved clock, <code>run_relay(now=...)</code> or <code>drain_outbox(now=...)</code>,
+when the clock was moved forward, or back by more than a tenth of the lease:
+either puts the stamped lease outside the band on the real clock. A clock
+moved back by less leaves it inside, and the row starts without the extension,
+under a lease still at least its receiver's own.</p>
+<p>What it means for a lane of receivers that all declare <code>lease_seconds=60</code>,
+when <code>LEASE_SECONDS</code> is the default 300:</p>
+<ul>
+<li><strong>A crashed relay's unstarted rows are claimable again after 66 seconds</strong>,
+  where every row but the one in flight used to wait out <code>LEASE_SECONDS</code>. The
+  default lane with no overrides goes from 300 seconds to 330.</li>
+<li><strong>A row in flight may hold up to 66 seconds</strong> rather than 60.</li>
+<li><strong>The batch has to start inside 66 seconds, not inside <code>LEASE_SECONDS</code></strong>:
+  batch size times seconds per delivery stays under s x 1.1. That binds every
+  claim of the lane, not only a relay's: a <code>deliver_events --once --limit</code>
+  claim of that many rows, a <code>deliver_pending()</code> batch, and the eager attempt,
+  which claims every eager row of one <code>fire()</code> at once. Past that, the tail of
+  the batch lapses while it waits its turn and another worker takes it.
+  Relays with worker ids of their own never both run a row: the first finds
+  the row gone when it tries to extend the lease, and logs that it lost the row
+  before running it, but the relays churn over each other's batches. Two
+  callers sharing one worker id cannot be told apart, so two
+  <code>deliver_pending()</code> calls left on its default <code>worker_id</code> can both run the
+  tail. They always could, once a claim lapsed; in such a lane it now lapses
+  after 66 seconds rather than 300. Give each its own <code>worker_id</code>.</li>
+<li><strong>Every row skips the extension when the batch starts inside s x 0.1</strong>:
+  batch size at most s x 0.1 / seconds per delivery, plus one. At a second a
+  send that is 7 rows for a 60-second lane, which also fits 66 rows inside
+  the lease; <code>--batch-size 5</code> does both. Rows past that are extended as
+  before, so a bigger batch costs writes, not correctness.</li>
+</ul>
 <h3 id="stopping-it">Stopping it<a class="headerlink" href="#stopping-it" title="Permanent link">&para;</a></h3>
 <p><code>SIGTERM</code>, or <code>SIGINT</code> from Ctrl-C, asks the relay to stop. It finishes the
 delivery it is running, gives back the rest of the batch it claimed, and exits.
 A row given back keeps its place at the head of the queue and any other relay
-can claim it at once, rather than when its lease lapses (<code>LEASE_SECONDS</code>, five
+can claim it at once, rather than when its lease lapses
+(<a href="#the-lease-a-claim-stamps">the lease its claim stamped</a>, five and a half
 minutes by default). Giving a row back is expiring its lease, so until another
 relay takes it, it is counted in <code>outbox_health().lapsed_leases</code>.</p>
 <p>A second signal exits at once, with status 128 plus the signal number. The
 receiver running at that moment is interrupted and its transaction rolls back.
 Its row is reclaimed when the lease lapses, as a crashed worker's would be.</p>
+<p>An <code>async def</code> receiver is the exception: its transaction rolls back, but the
+coroutine runs on an event loop in another thread that a signal cannot reach,
+and the process exits only once that coroutine returns. A third signal ends it
+then. Give whatever the coroutine awaits a timeout.</p>
 <p>How long a stop takes:</p>
 <ul>
 <li>the rest of the running receiver, if one is running;</li>
@@ -1574,11 +1703,13 @@ queue redelivering: the redelivered copy finds the row taken by the worker that
 died, and the relay reclaims it once the lease lapses. Size <code>lease_seconds=</code> to
 cover the queue's backlog as well as the receiver's own run.</p>
 <h4 id="the-lease-has-to-outlast-the-queue">The lease has to outlast the queue<a class="headerlink" href="#the-lease-has-to-outlast-the-queue" title="Permanent link">&para;</a></h4>
-<p>The lease the relay sets at the hand-off is the time the message has to reach
-a worker. The task extends it again before the receiver runs, so the run is
-covered on its own; what the hand-off lease has to cover is the wait in the
-queue, which is the backlog ahead of the message divided by the rate the
-workers drain it:</p>
+<p>The lease the row holds at the hand-off is the time the message has to reach
+a worker: at least the receiver's <code>lease_seconds=</code>, whether the claim stamped
+it or the relay extended it there. The task extends it again before the
+receiver runs, unless the queue delivered it soon enough that the lease still
+is the receiver's own, so the run is covered on its own; what the hand-off
+lease has to cover is the wait in the queue, which is the backlog ahead of the
+message divided by the rate the workers drain it:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>lease_seconds &gt; messages ahead / (workers x tasks per second per worker)
 </span></code></pre></div>
 <p>A burst that enqueues 28,000 tasks onto workers draining 20 a second needs
@@ -1609,6 +1740,36 @@ anywhere. A missing <code>TASK_BACKEND</code> is refused <strong>at delivery</st
 the receivers that asked for one, so configuring no backend cannot break
 receivers that never wanted it. Neither case silently runs in the relay.</p>
 </div>
+<h2 id="what-a-fan-out-costs">What a fan-out costs<a class="headerlink" href="#what-a-fan-out-costs" title="Permanent link">&para;</a></h2>
+<p>A <a href="../declaring/#fan-out-one-delivery-per-target">fan-out</a> writes its rows inside
+<code>fire()</code>, so the write that fired the event pays for them, in its transaction.
+They go in as one <code>INSERT</code> on Postgres. From Django 5.2 that statement binds
+<strong>one array per column</strong> and reads the rows back out of <code>UNNEST</code>, where the
+alternative is a <code>VALUES</code> tuple per row with a placeholder per cell, for the
+driver to bind and the server to parse and plan. From 5.2.9 Django keeps the
+<code>UNNEST</code> form only while no field in the insert has a placeholder hook, and the
+delivery row's target digest column has none for that reason. SQLite, and
+Django before 5.2, write <code>VALUES</code> for every multi-row insert.</p>
+<p>One consumer measured <code>fire()</code> at about 130 microseconds a target while the
+insert was <code>VALUES</code>. Timing <code>bulk_create</code> of delivery rows alone, on Postgres
+16, gives about 55 to 75 microseconds a row as <code>VALUES</code> and about 30 as
+<code>UNNEST</code>, from a thousand rows to twenty thousand.</p>
+<div class="admonition note">
+<p class="admonition-title">On MySQL, a digest write raises warning 1300</p>
+<p>The hook the digest column no longer has is also what put MySQL's
+<code>_binary</code> prefix on it, so every insert or update of a digest raises
+warning 1300, as every lookup on the column always has. The stored bytes
+are unchanged. This was checked by hand against MySQL 9.6 with mysqlclient
+2.3.0 under the default strict <code>sql_mode</code>, not in CI, and not on MariaDB,
+PyMySQL, MySQL 8.x or a <code>utf8mb4</code> connection charset. A project that runs
+warnings as errors will see these, and can filter MySQLdb's warning 1300
+where it writes the <code>target_digest</code> column.</p>
+</div>
+<p>The rest of the cost is the <code>targets=</code> callable, which runs once per fired event
+for every fan-out receiver owed it. Make it <strong>one <code>SELECT</code></strong> returning the
+strings - <code>values_list("pk", flat=True)</code>, as in the example on the declaring
+page - rather than a loop over model instances, which builds an object per
+target only to discard it, or a query per candidate.</p>
 <h2 id="knowing-it-is-working">Knowing it is working<a class="headerlink" href="#knowing-it-is-working" title="Permanent link">&para;</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>events_status
 </span></code></pre></div>
