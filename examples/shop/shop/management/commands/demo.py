@@ -6,9 +6,11 @@ import logging
 from datetime import timedelta
 from typing import Any
 
+from django.conf import settings as django_settings
 from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.test import override_settings
 from django.utils.timezone import now
 
 from django_domain_events import (
@@ -30,6 +32,7 @@ from django_domain_events import (
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.models.receiver_last_success import ReceiverLastSuccess
+from shop.delivery_log import DeliveryLogFilter, current_delivery
 from shop.events import (
     REMINDER_QUIET_PERIOD,
     InvoiceSent,
@@ -100,6 +103,18 @@ class _Collect(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         self.messages.append(record.getMessage())
+
+
+class _Lines(logging.Handler):
+    """Keeps each line with the delivery the hook stamped it with."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.INFO)
+        self.addFilter(DeliveryLogFilter())
+        self.lines: list[tuple[str, str]] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.lines.append((getattr(record, "delivery", ""), record.getMessage()))
 
 
 class Command(BaseCommand):
@@ -572,4 +587,58 @@ class Command(BaseCommand):
             ("succeeded", 1),
         )
         check("and its body ran, sending the request once", asked, 1)
+
+        head("18. A hook around each delivery puts its ids on every line")
+        # Restocked, so the INLINE check lets the next two orders through.
+        StockLevel.objects.filter(sku="WIDGET").update(available=10)
+        lines = _Lines()
+        shop_log = logging.getLogger("shop")
+        shop_log.addHandler(lines)
+        try:
+            third = place_order(user, "WIDGET", 1, 999)
+            print(f"   {deliver_pending(worker_id='demo')}")
+        finally:
+            shop_log.removeHandler(lines)
+        reserved = DeliveryRecord.objects.get(
+            receiver_key="shop.reserve_stock", event__dedupe_key=f"order-placed:{third.pk}"
+        )
+        stamped = [delivery for delivery, line in lines.lines if line.endswith(f"order {third.pk}")]
+        print(f"   reserve_stock logged: {stamped}   <- set by the hook, not the receiver")
+        check(
+            "the receiver's own line carries its delivery and receiver ids",
+            stamped,
+            [f"delivery={reserved.pk} receiver=shop.reserve_stock"],
+        )
+        check("and the hook put back what was there when it exited", current_delivery.get(), "-")
+
+        head("19. A hook that cannot be entered fails the attempt")
+        broken = {
+            **django_settings.DJANGO_DOMAIN_EVENTS,
+            "AROUND_DELIVERY": "shop.delivery_log.tracer_that_is_down",
+        }
+        with override_settings(DJANGO_DOMAIN_EVENTS=broken):
+            fourth = place_order(user, "WIDGET", 1, 999)
+            print(f"   {deliver_pending(worker_id='demo')}")
+        unreserved = DeliveryRecord.objects.get(
+            receiver_key="shop.reserve_stock", event__dedupe_key=f"order-placed:{fourth.pk}"
+        )
+        print(
+            f"   {unreserved.receiver_key}: {unreserved.status} after {unreserved.attempts} attempt"
+        )
+        print(f"         {unreserved.last_error}")
+        check(
+            "entering a hook that raises fails the attempt, which counts",
+            (unreserved.status, unreserved.attempts),
+            ("failed", 1),
+        )
+        check(
+            "the row records the hook's error",
+            unreserved.last_error,
+            "ConnectionError: the tracing collector is unreachable",
+        )
+        check(
+            "and the receiver never ran",
+            Reservation.objects.filter(order=fourth).exists(),
+            False,
+        )
         print("\nEvery claim above was checked.")
