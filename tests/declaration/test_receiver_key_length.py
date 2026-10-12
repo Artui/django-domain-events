@@ -19,6 +19,7 @@ from django_domain_events.declaration.receiver import receiver
 from django_domain_events.declaration.registry import registry
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.receiver_last_success import ReceiverLastSuccess
+from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.utils import label_for
 from tests.testapp.events import OrderPlaced
 
@@ -126,3 +127,16 @@ def test_a_derived_key_over_the_limit_is_refused() -> None:
         assert registry.receiver_for_key(key) is None
     assert "already registered" not in str(caught.value)
     assert registry.receivers() == before
+
+
+@pytest.mark.parametrize("mode", [DeliveryMode.INLINE, DeliveryMode.ON_COMMIT])
+def test_a_long_key_is_refused_in_every_mode(mode: DeliveryMode) -> None:
+    """Holds the rule as mode-blind: a check scoped to ``DURABLE`` lets these through.
+
+    Neither mode writes the key to a column, so this is the rule rather than a
+    database limit: a receiver's key stays valid when its mode changes.
+    """
+    key = "k" * (LIMIT + 1)
+    with _declared(key), pytest.raises(ValueError, match=f"{LIMIT + 1} characters"):
+        receiver(OrderPlaced, key=key, mode=mode)(_plain)
+    assert registry.receiver_for_key(key) is None
