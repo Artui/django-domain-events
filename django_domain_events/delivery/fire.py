@@ -237,7 +237,11 @@ def _deliver_eagerly(delivery_ids: list[int]) -> Callable[[], None]:
         claimed = claim_batch(
             worker_id="eager",
             now=now,
-            lease=timedelta(seconds=setting("LEASE_SECONDS")),
+            lease=timedelta(
+                seconds=registry.claim_lease_seconds(
+                    None, default=setting("LEASE_SECONDS"), eager=True
+                )
+            ),
             limit=len(delivery_ids),
             only_ids=delivery_ids,
         )

@@ -1,8 +1,19 @@
 from __future__ import annotations
 
 from django_domain_events.declaration.any_event import AnyEvent
+from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_event import RegisteredEvent
 from django_domain_events.types.registered_receiver import DEFAULT_LANE, RegisteredReceiver
+
+LEASE_HEADROOM = 1.1
+"""How far past a receiver's own lease a claim may stamp, as a factor.
+
+A claim stamps its lane's lease times this, and a delivery whose claimed lease
+still lies between its receiver's lease and that product starts without
+extending it: the extension is a write to an indexed column, so it is never a
+HOT update. The headroom is what lets more than the first row of a batch start
+inside the band, at the cost of a crashed row holding 10 percent longer. Fixed,
+not a setting, because its only meaning is WAL against recovery time."""
 
 
 class Registry:
@@ -96,6 +107,37 @@ class Registry:
     def lanes(self) -> list[str]:
         """Every lane a relay can serve, sorted: the default and each one declared."""
         return sorted({DEFAULT_LANE} | {r.lane for r in self._receivers.values()})
+
+    def claim_lease_seconds(self, lane: str | None, *, default: int, eager: bool = False) -> float:
+        """The lease a claim of ``lane`` stamps, in seconds: its base times the headroom.
+
+        The base is the effective lease - ``lease_seconds``, or ``default``
+        where none is declared - shared by every durable receiver the claim can
+        take, when they all share one, and ``default`` otherwise: a lane mixing
+        leases, or no durable receiver at all. A named lane's receivers are
+        those declared in it, the default lane's are those declared in no named
+        one, and None is every receiver. ``eager`` narrows them to the eager
+        ones, for the attempt after commit, which claims only their rows.
+
+        ``default`` is ``LEASE_SECONDS``, passed in rather than read here so the
+        registry stays free of settings. Asked on every claim, as lane
+        membership is, so it is whatever the declarations say at that moment.
+
+        Each filter is one arc with the others, so each names its test in
+        ``tests/declaration/test_registry_claim_lease.py``: the mode -
+        ``test_a_receiver_that_writes_no_rows_does_not_count``; ``eager`` -
+        ``test_the_eager_attempt_counts_only_eager_receivers``; the lane -
+        ``test_a_named_lane_counts_only_its_own_receivers``.
+        """
+        leases = {
+            default if r.lease_seconds is None else r.lease_seconds
+            for r in self._receivers.values()
+            if r.mode is DeliveryMode.DURABLE
+            and (r.eager or not eager)
+            and (lane is None or r.lane == lane)
+        }
+        base = leases.pop() if len(leases) == 1 else default
+        return base * LEASE_HEADROOM
 
     def require_lane(self, lane: str | None) -> None:
         """Refuse a lane no receiver is declared in.

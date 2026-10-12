@@ -10,7 +10,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from django.utils import timezone
 
-from django_domain_events.declaration.registry import registry
+from django_domain_events.declaration.registry import LEASE_HEADROOM, registry
 from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.fire import call_receiver, run_to_completion
@@ -138,9 +138,18 @@ def _deliver_one(
     # says how long the lease should be. A registry lookup touches no rows, so
     # nothing is written before ownership has been re-established.
     receiver = registry.receiver_for_key(delivery.receiver_key)
-    seconds = setting("LEASE_SECONDS") if receiver is None else receiver.lease_seconds
+    seconds = _lease_seconds(receiver)
 
-    if delivery.status == DeliveryStatus.CLAIMED and not fence.extend_lease(now, seconds):
+    # A row the claim already leased for this receiver starts without the
+    # extension, which would rewrite the lease to what it already is at the
+    # cost of a non-HOT update. The status is the band's fourth condition: a
+    # row that is not CLAIMED is extended by nobody
+    # (test_an_unclaimed_row_passed_directly_writes_no_lease).
+    if (
+        delivery.status == DeliveryStatus.CLAIMED
+        and not fence.leased_for(delivery, now, seconds)
+        and not fence.extend_lease(now, seconds)
+    ):
         logger.warning(
             "worker %s lost delivery %s before running it; its lease had lapsed "
             "and another worker holds the row",
@@ -293,6 +302,17 @@ def _owed(delivery: Any, now: datetime) -> bool:
     return not (delivery.status in RETRYABLE and delivery.available_at > now)
 
 
+def _lease_seconds(receiver: RegisteredReceiver | None) -> int:
+    """The lease this receiver's delivery needs: its own, or ``LEASE_SECONDS``.
+
+    A row whose receiver is gone gets the setting, which is what the claim of
+    the default lane, where such rows drain, falls back to as well.
+    """
+    if receiver is None or receiver.lease_seconds is None:
+        return setting("LEASE_SECONDS")
+    return receiver.lease_seconds
+
+
 def _take(delivery_id: int, claimed_by: str | None, claimed_at: str | None, worker_id: str) -> bool:
     """Move a row from the claim a task message carries to this worker.
 
@@ -347,6 +367,49 @@ class _Fence:
             pk=self.pk, claimed_by=self.claimed_by, claimed_at=self.claimed_at
         )
 
+    def leased_for(self, delivery: Any, now: datetime, seconds: int) -> bool:
+        """Whether the row as loaded is this call's, under the lease it needs.
+
+        True when the row names the owner this call believes it is and its
+        lease runs out between ``seconds`` and ``seconds`` times the headroom
+        from ``now``: what the extension would write, give or take the
+        headroom a claim stamps. The caller then skips the extension, which is
+        a write to ``lease_expires_at``, a column ``dde_claimed_by_lease`` is
+        keyed on, so never a HOT update.
+
+        Read from the row already loaded, so it costs no query. The extension's
+        compare-and-set checks ownership a moment later than this read does,
+        but a check at any instant before the receiver runs proves nothing
+        past that instant: what keeps the row this call's from then on is the
+        lease. A lease at least ``seconds`` ahead on this clock is one no other
+        claimer can take before then unless its clock runs that far ahead of
+        this one, which is what the extension assumed too, since it wrote
+        ``now`` plus the same ``seconds`` on this clock. A takeover past that is
+        caught by the final fenced write, as one past a lapsed lease always
+        was.
+
+        ``now`` is the clock the caller reads, ``timezone.now()``, naive under
+        ``USE_TZ = False`` as the column is. A lease written on an injected
+        clock lies outside the band whichever way that clock was moved, so the
+        extension runs as it always did. Hence the upper bound as well as the
+        lower one.
+
+        The caller checks the status, the band's fourth condition. Each other
+        condition is in one arc, so each names its test in
+        ``tests/delivery/test_lease_band.py``: the owner -
+        ``test_a_row_another_worker_took_in_band_is_not_run`` and
+        ``test_a_row_another_worker_took_in_band_is_not_enqueued``; a lease at
+        all - ``test_a_claimed_row_with_no_lease_is_extended_and_delivered``;
+        the lower bound - ``test_a_row_started_late_in_its_batch_is_extended``;
+        the upper bound - ``test_a_row_claimed_on_a_later_clock_is_extended``.
+        """
+        if delivery.claimed_by != self.claimed_by or delivery.lease_expires_at is None:
+            return False
+        remaining = delivery.lease_expires_at - now
+        return (
+            timedelta(seconds=seconds) <= remaining <= timedelta(seconds=seconds * LEASE_HEADROOM)
+        )
+
     def extend_lease(self, now: datetime, seconds: int | None = None) -> bool:
         """Push the lease out to cover this delivery alone.
 
@@ -354,9 +417,11 @@ class _Fence:
         then delivers them one at a time; without this the lease is a budget for
         the whole batch and runs out partway through it.
 
-        ``seconds`` is the receiver's own override when it declared one. This is
-        the only moment a lease can be sized to the work, because it is the last
-        one before the receiver's transaction opens and stops publishing.
+        ``seconds`` is the receiver's own lease, ``LEASE_SECONDS`` when None.
+        This is the only moment a lease can be sized to the work, because it is
+        the last one before the receiver's transaction opens and stops
+        publishing. A row the claim already leased for the receiver needs none
+        (``leased_for``).
         """
         lease = timedelta(seconds=seconds if seconds is not None else setting("LEASE_SECONDS"))
         return bool(self._owned().update(lease_expires_at=now + lease))
@@ -391,7 +456,10 @@ def dispatch_one(
     The lease is extended here for the same reason ``deliver_one`` extends it,
     and it matters more: the row now has to survive the queue's backlog as well
     as the receiver's own runtime, and this is the last moment before the relay
-    stops looking at it.
+    stops looking at it. A row handed off soon after its claim already holds
+    the receiver's lease, within the claim's headroom, and is handed off as it
+    is; the task then finds the same lease after its take and, if the queue was
+    quick, starts without extending it either.
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
 
@@ -422,8 +490,14 @@ def dispatch_one(
     # handed off: an unclaimed row has no claim to carry, and the task taking it
     # would be refused. Each half has its own test, since the two are one arc:
     # test_an_unclaimed_row_is_not_enqueued and test_a_lost_row_is_not_enqueued.
-    if delivery.status != DeliveryStatus.CLAIMED or not fence.extend_lease(
-        timezone.now(), receiver.lease_seconds
+    # A row the claim already leased for this receiver is handed off without the
+    # extension, under the same band as in ``_deliver_one``, and the queue still
+    # has at least the receiver's lease
+    # (test_a_hand_off_right_after_the_claim_writes_no_lease).
+    now = timezone.now()
+    seconds = _lease_seconds(receiver)
+    if delivery.status != DeliveryStatus.CLAIMED or not (
+        fence.leased_for(delivery, now, seconds) or fence.extend_lease(now, seconds)
     ):
         logger.warning(
             "worker %s does not hold delivery %s, so it was not enqueued", worker_id, delivery_id
@@ -848,7 +922,6 @@ def deliver_pending(
             f"would be ignored. Pass one or the other."
         )
     registry.require_lane(lane)
-    lease = timedelta(seconds=setting("LEASE_SECONDS"))
     batch_size = claim_size(batch_size)
 
     counts: dict[DeliveryStatus, int] = {}
@@ -885,7 +958,12 @@ def deliver_pending(
         ids = claim_batch(
             worker_id=worker_id,
             now=claimed_at,
-            lease=lease,
+            # The lane's own lease with its headroom, so a row that starts
+            # soon after the claim needs no extension; read per claim, as the
+            # lane's membership is (test_a_uniform_lane_is_claimed_under_its_own_lease).
+            lease=timedelta(
+                seconds=registry.claim_lease_seconds(lane, default=setting("LEASE_SECONDS"))
+            ),
             limit=limit if limit is not None else batch_size,
             ignore_backoff=ignore_backoff,
             lane=lane,
