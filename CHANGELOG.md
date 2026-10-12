@@ -30,6 +30,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MySQL 8.x or a `utf8mb4` connection charset. A project running warnings as
   errors can filter MySQLdb's warning 1300 where it writes that column.
 
+### Added
+- `async def` receivers run, at every mode, through `asgiref.sync.async_to_sync`.
+  Its async ORM writes land in the transaction carrying the acknowledgement and
+  roll back with it. `RetryAfter`, `NotYet` and `PermanentFailure` raised from
+  it are read exactly as from a function, and events it fires through
+  `sync_to_async(fire)` record it as their cause. A coroutine that is cancelled
+  is a failed attempt, recorded with a `RuntimeError` naming the receiver, and
+  retried. An `on_failure` hook may be `async def` too. Outside ASGI each call
+  runs on an event loop of its own, closed when it returns, so a task it starts
+  and does not await is cancelled; under ASGI an `INLINE` or `ON_COMMIT`
+  coroutine runs on the server's loop. Either way a client bound to a loop
+  cannot be shared between calls. What it buys is the ability to call async
+  libraries, not concurrency. A relay's second signal, which ends a sync
+  receiver at once, waits for an in-flight coroutine to return; a third signal
+  ends the process.
+
+### Changed
+- A sync callable that returns an awaitable, and an `async def` with `yield` in
+  its body, are refused at the call with a `TypeError` naming the fix. Earlier
+  versions skipped their body silently. After upgrading, a `DURABLE` one's
+  deliveries fail, are retried and dead-letter after `max_attempts`; an
+  `ON_COMMIT` one logs the error; an `INLINE` one raises from `fire()` and rolls
+  back the caller's transaction. `targets=` and `due=` refuse an `async def` at
+  the decorator with `TypeError`; both already failed at the first fire.
+- Upgrade note: `async def` receivers already declared start running on
+  upgrade, and an `INLINE` one can now veto by raising. `DURABLE` deliveries
+  that earlier versions recorded `succeeded` for such a receiver never ran.
+  `replay_events(event_ids, receiver_keys=[key])` reopens them, for events not
+  yet pruned; the ids are `DeliveryRecord.objects.filter(receiver_key=key,
+  status="succeeded").values_list("event_id", flat=True)`. `INLINE` and
+  `ON_COMMIT` runs left no row and cannot be replayed.
+
 ## [0.11.2] — 2026-10-12
 
 ### Fixed
