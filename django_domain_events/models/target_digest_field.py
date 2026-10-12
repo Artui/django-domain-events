@@ -64,11 +64,14 @@ class TargetDigestField(models.BinaryField):
     #
     # The base hook answers a bare ``%s`` on Postgres and SQLite, so neither
     # binds anything different. MySQL's answers ``_binary %s``, which tells the
-    # server not to check the bytes as text; without it an insert or update of
-    # a digest that is not valid UTF-8 may raise warning 1300 again, as the
-    # ``WHERE`` of every lookup on this column always could, since lookups
-    # never went through the hook. Unverified against a real MySQL server, for
-    # the reason given in db_type above.
+    # server not to check the bytes as text, so on MySQL an insert or update of
+    # a digest now carries no prefix and each such write raises warning 1300,
+    # as every lookup on this column always did, since lookups never went
+    # through the hook. The stored bytes are unchanged. Accepted for the
+    # Postgres insert, and checked by hand against MySQL 9.6 with mysqlclient
+    # 2.3.0 under the default strict sql_mode, not in CI; not tried on MariaDB,
+    # PyMySQL, MySQL 8.x or a utf8mb4 connection charset. The missing prefix is
+    # pinned by test_a_digest_write_on_mysql_carries_no_binary_prefix.
     #
     # Held by test_the_field_has_no_placeholder_hook_so_postgres_can_unnest_a_bulk_insert,
     # one case per name, and by the UNNEST tests beside it.

@@ -597,15 +597,28 @@ receiver.
 
 A [fan-out](declaring.md#fan-out-one-delivery-per-target) writes its rows inside
 `fire()`, so the write that fired the event pays for them, in its transaction.
-On Postgres they go in as **one statement whatever the count**: from Django 5.2
-the insert binds one array per column and reads the rows back out of `UNNEST`,
-where the alternative is a `VALUES` tuple per row, with a placeholder per column
-per row for the server to parse and plan. From 5.2.9 Django keeps that form only
-while no field in the insert has a placeholder hook, and the delivery row's
-target digest column has none for that reason. On one consumer's measurements a fan-out cost
-about 130 microseconds a target while its insert was `VALUES`, and roughly half
-that as `UNNEST`. SQLite, and Django before 5.2, write `VALUES` for every
-multi-row insert.
+They go in as one `INSERT` on Postgres. From Django 5.2 that statement binds
+**one array per column** and reads the rows back out of `UNNEST`, where the
+alternative is a `VALUES` tuple per row with a placeholder per cell, for the
+driver to bind and the server to parse and plan. From 5.2.9 Django keeps the
+`UNNEST` form only while no field in the insert has a placeholder hook, and the
+delivery row's target digest column has none for that reason. SQLite, and
+Django before 5.2, write `VALUES` for every multi-row insert.
+
+One consumer measured `fire()` at about 130 microseconds a target while the
+insert was `VALUES`. Timing `bulk_create` of delivery rows alone, on Postgres
+16, gives about 55 to 75 microseconds a row as `VALUES` and about 30 as
+`UNNEST`, from a thousand rows to twenty thousand.
+
+!!! note "On MySQL, a digest write raises warning 1300"
+    The hook the digest column no longer has is also what put MySQL's
+    `_binary` prefix on it, so every insert or update of a digest raises
+    warning 1300, as every lookup on the column always has. The stored bytes
+    are unchanged. This was checked by hand against MySQL 9.6 with mysqlclient
+    2.3.0 under the default strict `sql_mode`, not in CI, and not on MariaDB,
+    PyMySQL, MySQL 8.x or a `utf8mb4` connection charset. A project that runs
+    warnings as errors will see these, and can filter MySQLdb's warning 1300
+    where it writes the `target_digest` column.
 
 The rest of the cost is the `targets=` callable, which runs once per fired event
 for every fan-out receiver owed it. Make it **one `SELECT`** returning the

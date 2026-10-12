@@ -10,16 +10,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - On Postgres with Django 5.2.9 or later, every multi-row insert of delivery
   rows - a fan-out in `fire()`, and the rows `replay_events` writes for
-  targets it finds missing - was one `VALUES` tuple per row rather than
-  Django's single `UNNEST` statement, at about twice the cost per row. Django gives that form up for a whole insert when
+  targets it finds missing - was written as a `VALUES` tuple per row rather
+  than Django's `UNNEST` form, which binds one array per column, at about
+  twice the cost per row. Django gives that form up for a whole insert when
   any field has a placeholder hook, and the target digest column inherited
   `BinaryField`'s. The field now has none, under either name Django has used
-  for it. Its class path, column type, stored values and migrations are
-  unchanged, as is the SQL on SQLite and for single-row inserts. On MySQL an
-  insert or update of a digest no longer carries the `_binary` prefix, which
-  only tells the server not to check the bytes as text, and which lookups on
-  the column never carried; the suite does not run on MySQL, so this is
-  unverified against a server.
+  for it. Its class path, column type and migrations are unchanged, as is the
+  SQL on SQLite and for single-row inserts, and so are the stored values but
+  for one edge that follows Django rather than this package: on Django 5.2.9
+  and 6.0.0 exactly, a receiver key longer than its 255-character column is
+  now truncated by the `UNNEST` cast where it raised `DataError`, as it
+  already was on 5.2.0 to 5.2.8. Django dropped the length from that cast in
+  5.2.10 and 6.0.1, where such a key raises again.
+- On MySQL, as the cost of the fix above, an insert or update of a target
+  digest no longer carries the `_binary` prefix, so each such write raises
+  warning 1300, as every lookup on the column always did. The stored bytes are
+  unchanged. Checked by hand against MySQL 9.6 with mysqlclient 2.3.0 under
+  the default strict `sql_mode`, not in CI; not tested on MariaDB, PyMySQL,
+  MySQL 8.x or a `utf8mb4` connection charset. A project running warnings as
+  errors can filter MySQLdb's warning 1300 where it writes that column.
 
 ## [0.11.2] — 2026-10-12
 

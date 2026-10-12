@@ -14,8 +14,9 @@ from datetime import datetime, timezone
 import django
 import pytest
 from django.db import connection
+from django.db.backends.mysql.operations import DatabaseOperations as MySQLOperations
 from django.db.models.constants import OnConflict
-from django.db.models.sql import InsertQuery
+from django.db.models.sql import InsertQuery, UpdateQuery
 from django.db.utils import ConnectionHandler
 from django.test.utils import CaptureQueriesContext
 
@@ -126,6 +127,42 @@ def test_a_bulk_insert_compiles_to_one_unnest_statement_for_postgres(
     # statement's size no longer grows with the row count.
     assert [len(column) for column in params] == [3] * len(fields)
     assert postgres.connection is None
+
+
+def test_a_digest_write_on_mysql_carries_no_binary_prefix() -> None:
+    """What hiding the hook costs MySQL, pinned so it is a decision rather than
+    a drift: its hook answered ``_binary %s``, and an insert or update now
+    binds a bare ``%s``, as every lookup on the column always did. Compiled
+    through MySQL's operations on a connection that is never opened, since the
+    suite runs no MySQL server and the backend itself needs mysqlclient; the
+    warning that follows on a server is documented, not tested here."""
+    mysql = ConnectionHandler(
+        {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
+    )["default"]
+    mysql.ops = MySQLOperations(mysql)
+    meta = DeliveryRecord._meta
+    insert = InsertQuery(DeliveryRecord)
+    insert.insert_values(
+        [f for f in meta.concrete_fields if f is not meta.pk],
+        [
+            DeliveryRecord(
+                event_id=1,
+                receiver_key="probe.fan",
+                target=target,
+                available_at=datetime(2026, 8, 31, tzinfo=timezone.utc),
+            )
+            for target in ("a", "b")
+        ],
+    )
+    update = UpdateQuery(DeliveryRecord)
+    update.add_update_values({"target_digest": _digest("a")})
+
+    [(insert_sql, _)] = insert.get_compiler(connection=mysql).as_sql()
+    update_sql, _ = update.get_compiler(connection=mysql).as_sql()
+
+    assert insert_sql.startswith("INSERT INTO `")
+    assert "_binary" not in insert_sql
+    assert update_sql.endswith("SET `target_digest` = %s")
 
 
 @unnest_capable_server
