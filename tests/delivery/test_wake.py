@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import pytest
 from django.db import connection
 
@@ -59,6 +61,39 @@ def test_a_notification_wakes_the_waiter() -> None:
         thread.join()
 
 
+def test_notifications_queued_while_busy_wake_the_relay_once() -> None:
+    """A relay busy delivering is not waiting, so the notifications sent meanwhile
+    queue on its connection: psycopg keeps those that arrive during other
+    statements in a backlog and yields them first on the next wait. Leaving the
+    generator after one restores the rest, so without a drain each queued
+    notification is one more instant wake - one empty claim transaction apiece -
+    before the relay waits for real again."""
+    if connection.vendor != "postgresql":
+        pytest.skip("LISTEN/NOTIFY is Postgres only")
+    import psycopg
+    from django.db import connections
+
+    listener = connections["default"]
+    # Listening first, as a relay is from its first wait on.
+    assert wait_for_work(0.01) is False
+    params = listener.get_connection_params()
+    with psycopg.connect(**params, autocommit=True) as sender:
+        # Distinct payloads in separate statements: Postgres folds identical
+        # notifications sent in one transaction into one.
+        for i in range(5):
+            sender.execute("SELECT pg_notify(%s, %s)", (wake_module.CHANNEL, str(i)))
+    # A statement on the listener while they arrive, as a delivery would run,
+    # which is what lands them in the backlog rather than on the socket.
+    time.sleep(0.1)
+    with listener.cursor() as cursor:
+        cursor.execute("SELECT 1")
+
+    assert wait_for_work(5.0) is True
+    started = time.monotonic()
+    assert wait_for_work(0.3) is False
+    assert time.monotonic() - started >= 0.25
+
+
 class FakeCursor:
     """Records the SQL issued, so the statements are asserted rather than only
     executed on the one backend that accepts them."""
@@ -89,11 +124,18 @@ class FakeConnection:
 
 
 class FakeDriver:
+    """psycopg's ``notifies``, down to the part the wait depends on: one queue
+    shared by every call, so a notification yielded once is gone and the rest
+    are still there for the next call."""
+
     def __init__(self, notifications: int) -> None:
         self.notifications = notifications
 
-    def notifies(self, timeout: float, stop_after: int):
-        for _ in range(self.notifications):
+    def notifies(self, *, timeout: float, stop_after: int | None = None):
+        yielded = 0
+        while self.notifications and (stop_after is None or yielded < stop_after):
+            self.notifications -= 1
+            yielded += 1
             yield object()
 
 
@@ -110,6 +152,15 @@ def test_waiting_listens_before_it_waits() -> None:
     connection = FakeConnection(notifications=1)
     assert wait_for_work(1.0, connection=connection) is True
     assert connection.sql == ['LISTEN "django_domain_events"']
+
+
+def test_one_wake_drains_what_queued_behind_it() -> None:
+    """The backlog half of the Postgres test above, on any backend: three
+    queued, one wake, and nothing left for the next wait to return at once."""
+    connection = FakeConnection(notifications=3)
+    assert wait_for_work(1.0, connection=connection) is True
+    assert connection.connection.notifications == 0
+    assert wait_for_work(1.0, connection=connection) is False
 
 
 def test_waiting_reports_a_timeout() -> None:
