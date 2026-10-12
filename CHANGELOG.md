@@ -23,15 +23,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused. The Postgres CI job now runs under each setting.
 - An idle relay woke once for every notification sent while it was busy
   delivering, each wake an empty claim: psycopg holds those notifications in a
-  backlog and yields them first on the next wait, and the wait returned after
-  one. One wake now drains the backlog.
+  backlog and yields them first on the next wait, and the wait returned at the
+  first and left the rest there. The wait now runs psycopg's generator to its
+  end, which empties the backlog, then reads once more without blocking for any
+  that reached the socket meanwhile. The backlog exists from psycopg 3.2.4, so
+  the development dependency's floor is raised to it; psycopg is not a runtime
+  dependency, and nothing changes for an installed project.
 
 ### Added
 - Every failed attempt the relay records is logged once at `WARNING`, naming
   the receiver, the delivery, the attempt, the exception's type and whether the
   row is now `failed` or `dead`, with no traceback. A deferral and the give-up
-  that ends one are logged too. As with `on_failure`, a worker whose lease
-  lapsed logs nothing.
+  that ends one are logged too, and so is a payload that will not decode, as
+  it is dead-lettered (its receiver's `on_failure` is not told, since the
+  receiver never ran). A row orphaned because its receiver is gone counts no
+  attempt and is not logged. As with `on_failure`, a worker whose lease lapsed
+  logs nothing.
 - `ReceiverBacklog.claimed`: how many of a receiver's owed rows a worker holds,
   the per-receiver half of `OutboxHealth.claimed`, from the same grouped query.
   `events_status` prints it per receiver and carries it in `--format json`.
@@ -47,6 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the queue's backlog, and what a lapsed one looks like; and why a side effect
   inside the acknowledging transaction can repeat after a lost connection,
   with `DeliveryContext.delivery_id` as the destination's idempotency key.
+  The settings page says what the spring and autumn clock changes do to a
+  lease and to `give_up_after` under `USE_TZ = False`.
 
 ## [0.11.1] — 2026-10-11
 

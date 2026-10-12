@@ -144,7 +144,7 @@ def test_fire_stores_an_aware_occurred_at_as_local_time() -> None:
     occurred = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
     with transaction.atomic():
         pk = fire(Unheard(value=1), occurred_at=occurred)
-    assert EventRecord.objects.get(pk=pk).occurred_at == datetime(2026, 7, 1, 7, 0)
+    assert EventRecord.objects.get(pk=pk).occurred_at == django_timezone.make_naive(occurred)
 
 
 def test_not_yet_takes_local_time_and_moves_the_row_there() -> None:

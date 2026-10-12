@@ -59,10 +59,13 @@ ROOT_URLCONF = "tests.urls"
 # raises ``TypeError`` and only a run under the other setting can find one.
 USE_TZ = os.environ.get("DDE_TEST_USE_TZ", "true").lower() not in {"0", "false", "no"}
 
-# Left at Django's default, America/Chicago, on purpose: a zone other than UTC
-# means a naive value read back under ``USE_TZ = False`` is visibly local time,
-# so code attaching UTC to it is hours wrong and a test comparing it with
-# ``timezone.now()`` says so.
+# Django's default, America/Chicago, on purpose: a zone other than UTC means a
+# naive value read back under ``USE_TZ = False`` is visibly local time, so code
+# attaching UTC to it is hours wrong and a test comparing it with
+# ``timezone.now()`` says so. ``DDE_TEST_TIME_ZONE`` runs the suite in another
+# zone, which is how a test that wrote Chicago's offset into a constant is
+# found.
+TIME_ZONE = os.environ.get("DDE_TEST_TIME_ZONE", "America/Chicago")
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

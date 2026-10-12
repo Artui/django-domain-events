@@ -40,6 +40,9 @@ in through `utils.in_project_time`, so its values follow the project's setting,
 and an aware value meeting a naive one raises only under the other setting. On
 SQLite that run fails in the suite's own fixtures, which write aware values
 SQLite refuses under the setting; read its failures for a package frame.
+`DDE_TEST_TIME_ZONE` replaces the suite's `TIME_ZONE` (America/Chicago); a run
+under a zone with a different offset, such as `Asia/Kolkata`, finds a test that
+wrote Chicago's wall time into a constant.
 
 ## Structural rules
 
