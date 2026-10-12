@@ -634,7 +634,11 @@ class Command(BaseCommand):
         }
         with override_settings(DJANGO_DOMAIN_EVENTS=broken):
             fourth = place_order(user, "WIDGET", 1, 999)
-            print(f"   {deliver_pending(worker_id='demo')}")
+            # The claims are made at a clock fixed before the failure, so the
+            # backoff the failed row is given (a random fraction of two seconds,
+            # which can be a few milliseconds) is always still running: without
+            # it the pass sometimes retries the row it has just failed.
+            print(f"   {deliver_pending(worker_id='demo', now=now())}")
         unreserved = DeliveryRecord.objects.get(
             receiver_key="shop.reserve_stock", event__dedupe_key=f"order-placed:{fourth.pk}"
         )
