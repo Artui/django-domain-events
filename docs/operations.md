@@ -108,6 +108,11 @@ A second signal exits at once, with status 128 plus the signal number. The
 receiver running at that moment is interrupted and its transaction rolls back.
 Its row is reclaimed when the lease lapses, as a crashed worker's would be.
 
+An `async def` receiver is the exception: its transaction rolls back, but the
+coroutine runs on an event loop in another thread that a signal cannot reach,
+and the process exits only once that coroutine returns. A third signal ends it
+then. Give whatever the coroutine awaits a timeout.
+
 How long a stop takes:
 
 - the rest of the running receiver, if one is running;

@@ -150,6 +150,32 @@ def test_each_call_runs_on_a_loop_of_its_own_closed_when_it_returns() -> None:
     assert loops[1].is_closed()
 
 
+def test_a_task_the_coroutine_starts_and_does_not_await_is_cancelled() -> None:
+    """Why the docs say to await what a receiver starts: its loop is closed
+    when the call returns, and closing it cancels whatever is still pending."""
+    seen: list[str] = []
+
+    async def background() -> None:
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            seen.append("cancelled")
+            raise
+        seen.append("finished")
+
+    async def starts_a_task(event: Unheard) -> None:
+        asyncio.get_running_loop().create_task(background())
+        await asyncio.sleep(0)
+        seen.append("returned")
+
+    receiver(Unheard, key="probe.unawaited_task")(starts_a_task)
+
+    row = _delivered("probe.unawaited_task")
+
+    assert seen == ["returned", "cancelled"]
+    assert (row.status, row.attempts) == (DeliveryStatus.SUCCEEDED, 1)
+
+
 class _Recorder:
     """A callable object whose ``__call__`` is ``async def``."""
 
@@ -489,6 +515,50 @@ def test_a_sync_wrapper_returning_a_coroutine_is_refused_and_retried() -> None:
     assert _unawaited(caught) == []
 
 
+def test_an_async_generator_is_refused_without_a_warning() -> None:
+    """An ``async def`` containing ``yield`` is not a coroutine function, so
+    calling it builds an async generator and runs nothing: the same silent
+    drop, refused the same way. Never started, it is dropped without the
+    finalizer warning an ``aclose()`` left unawaited would raise."""
+    ran: list[int] = []
+
+    async def yields(event: Unheard) -> Any:
+        ran.append(event.value)
+        yield
+
+    receiver(Unheard, key="probe.async_gen")(yields)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        row = _delivered("probe.async_gen")
+        gc.collect()
+
+    assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 1)
+    assert row.last_error.startswith("TypeError: ")
+    assert "async_generator" in row.last_error
+    assert "yield" in row.last_error
+    assert ran == []
+    assert [str(w.message) for w in caught] == []
+
+
+def test_a_refused_callable_with_no_qualified_name_is_named_by_its_repr() -> None:
+    """A partial has no ``__qualname__``, so the message falls back to its repr
+    rather than naming nothing."""
+
+    async def body(event: Unheard) -> None: ...
+
+    def build(tag: str, event: Unheard) -> Any:
+        return body(event)
+
+    receiver(Unheard, key="probe.partial_wrapper")(functools.partial(build, "tag"))
+
+    row = _delivered("probe.partial_wrapper")
+
+    assert row.status == DeliveryStatus.FAILED
+    assert row.last_error.startswith("TypeError: functools.partial(<function ")
+    assert "build" in row.last_error
+
+
 class _Awaitable:
     """An awaitable that is not a coroutine, such as a Future: nothing to close."""
 
@@ -564,6 +634,24 @@ def test_a_coroutine_that_cancels_itself_fails_its_attempt() -> None:
     assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 1)
     assert row.last_error.startswith("RuntimeError: ")
     assert "gives_up was cancelled" in row.last_error
+
+
+def test_an_inline_coroutine_that_cancels_itself_raises_a_chained_runtime_error() -> None:
+    """The cancellation is kept as the cause, so a traceback still shows where
+    the coroutine was cancelled."""
+
+    async def gives_up(event: Unheard) -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        task.cancel()
+        await asyncio.sleep(0)
+
+    receiver(Unheard, mode=DeliveryMode.INLINE, key="probe.inline_cancelled")(gives_up)
+
+    with pytest.raises(RuntimeError, match="gives_up was cancelled") as info, transaction.atomic():
+        fire(Unheard(value=1))
+
+    assert isinstance(info.value.__cause__, asyncio.CancelledError)
 
 
 # The failure hook

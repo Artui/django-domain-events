@@ -269,7 +269,8 @@ def run_to_completion(func: Callable[..., Any], *args: object) -> None:
     def`` only builds a coroutine, so a caller that discarded what it returned
     recorded the work as done with the body never entered. A coroutine
     function is therefore run through ``async_to_sync``, in this thread's
-    stead: on a fresh event loop in a worker thread, while this thread serves
+    stead: outside ASGI on a fresh event loop in a worker thread, and under
+    ASGI on the server's loop, while this thread serves
     the coroutine's thread-sensitive ``sync_to_async`` calls - which is what
     keeps Django's async ORM on this thread's connection, inside the
     transaction carrying the acknowledgement. asgiref re-raises whatever the
@@ -282,9 +283,11 @@ def run_to_completion(func: Callable[..., Any], *args: object) -> None:
     ``except Exception`` on the way out would let it through: a durable row
     would stay claimed until its lease lapsed, spend no attempt and take the
     relay down with it, and be retried that way for ever
-    (``test_a_coroutine_that_cancels_itself_fails_its_attempt``). On a fresh
-    loop nothing else holds the loop, so a cancellation is the coroutine's
-    own: it did not finish, which is a failure.
+    (``test_a_coroutine_that_cancels_itself_fails_its_attempt``). Whoever
+    cancelled it - the coroutine itself, or, on a server's loop, something
+    else running there - it did not finish, which is a failure. The cause is
+    kept, so a traceback still shows where it was cancelled
+    (``test_an_inline_coroutine_that_cancels_itself_raises_a_chained_runtime_error``).
 
     A sync callable that returns an awaitable is refused rather than run
     (``test_a_sync_wrapper_returning_a_coroutine_is_refused_and_retried``).
@@ -297,6 +300,14 @@ def run_to_completion(func: Callable[..., Any], *args: object) -> None:
     "never awaited" warning does not fire beside the error that explains it;
     any other awaitable has nothing to close
     (``test_a_sync_callable_returning_any_awaitable_is_refused``).
+
+    An async generator is refused the same way
+    (``test_an_async_generator_is_refused_without_a_warning``): an ``async
+    def`` containing ``yield`` is not a coroutine function, so calling it runs
+    nothing, and it is not awaitable either, so the check above cannot see it.
+    It is left to the garbage collector rather than closed, because a
+    generator that never started is dropped without a warning, where an
+    ``aclose()`` is itself a coroutine that would need awaiting.
     """
     if is_async_callable(func):
         try:
@@ -307,13 +318,14 @@ def run_to_completion(func: Callable[..., Any], *args: object) -> None:
             ) from exc
         return
     result = func(*args)
-    if inspect.isawaitable(result):
+    if inspect.isawaitable(result) or inspect.isasyncgen(result):
         if inspect.iscoroutine(result):
             result.close()
         raise TypeError(
             f"{_name(func)} returned {type(result).__name__} instead of finishing its work, "
-            f"so the work was not run. Declare it `async def`, or, if it is a sync wrapper "
-            f"around a coroutine function, mark it with asgiref.sync.markcoroutinefunction."
+            f"so the work was not run. Declare it `async def` with no `yield` in its body, or, "
+            f"if it is a sync wrapper around a coroutine function, mark it with "
+            f"asgiref.sync.markcoroutinefunction."
         )
 
 

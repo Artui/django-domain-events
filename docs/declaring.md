@@ -147,7 +147,7 @@ for `DURABLE` - through `asgiref.sync.async_to_sync`, which Django already
 depends on. Everything else about the delivery is unchanged:
 
 - **Its writes are in the acknowledging transaction.** The coroutine runs on an
-  event loop in a worker thread while the calling thread waits for it, and
+  event loop in another thread while the calling thread waits for it, and
   Django's async ORM calls hop back to the calling thread and its connection.
   So `await Model.objects.acreate(...)` commits with the acknowledgement and is
   rolled back with it when the receiver raises, exactly as a sync receiver's
@@ -160,6 +160,11 @@ depends on. Everything else about the delivery is unchanged:
   through.
 - **A coroutine that is cancelled is a failed attempt**, retried like any other,
   rather than a row left claimed until its lease lapses.
+- **A signal cannot interrupt it.** The second signal that stops a relay at
+  once rolls an `async def` receiver's transaction back, but the coroutine runs
+  on a loop in another thread, and the process exits only once it returns; a
+  third signal ends it then. Give whatever the coroutine awaits a timeout. See
+  [Stopping it](operations.md#stopping-it).
 
 What it buys is the ability to call async libraries, **not concurrency**. The
 relay still runs one delivery at a time, in one transaction, on one connection,
@@ -170,7 +175,9 @@ and each call pays for starting an event loop.
     bound to a loop can be shared between calls. A module-level
     `httpx.AsyncClient` or aioboto session is bound to the first call's loop and
     fails on the second with `Event loop is closed`. Create the client inside
-    the receiver, as above, or use a sync client.
+    the receiver, as above, or use a sync client. For the same reason, a task
+    the coroutine starts with `asyncio.create_task` and does not await is
+    cancelled when the loop closes, so await what you start.
 
     Under ASGI the rule bites late. An `INLINE` or `ON_COMMIT` receiver for an
     event fired in a request served over ASGI is scheduled on the server's own
@@ -195,7 +202,8 @@ delivery records it as a failed attempt. From async code, wrap the call:
 **A sync function that returns an awaitable is refused**, with a `TypeError`
 naming the fix, rather than recorded as done with its body never run. That is
 what a `functools.wraps` decorator around an `async def` looks like, and a
-lambda returning a coroutine. Declare the receiver `async def`, or mark the
+lambda returning a coroutine. An `async def` with `yield` in its body is an
+async generator, which runs nothing when called, and is refused the same way. Declare the receiver `async def`, or mark the
 wrapper with `asgiref.sync.markcoroutinefunction`. The refusal is an ordinary
 failure, so a deploy that fixes the declaration drains the rows it failed. A
 callable object whose `__call__` is `async def`, and a `functools.partial` of

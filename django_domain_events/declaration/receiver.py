@@ -105,15 +105,17 @@ def receiver(
     The receiver may be declared ``async def``, at every ``mode``. It is run to
     completion where a function would be called - in ``fire()`` for INLINE, at
     commit for ON_COMMIT, in the relay, a task or an eager attempt for DURABLE -
-    through ``asgiref.sync.async_to_sync``: on a fresh event loop of its own,
-    while the calling thread serves its ``sync_to_async`` calls, so Django's
-    async ORM writes land in the transaction carrying the acknowledgement and
-    roll back with it. What it buys is the ability to call async libraries,
-    not concurrency: the relay still runs one delivery at a time. Because the
-    loop is new on every call, a client bound to a loop cannot be shared
-    between calls. A coroutine that is cancelled is a failed attempt. A sync
-    callable that returns an awaitable - a ``functools.wraps`` decorator around
-    an ``async def`` - is refused at the call with ``TypeError``, rather than
+    through ``asgiref.sync.async_to_sync``, while the calling thread serves its
+    ``sync_to_async`` calls, so Django's async ORM writes land in the
+    transaction carrying the acknowledgement and roll back with it. Outside
+    ASGI each call runs on a fresh event loop of its own, closed when it
+    returns; under ASGI an INLINE or ON_COMMIT coroutine runs on the server's
+    loop. Either way a client bound to a loop cannot be shared between calls.
+    What it buys is the ability to call async libraries, not concurrency: the
+    relay still runs one delivery at a time. A coroutine that is cancelled is
+    a failed attempt. A sync callable that returns an awaitable - a
+    ``functools.wraps`` decorator around an ``async def`` - or an ``async def``
+    containing ``yield`` is refused at the call with ``TypeError``, rather than
     recorded as done with its body never run; mark such a wrapper with
     ``asgiref.sync.markcoroutinefunction``. ``on_failure`` may be ``async def``
     on the same terms. ``targets`` and ``due`` may not; see below.
