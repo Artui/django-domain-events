@@ -125,17 +125,21 @@ def _wait_on(connection: Any, timeout: float) -> bool:
     for a notification it has made itself unable to receive.
 
     One wake stands for every notification queued behind it. A relay busy
-    delivering is not waiting, and psycopg keeps the notifications that arrive
-    during other statements in a backlog it yields first on the next wait;
-    leaving the generator after one puts the rest back, so without the drain
-    each would be one more instant wake and one more empty claim
+    delivering is not waiting, and psycopg (from 3.2.4) keeps the
+    notifications that arrive during other statements in a backlog. The first
+    call empties it: psycopg yields the whole backlog before it looks at
+    ``stop_after``, and the loop runs the generator to its end
     (``test_notifications_queued_while_busy_wake_the_relay_once``, on Postgres).
     The wake claims everything due, so the queued ones announce nothing it will
     not find.
 
-    The drain is a second call made after the first generator is closed, never
-    a loop inside it: the open generator holds the connection's lock and has
-    detached the backlog, so a nested call blocks on the socket instead.
+    The second, zero-timeout call is for what the first stopped short of: a
+    notification that reached the socket after the first call's last read.
+    Left there, the next wait would return at once for a claim with nothing
+    new to find (``test_one_wake_also_takes_what_arrived_after_its_wait_returned``).
+    It is a second call made after the first generator is closed, never a
+    loop inside it: the open generator holds the connection's lock, which is
+    not reentrant, so a nested call would wait on it forever.
     """
     with connection.cursor() as cursor:
         cursor.execute(f'LISTEN "{CHANNEL}"')

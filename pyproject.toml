@@ -78,8 +78,10 @@ dev = [
     "flake8-tidy-imports>=4.12.0",
     "django-stubs>=5.1.0",
     # The Postgres half of the suite talks to a real server; the SQLite half
-    # never imports this.
-    "psycopg[binary]>=3.2.0",
+    # never imports this. 3.2.4 is where ``notifies()`` starts returning the
+    # notifications that arrived while the connection ran other statements,
+    # which the relay's wake test sends on purpose; below it that test fails.
+    "psycopg[binary]>=3.2.4",
     # The Tasks backport, so the task-backend adapter is exercised on every
     # Django in the matrix. Core gained django.tasks in 6.0; below that the
     # backport is the only way the adapter can run at all, and an adapter that

@@ -114,29 +114,50 @@ class FakeCursor:
 class FakeConnection:
     vendor = "postgresql"
 
-    def __init__(self, notifications: int = 0, alias: str = "default") -> None:
+    def __init__(
+        self, notifications: int = 0, alias: str = "default", arriving: tuple[int, ...] = ()
+    ) -> None:
         self.alias = alias
         self.sql: list[str] = []
-        self.connection = FakeDriver(notifications)
+        self.connection = FakeDriver(notifications, arriving=arriving)
 
     def cursor(self) -> FakeCursor:
         return FakeCursor(self.sql)
 
 
 class FakeDriver:
-    """psycopg's ``notifies``, down to the part the wait depends on: one queue
-    shared by every call, so a notification yielded once is gone and the rest
-    are still there for the next call."""
+    """psycopg's ``notifies`` (3.2.4 onwards), down to the parts the wait
+    depends on, in the order psycopg checks them.
 
-    def __init__(self, notifications: int) -> None:
+    ``notifications`` is the backlog the connection collected while it ran
+    other statements. A call yields all of it before it looks at
+    ``stop_after``, so a generator run to its end empties it. ``arriving`` is
+    the socket: each read takes the next batch, standing for what had arrived
+    by then, and ``stop_after`` is checked after each batch. A batch still
+    waiting after a call returns is one that arrived once it had stopped
+    reading, and ``timeout=0`` reads at most once.
+    """
+
+    def __init__(self, notifications: int, *, arriving: tuple[int, ...] = ()) -> None:
         self.notifications = notifications
+        self.arriving = list(arriving)
 
     def notifies(self, *, timeout: float, stop_after: int | None = None):
-        yielded = 0
-        while self.notifications and (stop_after is None or yielded < stop_after):
-            self.notifications -= 1
-            yielded += 1
-            yield object()
+        received = 0
+        while True:
+            if self.notifications:
+                while self.notifications:
+                    self.notifications -= 1
+                    received += 1
+                    yield object()
+            elif self.arriving:
+                for _ in range(self.arriving.pop(0)):
+                    received += 1
+                    yield object()
+            else:
+                return
+            if (stop_after is not None and received >= stop_after) or timeout == 0:
+                return
 
 
 def test_it_notifies_on_the_package_channel() -> None:
@@ -160,6 +181,18 @@ def test_one_wake_drains_what_queued_behind_it() -> None:
     connection = FakeConnection(notifications=3)
     assert wait_for_work(1.0, connection=connection) is True
     assert connection.connection.notifications == 0
+    assert wait_for_work(1.0, connection=connection) is False
+
+
+def test_one_wake_also_takes_what_arrived_after_its_wait_returned() -> None:
+    """The backlog empties on its own, because psycopg yields all of it before
+    it looks at ``stop_after``. What the second, zero-timeout call is for is a
+    notification that reached the socket after the first call stopped reading:
+    left there, the next wait would return at once for a claim with nothing
+    new to find."""
+    connection = FakeConnection(notifications=2, arriving=(1,))
+    assert wait_for_work(1.0, connection=connection) is True
+    assert connection.connection.arriving == []
     assert wait_for_work(1.0, connection=connection) is False
 
 
