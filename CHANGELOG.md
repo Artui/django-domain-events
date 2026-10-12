@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2] — 2026-10-12
+
 ### Fixed
 - A project on `USE_TZ = False` could not run the relay. The package took "now"
   as an aware UTC value, so comparing it with a column read back raised
@@ -760,7 +762,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/Artui/django-domain-events/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/Artui/django-domain-events/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/Artui/django-domain-events/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Artui/django-domain-events/compare/v0.9.0...v0.10.0
