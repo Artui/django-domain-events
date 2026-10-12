@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -24,7 +24,7 @@ class RegisteredReceiver:
     max_attempts: int
     eager: bool
     site: str
-    on_failure: Callable[[DeliveryFailure], None] | None = None
+    on_failure: Callable[[DeliveryFailure], Awaitable[None] | None] | None = None
     """Called after a failed attempt has been recorded, or None.
 
     The hook exists because a receiver cannot otherwise keep anything about its
