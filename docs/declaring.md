@@ -54,7 +54,7 @@ def reserve_stock(evt: OrderPlaced) -> None: ...
 | Argument | Default | Means |
 | --- | --- | --- |
 | `mode` | `DURABLE` | Timing and guarantee. See [delivery](delivery.md). |
-| `key` | `<app_label>.<func_name>` | The identity delivery rows address. |
+| `key` | `<app_label>.<func_name>` | The identity delivery rows address. At most 255 characters, the column's width; a longer one is refused at the decorator. |
 | `max_attempts` | `5` | Copied onto each row **at fire time**. |
 | `eager` | `False` | Also attempt immediately after commit, relay as fallback. |
 | `site` | `"relay"` | Where the code runs. `"task"` hands it to a task backend. |

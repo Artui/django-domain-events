@@ -13,6 +13,14 @@ from django_domain_events.utils import is_async_callable, label_for
 
 E = TypeVar("E")
 
+# The width of ``DeliveryRecord.receiver_key`` and ``ReceiverLastSuccess.receiver_key``,
+# both ``CharField(max_length=255)``. Carried as a number rather than read off the
+# field because a decorator runs while apps are still loading - declaring a receiver
+# with an explicit ``key=`` works before ``django.setup()`` - and importing a model
+# there raises ``AppRegistryNotReady``. Held to the columns by
+# test_the_limit_is_the_width_of_both_columns_that_store_the_key.
+_MAX_KEY_LENGTH = 255
+
 # A receiver may be ``async def``, so its return is None or an awaitable of it.
 # Without the awaitable, a checker rejects every async receiver at the decorator.
 Plain = Callable[[E], Awaitable[None] | None]
@@ -87,6 +95,13 @@ def receiver(
     idea. The overloads make a checker enforce the arity it implies, so
     declaring one and writing the other fails at the decorator rather than in
     the relay hours later.
+
+    ``key`` is written onto every delivery row and is what the row is found by,
+    so it may not be longer than the column that holds it, 255 characters. A
+    longer one - explicit, or derived from a very long function name - is
+    refused here with ``ValueError``, because the database either truncates it,
+    orphaning the delivery, or raises at fire time; SQLite enforces nothing, so
+    it would pass a test suite and fail in production.
 
     ``max_attempts`` is copied onto each delivery row at fire time.
 
@@ -382,9 +397,24 @@ def receiver(
                 )
 
     def decorate(func: Callable[..., None]) -> Callable[..., None]:
+        resolved_key = key if key is not None else _derived_key(func)
+        if len(resolved_key) > _MAX_KEY_LENGTH:
+            # Checked on the final key so an explicit and a derived one are held
+            # alike, and before anything is registered. Postgres truncates the key
+            # in the bulk insert (Django 5.2.0-5.2.9, 6.0.0) or raises DataError
+            # at fire time; SQLite enforces nothing. Two things the coverage gate
+            # cannot see: the boundary - test_a_key_of_exactly_the_limit_is_accepted
+            # fails on ``>=`` - and the derived path, which
+            # test_a_derived_key_over_the_limit_is_refused fails without.
+            raise ValueError(
+                f"Receiver key {resolved_key[:60]!r}... is {len(resolved_key)} characters; "
+                f"the limit is {_MAX_KEY_LENGTH}, the width of the column delivery rows "
+                f"store it in, and a longer one is truncated or rejected by the database "
+                f"only when an event fires. Set a shorter key=."
+            )
         registry.register_receiver(
             RegisteredReceiver(
-                key=key if key is not None else _derived_key(func),
+                key=resolved_key,
                 event_class=event_class,
                 func=func,
                 mode=mode,
