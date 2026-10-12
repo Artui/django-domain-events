@@ -91,8 +91,8 @@ def run_relay(
     claimed under one lease, and a row still waiting its turn when that lease
     lapses is taken by another relay, so a slow lane wants a batch it can work
     through inside the lease its claim stamps. That is the lane's own lease
-    plus 10 percent where every durable receiver in it shares one, and
-    ``LEASE_SECONDS`` plus 10 percent otherwise: 66 seconds, not
+    plus 10 percent where every durable receiver in it shares one no longer
+    than ``LEASE_SECONDS``, and ``LEASE_SECONDS`` plus 10 percent otherwise: 66 seconds, not
     ``LEASE_SECONDS``, for a lane of receivers declaring ``lease_seconds=60``.
     A row that starts while its claimed lease is still its receiver's own
     starts without extending it, which saves a write per delivery, so a batch

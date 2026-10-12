@@ -571,8 +571,8 @@ def dispatch_one(
     The lease is extended here for the same reason ``deliver_one`` extends it,
     and it matters more: the row now has to survive the queue's backlog as well
     as the receiver's own runtime, and this is the last moment before the relay
-    stops looking at it. A row handed off soon after its claim already holds
-    the receiver's lease, within the claim's headroom, and is handed off as it
+    stops looking at it. A row handed off soon after its claim that already holds
+    the receiver's lease, within the claim's headroom, is handed off as it
     is; the task then finds the same lease after its take and, if the queue was
     quick, starts without extending it either.
     """

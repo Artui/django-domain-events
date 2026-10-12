@@ -76,8 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the column delivery rows store the key in. The length was never checked:
   SQLite stores any length, so a `DURABLE` receiver with such a key worked
   there, while Postgres either truncated the key in a bulk insert (Django 5.2.0
-  to 5.2.9 and 6.0.0, leaving the delivery orphaned as renamed, moved or
-  deleted) or raised `DataError` when an event fired. `INLINE` and `ON_COMMIT`
+  to 5.2.8, and 5.2.9 and 6.0.0 once the fix above lets them use `UNNEST`,
+  leaving the delivery orphaned as renamed, moved or deleted) or raised `DataError` when an event fired. `INLINE` and `ON_COMMIT`
   receivers store no key and worked on every backend; they are refused too, so
   a key stays valid when its mode changes. The message names the key's length
   and the limit; set a shorter `key=`.
@@ -104,7 +104,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   yet pruned; the ids are `DeliveryRecord.objects.filter(receiver_key=key,
   status="succeeded").values_list("event_id", flat=True)`. `INLINE` and
   `ON_COMMIT` runs left no row and cannot be replayed.
-
 - A claim leases its rows for the lease its lane needs, with 10 percent of
   headroom: `lease_seconds` times 1.1 where every durable receiver it can take
   declares the same lease, and `LEASE_SECONDS` times 1.1 otherwise, never
@@ -127,8 +126,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its lane's lease times 1.1 - 66 seconds in a lane of `lease_seconds=60`
   receivers, where it waited out `LEASE_SECONDS` - and the default lane with
   no overrides goes from 300 to 330 seconds. A lane whose receivers declare a
-  lease longer than `LEASE_SECONDS` keeps the recovery time it had, since a
-  claim stamps `LEASE_SECONDS` times 1.1 at most. A lane whose receivers all
+  lease longer than `LEASE_SECONDS` recovers in `LEASE_SECONDS` times 1.1, as
+  the default lane does (330 seconds), not in its own lease times 1.1: a claim
+  stamps `LEASE_SECONDS` times 1.1 at most. A lane whose receivers all
   declare a short lease now has to start a whole batch inside that lease
   times 1.1 rather than inside `LEASE_SECONDS`, and that binds every claim of
   it: a relay's batch, a `deliver_events --once --limit` claim, a

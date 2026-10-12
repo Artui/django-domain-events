@@ -8,8 +8,8 @@ from django_domain_events.types.registered_receiver import DEFAULT_LANE, Registe
 LEASE_HEADROOM = 1.1
 """How far past a receiver's own lease a claim may stamp, as a factor.
 
-A claim stamps its lane's lease times this, and a delivery whose claimed lease
-still lies between its receiver's lease and that product starts without
+A claim stamps its lane's lease (at most ``LEASE_SECONDS``) times this, and a
+delivery whose claimed lease still lies between its receiver's lease and that product starts without
 extending it: the extension is a write to an indexed column, so it is never a
 HOT update. The headroom is what lets more than the first row of a batch start
 inside the band, at the cost of a crashed row holding 10 percent longer. Fixed,
@@ -120,12 +120,13 @@ class Registry:
         ones, for the attempt after commit, which claims only their rows.
 
         The base never exceeds ``default``. A lane of receivers declaring a
-        longer lease than ``LEASE_SECONDS`` is claimed under the setting, as
-        before, and each row extended to its own lease when it starts: stamped
+        longer lease than ``LEASE_SECONDS`` is claimed under the setting, as the
+        default lane is, and each row extended to its own lease when it starts: stamped
         with theirs, the unstarted tail of a batch a relay was killed holding
         would wait out half an hour rather than five and a half minutes
-        (``test_a_long_lease_lane_recovers_in_the_setting``). Such a lane gains
-        no skip, and loses no recovery time.
+        (``test_a_long_lease_lane_recovers_in_the_setting``). A lease longer than
+        the setting plus the headroom gains no skip, and no lane loses recovery
+        time to a long lease.
 
         ``default`` is ``LEASE_SECONDS``, passed in rather than read here so the
         registry stays free of settings. Asked on every claim, as lane

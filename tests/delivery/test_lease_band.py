@@ -394,7 +394,7 @@ def test_a_dead_relays_unstarted_rows_are_claimable_after_their_lanes_lease() ->
 
 def test_a_long_lease_lane_recovers_in_the_setting() -> None:
     """A lane of receivers declaring 1800 s is claimed under ``LEASE_SECONDS``
-    and its headroom, 330 s, as its rows were before: a killed relay's
+    and its headroom, 330 s, as the default lane is: a killed relay's
     unstarted tail is not held for 1980 s."""
     _probe("a", lease_seconds=1800)
     _fire(2)

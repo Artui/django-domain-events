@@ -112,9 +112,10 @@ of headroom:
 | The `eager=True` attempt after commit | as above, over every eager receiver |
 
 So a claim never stamps more than `LEASE_SECONDS` x 1.1. A lane of receivers
-declaring a longer lease, `lease_seconds=1800` say, is claimed as it always
-was, and each row is extended to its own lease when it starts: a relay killed
-holding such a batch leaves its unstarted rows for 330 seconds, not 1980.
+declaring a longer lease, `lease_seconds=1800` say, is claimed for
+`LEASE_SECONDS` x 1.1 like the default lane, and each row is extended to its
+own lease when it starts: a relay killed holding such a batch leaves its
+unstarted rows for 330 seconds, not 1980.
 
 Before it runs a row, the relay extends the row's lease to the receiver's own,
 unless the lease the claim stamped still is that: between s and s x 1.1 from
