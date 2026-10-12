@@ -105,6 +105,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   status="succeeded").values_list("event_id", flat=True)`. `INLINE` and
   `ON_COMMIT` runs left no row and cannot be replayed.
 
+- A claim leases its rows for the lease its lane needs, with 10 percent of
+  headroom: `lease_seconds` times 1.1 where every durable receiver it can take
+  declares the same lease, and `LEASE_SECONDS` times 1.1 otherwise, never
+  more. A delivery whose claimed lease is still its receiver's own - between
+  that lease and 1.1 times it from now, under this worker - starts without
+  extending it, in the relay, `deliver_pending`, the eager attempt, at the
+  task hand-off and in the task worker. The extension writes an indexed
+  column, so on Postgres each skip is one non-HOT update fewer. Measured on
+  Postgres 16 over 5,000 deliveries of a no-op receiver in batches of 50, all
+  in the band: the relay went from 3 to 2 non-HOT updates and from 20.8 to
+  13.3 WAL records per delivery, and the task site from 4 to 2 and from 31.0
+  to 15.9; the take stays a HOT update. WAL bytes per delivery went from 1757
+  to 1310 on the relay (25 percent less) and from 2597 to 1533 at the task
+  site in a steady state, and from 2163 to 2010 (7 percent) and from 3043 to
+  1991 just after a checkpoint. A lane mixing leases and a relay on a clock
+  moved forward are unchanged. A real lane skips only the rows that start
+  within a tenth of the lease of their claim, so a large batch of slow sends
+  saves less.
+- Upgrade note: an unstarted row of a crashed relay is claimable again after
+  its lane's lease times 1.1 - 66 seconds in a lane of `lease_seconds=60`
+  receivers, where it waited out `LEASE_SECONDS` - and the default lane with
+  no overrides goes from 300 to 330 seconds. A lane whose receivers declare a
+  lease longer than `LEASE_SECONDS` keeps the recovery time it had, since a
+  claim stamps `LEASE_SECONDS` times 1.1 at most. A lane whose receivers all
+  declare a short lease now has to start a whole batch inside that lease
+  times 1.1 rather than inside `LEASE_SECONDS`, and that binds every claim of
+  it: a relay's batch, a `deliver_events --once --limit` claim, a
+  `deliver_pending()` batch and the eager attempt. Past it, another worker
+  takes the tail. Relays with worker ids of their own never both run a row:
+  the first logs that it lost the row before running it, and the relays
+  churn. Two `deliver_pending()` callers left on its default `worker_id`
+  cannot be told apart and can both run the tail, as they always could once a
+  claim lapsed, now after 66 seconds rather than 300; give each its own. See
+  "The lease a claim stamps" in the operations docs.
+
 ## [0.11.2] — 2026-10-12
 
 ### Fixed

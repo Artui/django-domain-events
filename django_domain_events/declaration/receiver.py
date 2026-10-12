@@ -152,7 +152,10 @@ def receiver(
     offering the receiver a way to extend its lease from the inside, because
     that cannot work: the receiver runs inside the transaction that carries its
     acknowledgement, so anything it writes is invisible to every other worker
-    until it has already finished.
+    until it has already finished. Where every durable receiver in its lane
+    declares the same lease, it is also the lease the lane's claims stamp - at
+    most ``LEASE_SECONDS``, plus 10 percent of headroom - so it changes how big
+    a batch the lane can work through before the batch's tail lapses.
 
     ``targets`` makes the receiver a **fan-out**: a callable taking the event and
     a ``DeliveryContext``, returning the strings this event is owed to - endpoint
