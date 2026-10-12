@@ -25,6 +25,10 @@ would strand rows written under the old name:
 class OrderSubmitted: ...
 ```
 
+A name is at most 255 characters, the width of the column event rows store it
+in, whether given as `name=` or derived from the app label and class name; a
+longer one is refused at the decorator.
+
 An event is kept for `RETENTION_DAYS` unless its declaration says otherwise:
 `retention=timedelta(...)` for a window of its own, or `Retention.SUCCEEDED` or
 `Retention.SETTLED` to delete it, with its delivery rows, as soon as it has been

@@ -81,6 +81,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   receivers store no key and worked on every backend; they are refused too, so
   a key stays valid when its mode changes. The message names the key's length
   and the limit; set a shorter `key=`.
+- An event whose name is longer than 255 characters, given as `name=` or
+  derived from the app label and class name, now raises `ValueError` where it
+  is declared, as a receiver key longer than its column does, above. The
+  column is `EventRecord.name`. SQLite stores any length, so such an event
+  worked there; on Postgres every `fire()` of it raised `DataError` from the
+  insert, inside the caller's transaction. An existing declaration over the
+  limit was therefore already broken on Postgres, and after upgrading it fails
+  at startup instead of at the first fire. The message names the name's length
+  and the limit; set a shorter `name=`.
 - A sync callable that returns an awaitable, and an `async def` with `yield` in
   its body, are refused at the call with a `TypeError` naming the fix. Earlier
   versions skipped their body silently. After upgrading, a `DURABLE` one's
