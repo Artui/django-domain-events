@@ -920,7 +920,7 @@ climbing, while one wedged receiver has a backlog and everything else fine.</p>
 </tr>
 <tr>
 <td><code>receivers</code></td>
-<td>Per-receiver backlog, worst first, omitting the ones with nothing owed, dead or scheduled. Each carries its own <code>owed</code>, <code>scheduled</code>, <code>dead</code> and <code>oldest_owed_at</code>; one with only scheduled work sorts after every receiver that is behind</td>
+<td>Per-receiver backlog, worst first, omitting the ones with nothing owed, dead or scheduled. Each carries its own <code>owed</code>, <code>scheduled</code>, <code>claimed</code>, <code>dead</code> and <code>oldest_owed_at</code>; one with only scheduled work sorts after every receiver that is behind</td>
 </tr>
 </tbody>
 </table>
@@ -954,6 +954,10 @@ receiver outruns its lease and has its work thrown away every time - see
 <a href="../declaring/#receivers"><code>lease_seconds</code></a>. A relay that was asked to stop also
 gives its unstarted rows back by expiring their leases, so a brief non-zero
 reading after a deploy is that, not a dying worker.</p>
+<p>The per-receiver <code>claimed</code> adds up to the total, and says whose rows the
+workers hold. A receiver with every owed row claimed and none finishing is wedged,
+or its <a href="../operations/#handing-delivery-to-a-task-queue">task queue</a> is sitting on
+the messages; the same total spread across receivers is a relay at work.</p>
 <p>Every figure here is answered from an index and none of them scans the
 delivery table, so the call is cheap enough to scrape on an interval.</p>
 <p><code>owed</code> means "not terminal and due", a superset of what the relay can claim at
@@ -972,10 +976,11 @@ receiver:</p>
 </span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>lapsed leases 0
 </span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>oldest owed   42s ago
 </span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
-</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>  billing.send_invoice  owed=3  dead=0  scheduled=0 oldest=42s
-</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>  waitlist.expire_offer owed=0  dead=0  scheduled=120   oldest=-
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>  billing.send_invoice  owed=3  dead=0  scheduled=0 claimed=1   oldest=42s
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>  waitlist.expire_offer owed=0  dead=0  scheduled=120   claimed=0   oldest=-
 </span></code></pre></div>
-<p><code>--format json</code> carries <code>scheduled</code> at the top level and on each receiver.</p>
+<p><code>--format json</code> carries <code>scheduled</code> and <code>claimed</code> at the top level and on each
+receiver.</p>
 <h2 id="system-checks">System checks<a class="headerlink" href="#system-checks" title="Permanent link">&para;</a></h2>
 <p>Run with <code>python manage.py check</code>.</p>
 <table>

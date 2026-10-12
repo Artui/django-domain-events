@@ -475,6 +475,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Recording a failed attempt">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-failure-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The failure log
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -870,6 +887,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Recording a failed attempt">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-failure-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The failure log
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1070,7 +1104,9 @@ acknowledgement, so a call it makes outside the database holds that
 transaction open. See
 <a href="../operations/#a-receiver-holds-a-transaction-open">A receiver holds a transaction open</a>
 for what that means behind pgbouncer and under
-<code>idle_in_transaction_session_timeout</code>.</p>
+<code>idle_in_transaction_session_timeout</code>, and
+<a href="../operations/#side-effects-inside-the-acknowledging-transaction">Side effects inside the acknowledging transaction</a>
+for why a call made there can happen twice.</p>
 <div class="admonition warning">
 <p class="admonition-title">SKIP LOCKED is Postgres and MySQL 8</p>
 <p>SQLite has neither the statement nor the concurrency model that would make
@@ -1089,6 +1125,15 @@ which is <a href="#when-the-receiver-knows-better">when the receiver knows bette
 adding a little on top of it. Retrying a shared downstream at
 ceiling-plus-a-bit keeps every failed delivery in the same cohort, which is the
 thundering herd the backoff was meant to break up.</p>
+<p><strong>The backoff is a floor, not a schedule.</strong> <code>available_at</code> is the earliest a
+retry can run, and the relay claims in order of <code>available_at</code> and then id, so a
+retry due in a minute also waits for every row that came due before it. With an
+empty queue that is the same thing; behind a backlog of twenty thousand rows, a
+retry due in a minute runs after the twenty thousand. There is deliberately no
+option to claim retries first: a destination failing on every attempt would then
+be retried ahead of every new event, and the new events would starve behind it.
+Work that must not queue behind another kind of work belongs in its own
+<a href="../operations/#lanes-a-relay-per-kind-of-work">lane</a>.</p>
 <h3 id="a-curve-per-receiver">A curve per receiver<a class="headerlink" href="#a-curve-per-receiver" title="Permanent link">&para;</a></h3>
 <p>The two settings are the curve for every receiver. One that talks to a
 destination with its own idea of patience declares its own:</p>
@@ -1192,22 +1237,46 @@ row by the time the hook runs.</p>
 report its own outcome. A hook that raises is logged and swallowed, because a
 failure path that fails leaves the operator a traceback about logging instead of
 about the delivery.</p>
+<h3 id="the-failure-log">The failure log<a class="headerlink" href="#the-failure-log" title="Permanent link">&para;</a></h3>
+<p>Whether or not a receiver declares <code>on_failure</code>, every failed attempt the relay
+records is logged once, at <code>WARNING</code>, on the <code>django_domain_events.delivery.deliver</code>
+logger:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>receiver shop.email_receipt failed delivery 4182 on attempt 3 with SMTPServerDisconnected; the row is failed
+</span></code></pre></div>
+<p>The line names the receiver, the delivery, the attempt, the exception's type and
+what the row is now - <code>failed</code> while it will be retried, <code>dead</code> once it will not.
+A <a href="#a-deferral-that-spends-no-attempt">deferral</a> is logged the same way, and so is
+the give-up that ends one. There is no traceback: the message is in the row's
+<code>last_error</code>, and a receiver failing on every retry would otherwise write a stack
+each time. Nor is it rate limited - the attempt budget and the backoff already
+bound how often one delivery can fail.</p>
+<p>A payload that will not decode is logged too, naming the decoder's exception, as
+the row goes straight to <code>dead</code>; the receiver never ran, so its <code>on_failure</code> is
+not told. A row whose receiver is no longer registered goes to <code>orphaned</code> and is
+deliberately not logged as a failed attempt: no attempt is counted, and no
+receiver failed.</p>
+<p>It follows the same rule as the hook: a worker whose lease lapsed recorded
+nothing and logs nothing, so the log never shows an attempt the row does not.
+An attempt whose connection was lost before anything could be written is not
+logged either, because nothing recorded it; the lease lapsing is what puts it
+back in the queue. See
+<a href="../operations/#side-effects-inside-the-acknowledging-transaction">Side effects inside the acknowledging transaction</a>.</p>
 <h2 id="when-the-receiver-knows-better">When the receiver knows better<a class="headerlink" href="#when-the-receiver-knows-better" title="Permanent link">&para;</a></h2>
 <p>The backoff curve is a guess, and the attempt budget is the only thing that ends
 a delivery on its own. Two exceptions let a durable receiver replace either with
 what it actually knows.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">PermanentFailure</span><span class="p">,</span> <span class="n">RetryAfter</span><span class="p">,</span> <span class="n">receiver</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">)</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">notify_partner</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">response</span> <span class="o">=</span> <span class="n">post_to_partner</span><span class="p">(</span><span class="n">evt</span><span class="p">)</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="k">if</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">410</span><span class="p">:</span>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>        <span class="k">raise</span> <span class="n">PermanentFailure</span><span class="p">(</span><span class="s2">"410 Gone: the partner retired this endpoint"</span><span class="p">)</span>
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>    <span class="k">if</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">429</span><span class="p">:</span>
-</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>        <span class="n">seconds</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">response</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="s2">"Retry-After"</span><span class="p">])</span>
-</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>        <span class="k">raise</span> <span class="n">RetryAfter</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="n">seconds</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="sa">f</span><span class="s2">"rate limited for </span><span class="si">{</span><span class="n">seconds</span><span class="si">:</span><span class="s2">g</span><span class="si">}</span><span class="s2">s"</span><span class="p">)</span>
-</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>    <span class="n">response</span><span class="o">.</span><span class="n">raise_for_status</span><span class="p">()</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">PermanentFailure</span><span class="p">,</span> <span class="n">RetryAfter</span><span class="p">,</span> <span class="n">receiver</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">)</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">notify_partner</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="n">response</span> <span class="o">=</span> <span class="n">post_to_partner</span><span class="p">(</span><span class="n">evt</span><span class="p">)</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="k">if</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">410</span><span class="p">:</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>        <span class="k">raise</span> <span class="n">PermanentFailure</span><span class="p">(</span><span class="s2">"410 Gone: the partner retired this endpoint"</span><span class="p">)</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>    <span class="k">if</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">429</span><span class="p">:</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>        <span class="n">seconds</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">response</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="s2">"Retry-After"</span><span class="p">])</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>        <span class="k">raise</span> <span class="n">RetryAfter</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="n">seconds</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="sa">f</span><span class="s2">"rate limited for </span><span class="si">{</span><span class="n">seconds</span><span class="si">:</span><span class="s2">g</span><span class="si">}</span><span class="s2">s"</span><span class="p">)</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>    <span class="n">response</span><span class="o">.</span><span class="n">raise_for_status</span><span class="p">()</span>
 </span></code></pre></div>
 <p><code>PermanentFailure</code> dead-letters the row <strong>on the attempt that raised it</strong>. A
 destination that has said it will never accept another request is not asked four
@@ -1240,19 +1309,19 @@ ordinary failure.</p>
 Counting it against <code>max_attempts</code> dead-letters good deliveries for being sent
 at a busy moment, and widening the budget to survive a burst also widens it for
 the failures it exists to end. <code>RetryAfter(seconds, counts=False)</code> says so:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">timedelta</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">RetryAfter</span><span class="p">,</span> <span class="n">receiver</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">ReceiptQueued</span><span class="p">,</span> <span class="n">lane</span><span class="o">=</span><span class="s2">"mail"</span><span class="p">,</span> <span class="n">give_up_after</span><span class="o">=</span><span class="n">timedelta</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">2</span><span class="p">))</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">send_receipt</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">ReceiptQueued</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    <span class="k">try</span><span class="p">:</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>        <span class="n">provider</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">render_receipt</span><span class="p">(</span><span class="n">evt</span><span class="p">))</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>    <span class="k">except</span> <span class="n">provider</span><span class="o">.</span><span class="n">Throttled</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>        <span class="k">raise</span> <span class="n">RetryAfter</span><span class="p">(</span><span class="n">exc</span><span class="o">.</span><span class="n">retry_after</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"sending rate exceeded"</span><span class="p">,</span> <span class="n">counts</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>    <span class="k">except</span> <span class="n">provider</span><span class="o">.</span><span class="n">DailyQuotaExceeded</span><span class="p">:</span>
-</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>        <span class="k">raise</span> <span class="n">RetryAfter</span><span class="p">(</span><span class="n">seconds_until_quota_resets</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"daily quota"</span><span class="p">,</span> <span class="n">counts</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">timedelta</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">RetryAfter</span><span class="p">,</span> <span class="n">receiver</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">ReceiptQueued</span><span class="p">,</span> <span class="n">lane</span><span class="o">=</span><span class="s2">"mail"</span><span class="p">,</span> <span class="n">give_up_after</span><span class="o">=</span><span class="n">timedelta</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">2</span><span class="p">))</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">send_receipt</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">ReceiptQueued</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>        <span class="n">provider</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">render_receipt</span><span class="p">(</span><span class="n">evt</span><span class="p">))</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>    <span class="k">except</span> <span class="n">provider</span><span class="o">.</span><span class="n">Throttled</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>        <span class="k">raise</span> <span class="n">RetryAfter</span><span class="p">(</span><span class="n">exc</span><span class="o">.</span><span class="n">retry_after</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"sending rate exceeded"</span><span class="p">,</span> <span class="n">counts</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>    <span class="k">except</span> <span class="n">provider</span><span class="o">.</span><span class="n">DailyQuotaExceeded</span><span class="p">:</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>        <span class="k">raise</span> <span class="n">RetryAfter</span><span class="p">(</span><span class="n">seconds_until_quota_resets</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"daily quota"</span><span class="p">,</span> <span class="n">counts</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 </span></code></pre></div>
 <p>Three things happen, and each answers a way a plain retry goes wrong in a burst
 of twenty thousand rows:</p>
@@ -1333,38 +1402,39 @@ loses the pause, for the reason above.</p>
 receiver itself saying its work is not due until <code>until</code>, an aware <code>datetime</code> in
 the future - typically a <a href="../scheduling/">scheduled receiver</a> whose due time has
 moved since its row was written:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">timezone</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeliveryContext</span><span class="p">,</span> <span class="n">NotYet</span><span class="p">,</span> <span class="n">receiver</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OfferMade</span><span class="p">,</span> <span class="n">due</span><span class="o">=</span><span class="n">timedelta</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">48</span><span class="p">),</span> <span class="n">takes_context</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">expire_offer</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OfferMade</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DeliveryContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    <span class="n">offer</span> <span class="o">=</span> <span class="n">Offer</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">pk</span><span class="o">=</span><span class="n">evt</span><span class="o">.</span><span class="n">offer_id</span><span class="p">)</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>    <span class="k">if</span> <span class="n">offer</span><span class="o">.</span><span class="n">expires_at</span> <span class="o">&gt;</span> <span class="nb">max</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">due_at</span><span class="p">,</span> <span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">()):</span>
-</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>        <span class="k">raise</span> <span class="n">NotYet</span><span class="p">(</span><span class="n">offer</span><span class="o">.</span><span class="n">expires_at</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"the offer was extended"</span><span class="p">)</span>
-</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>    <span class="n">offer</span><span class="o">.</span><span class="n">expire</span><span class="p">()</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">timezone</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeliveryContext</span><span class="p">,</span> <span class="n">NotYet</span><span class="p">,</span> <span class="n">receiver</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OfferMade</span><span class="p">,</span> <span class="n">due</span><span class="o">=</span><span class="n">timedelta</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">48</span><span class="p">),</span> <span class="n">takes_context</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">expire_offer</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OfferMade</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DeliveryContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>    <span class="n">offer</span> <span class="o">=</span> <span class="n">Offer</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">pk</span><span class="o">=</span><span class="n">evt</span><span class="o">.</span><span class="n">offer_id</span><span class="p">)</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>    <span class="k">if</span> <span class="n">offer</span><span class="o">.</span><span class="n">expires_at</span> <span class="o">&gt;</span> <span class="nb">max</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">due_at</span><span class="p">,</span> <span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">()):</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>        <span class="k">raise</span> <span class="n">NotYet</span><span class="p">(</span><span class="n">offer</span><span class="o">.</span><span class="n">expires_at</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"the offer was extended"</span><span class="p">)</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>    <span class="n">offer</span><span class="o">.</span><span class="n">expire</span><span class="p">()</span>
 </span></code></pre></div>
 <p>The relay moves the row's <code>available_at</code> and <code>due_at</code> to <code>until</code> and sets it back
 to <code>pending</code>. <strong>No attempt is spent</strong>, nothing is capped or jittered,
 <code>give_up_after</code> does not apply, <code>last_error</code> and <code>on_failure</code> are left alone, and
 no lane is paused: it is the application's own statement of when its work is
 due, not a destination's advice to be distrusted. On the next run,
-<code>ctx.due_at</code> is <code>until</code>. A naive or past <code>until</code> is refused when the exception
-is built, so raising one records an ordinary, counted failure instead.
+<code>ctx.due_at</code> is <code>until</code>. A past <code>until</code> is refused when the exception is built,
+and so is a naive one unless the project runs with
+<a href="../settings/#use_tz-false"><code>USE_TZ = False</code></a>, so raising one records an ordinary, counted failure instead.
 <a href="../scheduling/#when-the-work-is-not-due-yet-notyet">Scheduled reactions</a> covers
 it in full, with how it compares to <code>RetryAfter</code>.</p>
 <p>Like the other two, it is read by the relay and by nothing else: an <code>INLINE</code>
 receiver raising it fails the caller's transaction, and an <code>ON_COMMIT</code> one has
 it logged.</p>
 <h2 id="in-tests">In tests<a class="headerlink" href="#in-tests" title="Permanent link">&para;</a></h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">assert_fired</span><span class="p">,</span> <span class="n">drain_outbox</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_placing_an_order_reserves_stock</span><span class="p">():</span>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="n">place_order</span><span class="p">()</span>
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="n">assert_fired</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">times</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    <span class="n">drain_outbox</span><span class="p">()</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">assert_fired</span><span class="p">,</span> <span class="n">drain_outbox</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_placing_an_order_reserves_stock</span><span class="p">():</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="n">place_order</span><span class="p">()</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="n">assert_fired</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">times</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>    <span class="n">drain_outbox</span><span class="p">()</span>
 </span></code></pre></div>
 <p><code>drain_outbox()</code> runs the <strong>real</strong> delivery path to completion - the same claim,
 encode, decode and acknowledgement the relay performs - so a test exercising it
@@ -1373,10 +1443,10 @@ means it also proves the row was written inside the transaction that committed.<
 <p>It skips the backoff, so a failing receiver is retried to its dead letter in one
 call, and <strong>never skips a receiver's <code>due=</code></strong>: a scheduled row is left alone
 until it is due. Pass <code>now=</code> to move the claims forward in time instead:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_an_unanswered_offer_expires</span><span class="p">():</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="n">make_offer</span><span class="p">()</span>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="n">drain_outbox</span><span class="p">()</span>  <span class="c1"># the expiry is not due yet, so it is left alone</span>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">drain_outbox</span><span class="p">(</span><span class="n">now</span><span class="o">=</span><span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">()</span> <span class="o">+</span> <span class="n">timedelta</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">48</span><span class="p">))</span>  <span class="c1"># now it is</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_an_unanswered_offer_expires</span><span class="p">():</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>    <span class="n">make_offer</span><span class="p">()</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>    <span class="n">drain_outbox</span><span class="p">()</span>  <span class="c1"># the expiry is not due yet, so it is left alone</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="n">drain_outbox</span><span class="p">(</span><span class="n">now</span><span class="o">=</span><span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">()</span> <span class="o">+</span> <span class="n">timedelta</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">48</span><span class="p">))</span>  <span class="c1"># now it is</span>
 </span></code></pre></div>
 <p>Only the claims read <code>now</code>; the receiver runs on the real clock, so a scheduled
 receiver should compare against <code>ctx.due_at</code>, with the clock only as the floor

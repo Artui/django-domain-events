@@ -946,8 +946,10 @@ does: at fire time, beside the event row, seeing the business change's own
 uncommitted rows. <strong>If it raises, or returns anything but an aware
 <code>datetime</code>, <code>fire()</code> raises</strong> and the caller's change rolls back. A naive
 datetime is refused rather than read as UTC or as local time, either of
-which is wrong for somebody by hours. A reaction that silently never
-happened is the failure this package exists to rule out.</p>
+which is wrong for somebody by hours - unless the project runs with
+<a href="../settings/#use_tz-false"><code>USE_TZ = False</code></a>, where naive is local time by
+the project's own convention and is accepted. A reaction that silently
+never happened is the failure this package exists to rule out.</p>
 </div>
 <div class="admonition note">
 <p class="admonition-title">The due time is frozen at fire time</p>
@@ -1091,7 +1093,8 @@ work go ahead. A direct <code>deliver_one()</code> reschedules the same way and 
 <code>PENDING</code>, and refuses a pending row whose time has not come, as it refuses one
 waiting out its backoff.</p>
 <p><code>until</code> must be an aware <code>datetime</code> in the future when the exception is built.
-A naive one is refused, and so is a time already come: spending no attempt, the
+A naive one is refused - under <a href="../settings/#use_tz-false"><code>USE_TZ = False</code></a> it
+is local time instead, and accepted - and so is a time already come: spending no attempt, the
 row would be claimed straight back and answered the same way, a loop nothing
 would end. Both are refused where the exception is constructed, so a receiver
 raising either has raised an ordinary <code>TypeError</code> or <code>ValueError</code>, which the

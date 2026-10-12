@@ -1594,6 +1594,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.receiver_backlog.ReceiverBacklog.claimed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        claimed
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2890,6 +2901,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.receiver_backlog.ReceiverBacklog.claimed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        claimed
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3645,7 +3667,7 @@ it cannot help across a process boundary, where the answer is the event row.</p>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="o">*</span><span class="p">,</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">worker_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">passes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">now</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[],</span> <span class="n">datetime</span><span class="p">]</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">),</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">now</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[],</span> <span class="n">datetime</span><span class="p">]</span> <span class="o">=</span> <span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">,</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">sleep</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="nb">float</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="n">time_module</span><span class="o">.</span><span class="n">sleep</span><span class="p">,</span>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">wait</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="nb">float</span><span class="p">],</span> <span class="nb">bool</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">stop</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[],</span> <span class="nb">bool</span><span class="p">]</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
@@ -3713,6 +3735,10 @@ monotonic clock is not moved by an NTP step, which would silence or flood
 the sweep. It advances
 only when a sweep was attempted, and a failed one counts: it is not retried
 before the next interval.</p>
+<p><code>now</code> defaults to <code>django.utils.timezone.now</code>, so its readings follow
+<code>USE_TZ</code> as the columns they are compared with do; an injected clock may
+answer aware under either setting, and is converted to the project's form
+(<code>test_a_relay_on_an_aware_clock_claims_and_delivers</code>).</p>
 <p>A receiver deferring with <code>RetryAfter(seconds, counts=False)</code> pauses its
 lane in this process for <code>seconds</code>, measured on <code>now</code>: the lane's
 unstarted rows in the batch are handed back rather than attempted - each
@@ -4128,8 +4154,11 @@ already come, which is refused below and recorded as an ordinary failure
 on every retry
 (<code>test_the_documented_pattern_does_the_work_of_a_row_that_runs_after_the_moved_time</code>).</p>
 <p><code>until</code> is an aware datetime, and in the future when this is
-constructed. A naive one is refused, as <code>due=</code> refuses one, and so is a
-time already come: spending no attempt, the row would be claimed straight
+constructed. A naive one is refused under <code>USE_TZ = True</code>, as <code>due=</code>
+refuses one; under <code>False</code> it is local time, the project's own
+convention, and an aware one is converted to local time, so <code>until</code> is
+always in the form the row will store. A time already come is refused
+whatever the setting: spending no attempt, the row would be claimed straight
 back and answered the same way, a hot loop nothing would end. Both are
 refused where the exception is built, so a receiver raising either has
 raised an ordinary <code>TypeError</code> or <code>ValueError</code> instead, which the relay
@@ -6379,6 +6408,35 @@ and last, so adding it does not break a consumer constructing one.</p>
         <p>Deliveries whose due time has not come yet, which <code>owed</code> leaves out.
 Defaulted and last, so adding it does not break a consumer constructing
 one - this is an exported type.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="django_domain_events.types.receiver_backlog.ReceiverBacklog.claimed" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">claimed</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+<a href="#django_domain_events.types.receiver_backlog.ReceiverBacklog.claimed" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">claimed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>How many of <code>owed</code> a worker holds right now, the per-receiver half of
+<code>OutboxHealth.claimed</code>. A receiver whose owed rows are all claimed and
+none finishing is wedged, or its task queue is holding them, where the same
+total spread across receivers is a relay at work. Defaulted and last for the
+reason <code>scheduled</code> is.</p>
 
     </div>
 

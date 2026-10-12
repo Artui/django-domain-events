@@ -667,6 +667,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#use_tz-false" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        USE_TZ = False
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#routing-to-another-database" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -862,6 +873,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#use_tz-false" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        USE_TZ = False
+      
+    </span>
+  </a>
   
 </li>
       
@@ -1117,6 +1139,40 @@ only a subclass could use it.</p>
 </span></code></pre></div>
 <p>The Celery worker also needs the task module in its <code>imports</code>; see
 <a href="../operations/#celery">Celery</a>.</p>
+<h2 id="use_tz-false"><code>USE_TZ = False</code><a class="headerlink" href="#use_tz-false" title="Permanent link">&para;</a></h2>
+<p>Supported. Every datetime the package writes or compares follows the project's
+setting: "now" is <code>django.utils.timezone.now()</code>, so it is aware under
+<code>USE_TZ = True</code> and naive local time - in <code>TIME_ZONE</code> - under <code>False</code>, which is
+how Django stores and returns the columns it is compared with.</p>
+<p>A datetime your code hands in is converted to that form first: a <code>now=</code>
+argument to <code>drain_outbox</code>, <code>deliver_pending</code>, <code>outbox_health</code>,
+<code>quiet_receivers</code>, <code>prune_events</code>, <code>claim_batch</code> or <code>run_relay</code>'s clock, a
+<a href="../scheduling/#when-the-work-is-not-due-yet-notyet"><code>NotYet</code></a> time, what a
+<a href="../scheduling/"><code>due=</code></a> callable answers, and <code>fire(occurred_at=...)</code>. Under
+<code>False</code>:</p>
+<ul>
+<li>an <strong>aware</strong> value is converted to <code>TIME_ZONE</code> local time, never read off as
+  UTC;</li>
+<li>a <strong>naive</strong> value is local time, as everything else in the project is, so
+  <code>NotYet</code> and <code>due=</code> accept one rather than refusing it as they do under
+  <code>True</code>.</li>
+</ul>
+<p>What the package hands back is in the same form: <code>DeliveryContext.due_at</code>,
+<code>outbox_health().oldest_owed_at</code> and every timestamp on the rows are naive local
+time under <code>False</code>. Compare them with <code>timezone.now()</code>, not
+<code>datetime.now(timezone.utc)</code>.</p>
+<p>The documented <code>NotYet</code> pattern, <code>if moved &gt; max(ctx.due_at, timezone.now())</code>,
+works unchanged under either setting. Clock changes still bend naive arithmetic
+under <code>False</code>, as they do for every naive value in the project; that is the
+setting's trade-off, not the package's. The autumn change makes one local hour
+ambiguous. The spring change skips one, so a sum taken from a time before the
+jump that lands at or after it is an hour short in real time. A lease longer
+than about an hour that crosses the jump can lapse while its delivery is still
+running, and the side effect can repeat. <code>give_up_after</code> subtracts the row's
+<code>due_at</code>, or its event's <code>recorded_at</code>, from now in the same naive way, reads a
+span crossing the jump as an hour longer than it was, and can dead-letter a row
+up to an hour early. Postgres reads a local time the spring change skipped
+as standard time, and an ambiguous one as the later of its two instants.</p>
 <h2 id="routing-to-another-database">Routing to another database<a class="headerlink" href="#routing-to-another-database" title="Permanent link">&para;</a></h2>
 <p>Everything that opens a transaction asks the router for the alias, rather than
 hardcoding <code>default</code>. Give the event log its own database and the guarantee still
