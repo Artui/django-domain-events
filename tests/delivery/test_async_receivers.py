@@ -38,7 +38,8 @@ from django.utils import timezone
 
 from django_domain_events.declaration.receiver import receiver
 from django_domain_events.declaration.registry import registry
-from django_domain_events.delivery.deliver import deliver_one, deliver_pending
+from django_domain_events.delivery.claim_batch import claim_batch
+from django_domain_events.delivery.deliver import deliver_one, deliver_pending, dispatch_one
 from django_domain_events.delivery.fire import fire
 from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.permanent_failure import PermanentFailure
@@ -255,6 +256,30 @@ def test_an_async_eager_receiver_runs_at_commit(
 
     assert ran == [1]
     row = DeliveryRecord.objects.get(receiver_key="probe.eager")
+    assert (row.status, row.attempts) == (DeliveryStatus.SUCCEEDED, 1)
+
+
+def test_an_async_receiver_handed_to_a_task_runs_there(settings: Any) -> None:
+    """``site="task"``: the relay hands the row to a task backend, whose worker
+    runs it through the same delivery function. The immediate backend runs the
+    task inline, so the receiver has finished by the time the hand-off returns."""
+    settings.TASKS = {"default": {"BACKEND": "django_tasks.backends.immediate.ImmediateBackend"}}
+    settings.DJANGO_DOMAIN_EVENTS = {
+        "TASK_BACKEND": "django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend"
+    }
+    ran: list[int] = []
+
+    async def in_a_task(event: Unheard) -> None:
+        ran.append(event.value)
+
+    receiver(Unheard, key="probe.task", site="task")(in_a_task)
+    row = _owed("probe.task")
+    claim_batch(worker_id="w1", now=timezone.now(), lease=timedelta(minutes=5), limit=10)
+
+    assert dispatch_one(row.pk, worker_id="w1") is None
+
+    row.refresh_from_db()
+    assert ran == [1]
     assert (row.status, row.attempts) == (DeliveryStatus.SUCCEEDED, 1)
 
 
