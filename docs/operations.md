@@ -74,6 +74,15 @@ anyway costs attempts unless the receiver
 also pauses the lane in the relay that heard it and hands back the rest of its
 batch.
 
+**There is no priority inside a lane.** A lane is one queue, claimed strictly in
+order of `available_at` and then id: the oldest owed row goes first, whatever
+its receiver, its event or how urgent the work is to you. A password-reset mail
+fired behind a newsletter of fifty thousand waits for the newsletter. Nor is
+there fairness between events or receivers sharing a lane - one event fanning
+out to every subscriber holds the lane until its rows are delivered. The
+answer is another lane: give each class of sending that must not wait for
+another its own `lane=`, and run relays for each.
+
 A deployment with a mail lane, as Kubernetes Deployments:
 
 ```yaml
@@ -169,6 +178,46 @@ message id in the same transaction, and it commits with the acknowledgement:
 every row recorded as delivered then carries the id of the message that
 delivered it. Pay for the open transaction by sizing the pool and the timeout,
 rather than by moving the send out of the transaction.
+
+### Side effects inside the acknowledging transaction
+
+The open transaction is also where at-least-once shows. A receiver that calls
+out does so before its acknowledgement commits, so for the length of the call
+the connection sits idle in a transaction holding an outcome that is not yet
+recorded. For a mail relay that is most of its life - about 70% of its time in
+one measured deployment. A connection lost in that window - the relay killed
+with `SIGKILL`, the database failing over, a proxy dropping the session - takes
+the acknowledgement with it after the send has happened. The row is still
+claimed, its lease lapses, and the next relay sends again.
+
+That is the guarantee working as stated rather than a fault: the side effect is
+at-least-once, and this is the "at least". It is also roughly what it costs,
+which is the number worth planning for: about one duplicate per relay per
+killed process or dropped connection, because each relay has at most one
+delivery in that window. One test against four mail relays, sweeping their
+connections five times in each of two waves, sent about 36 duplicates.
+
+**Make the destination idempotent, keyed on `DeliveryContext.delivery_id`.**
+It is stable across every attempt of one delivery and different for every
+other, so a destination that has already seen it can answer the retry
+without acting on it:
+
+```python
+@receiver(OrderPlaced, takes_context=True)
+def email_receipt(evt: OrderPlaced, ctx: DeliveryContext) -> None:
+    provider.send(..., idempotency_key=f"receipt-{ctx.delivery_id}")
+```
+
+Most mail and payment APIs take such a key. Without one, nothing on this side
+can tell a duplicate apart afterwards: the attempt whose acknowledgement was
+lost recorded nothing - no `attempts`, no `last_error`, no line in the
+[failure log](delivery.md#the-failure-log) - which is exactly why it ran again.
+
+A receiver shape that records "started" in a transaction of its own before the
+call, so a retry could see the attempt was made, is not offered. It would turn
+a duplicate into a delivery that has to be resolved by hand - the retry cannot
+know whether the call landed either - and it costs every delivery a second
+commit for a window idempotency already closes.
 
 ### `LISTEN` / `NOTIFY`
 
@@ -502,6 +551,37 @@ queue redelivering: the redelivered copy finds the row taken by the worker that
 died, and the relay reclaims it once the lease lapses. Size `lease_seconds=` to
 cover the queue's backlog as well as the receiver's own run.
 
+#### The lease has to outlast the queue
+
+The lease the relay sets at the hand-off is the time the message has to reach
+a worker. The task extends it again before the receiver runs, so the run is
+covered on its own; what the hand-off lease has to cover is the wait in the
+queue, which is the backlog ahead of the message divided by the rate the
+workers drain it:
+
+```
+lease_seconds > messages ahead / (workers x tasks per second per worker)
+```
+
+A burst that enqueues 28,000 tasks onto workers draining 20 a second needs
+about 1,400 seconds for the last of them to start. Under a 900-second lease the
+rows still queued at 900 seconds lapse while their messages wait, and the
+relay - which reads a lapsed lease as a dead worker - claims them again and
+enqueues a second message for each. Nothing runs twice: the late first copies
+fail the take and do nothing, and that is the claim working. But every one of
+them is a task the workers spend dequeuing, and they arrive behind the
+backlog, making it longer. In one report, a 900-second lease over a
+28,000-task burst produced 12,918 stale messages, every one a no-op.
+
+The symptom is a burst of `outbox_health().lapsed_leases` and per-receiver
+`claimed` counts while the queue is long and nothing is failing, and the
+relay's INFO line "carried a claim the row no longer holds" once for each
+stale copy as the workers reach them. It is INFO because each one is the
+outcome the take exists for; a count of them is the measure of how far the
+lease fell short. The fix is the lease, sized to the largest backlog the queue
+is expected to hold - not more workers alone, unless they shorten the wait
+below it.
+
 `deliver_one` refuses a row that is not owed for every caller, with or without a
 claim: one that already succeeded, died or was orphaned, and one that failed and
 is still waiting out its backoff. It returns `None` for those without running the
@@ -524,7 +604,9 @@ See [introspection](introspection.md#is-the-outbox-keeping-up). The age of
 
 The relay logs at `WARNING` when a worker loses a delivery - either before
 running it, or after finishing work whose lease had already lapsed. The second
-names the receiver and suggests `lease_seconds=`, because that is the fix.
+names the receiver and suggests `lease_seconds=`, because that is the fix. It
+also logs every failed attempt it records, at `WARNING`, one line each - see
+[the failure log](delivery.md#the-failure-log).
 
 ## A cron that works
 

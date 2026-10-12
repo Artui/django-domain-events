@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone as django_timezone
 
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.fire import fire
@@ -76,6 +77,28 @@ def test_the_limit_is_honoured(order: OrderPlaced, record: list[str]) -> None:
     with transaction.atomic():
         fire(order)
     assert len(claim_batch(worker_id="w1", now=_now(), lease=LEASE, limit=1)) == 1
+
+
+def test_a_retry_due_now_waits_behind_every_row_due_before_it(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The backoff is a floor under a row's place in the queue, not its delay:
+    the claim takes the oldest ``available_at`` first, so a retry that has just
+    come due goes behind every row that came due earlier, however new or
+    however many. The delivery and operations pages say so, and this holds
+    them to it."""
+    with transaction.atomic():
+        fire(order)
+        fire(order)
+    now = django_timezone.now()
+    retry, *backlog = DeliveryRecord.objects.order_by("pk").values_list("pk", flat=True)
+    DeliveryRecord.objects.filter(pk=retry).update(
+        status=DeliveryStatus.FAILED, attempts=1, available_at=now - timedelta(seconds=1)
+    )
+    DeliveryRecord.objects.filter(pk__in=backlog).update(available_at=now - timedelta(hours=1))
+
+    assert claim_batch(worker_id="w1", now=now, lease=LEASE, limit=len(backlog)) == backlog
+    assert claim_batch(worker_id="w1", now=now, lease=LEASE, limit=10) == [retry]
 
 
 def test_only_ids_narrows_the_claim(order: OrderPlaced, record: list[str]) -> None:

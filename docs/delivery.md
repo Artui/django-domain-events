@@ -91,7 +91,9 @@ acknowledgement, so a call it makes outside the database holds that
 transaction open. See
 [A receiver holds a transaction open](operations.md#a-receiver-holds-a-transaction-open)
 for what that means behind pgbouncer and under
-`idle_in_transaction_session_timeout`.
+`idle_in_transaction_session_timeout`, and
+[Side effects inside the acknowledging transaction](operations.md#side-effects-inside-the-acknowledging-transaction)
+for why a call made there can happen twice.
 
 !!! warning "SKIP LOCKED is Postgres and MySQL 8"
     SQLite has neither the statement nor the concurrency model that would make
@@ -114,6 +116,16 @@ Full jitter draws from the **whole** window up to the ceiling rather than
 adding a little on top of it. Retrying a shared downstream at
 ceiling-plus-a-bit keeps every failed delivery in the same cohort, which is the
 thundering herd the backoff was meant to break up.
+
+**The backoff is a floor, not a schedule.** `available_at` is the earliest a
+retry can run, and the relay claims in order of `available_at` and then id, so a
+retry due in a minute also waits for every row that came due before it. With an
+empty queue that is the same thing; behind a backlog of twenty thousand rows, a
+retry due in a minute runs after the twenty thousand. There is deliberately no
+option to claim retries first: a destination failing on every attempt would then
+be retried ahead of every new event, and the new events would starve behind it.
+Work that must not queue behind another kind of work belongs in its own
+[lane](operations.md#lanes-a-relay-per-kind-of-work).
 
 ### A curve per receiver
 
