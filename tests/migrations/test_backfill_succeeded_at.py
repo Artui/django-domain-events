@@ -8,13 +8,14 @@ migration executor instead.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from importlib import import_module
 from types import SimpleNamespace
 
 import pytest
 from django.apps import apps
 from django.db import connection, transaction
+from django.utils import timezone as django_timezone
 
 from django_domain_events.delivery.fire import fire
 from django_domain_events.introspection.quiet_receivers import quiet_receivers
@@ -46,7 +47,7 @@ def _run() -> None:
 def _as_upgraded_from_0_4(order: OrderPlaced) -> datetime:
     """The state the upgrade actually produces: completions on record, and the
     new column empty because AddField does not backfill."""
-    acknowledged = datetime.now(timezone.utc) - timedelta(days=1)
+    acknowledged = django_timezone.now() - timedelta(days=1)
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(
@@ -75,7 +76,7 @@ def test_it_claims_nothing_for_a_delivery_that_never_succeeded(
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(
-        status=DeliveryStatus.DEAD, attempts=5, completed_at=datetime.now(timezone.utc)
+        status=DeliveryStatus.DEAD, attempts=5, completed_at=django_timezone.now()
     )
 
     _run()
@@ -102,7 +103,7 @@ def test_it_does_not_overwrite_a_success_recorded_since_the_upgrade(
 ) -> None:
     """Running it twice, or on a database already past the upgrade, must not
     move a timestamp the delivery path wrote."""
-    real = datetime.now(timezone.utc)
+    real = django_timezone.now()
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(

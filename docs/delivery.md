@@ -409,8 +409,9 @@ to `pending`. **No attempt is spent**, nothing is capped or jittered,
 `give_up_after` does not apply, `last_error` and `on_failure` are left alone, and
 no lane is paused: it is the application's own statement of when its work is
 due, not a destination's advice to be distrusted. On the next run,
-`ctx.due_at` is `until`. A naive or past `until` is refused when the exception
-is built, so raising one records an ordinary, counted failure instead.
+`ctx.due_at` is `until`. A past `until` is refused when the exception is built,
+and so is a naive one unless the project runs with
+[`USE_TZ = False`](settings.md#use_tz-false), so raising one records an ordinary, counted failure instead.
 [Scheduled reactions](scheduling.md#when-the-work-is-not-due-yet-notyet) covers
 it in full, with how it compares to `RetryAfter`.
 

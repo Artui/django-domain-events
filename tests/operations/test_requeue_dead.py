@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import importlib
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from unittest import mock
 
 import pytest
 from django.db import transaction
+from django.utils import timezone as django_timezone
 
 from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
@@ -105,17 +106,17 @@ def test_it_will_not_wipe_a_live_claim(order: OrderPlaced, record: list[str]) ->
     DeliveryRecord.objects.update(status=DeliveryStatus.DEAD)
     stolen_id = DeliveryRecord.objects.order_by("pk").values_list("pk", flat=True).first()
 
-    real_datetime = module.datetime
+    real_timezone = module.timezone
 
     class StealOnClockRead:
         @staticmethod
-        def now(tz=None):
+        def now():
             DeliveryRecord.objects.filter(pk=stolen_id).update(
                 status=DeliveryStatus.CLAIMED, claimed_by="relay-b"
             )
-            return real_datetime.now(tz)
+            return real_timezone.now()
 
-    with mock.patch.object(module, "datetime", StealOnClockRead):
+    with mock.patch.object(module, "timezone", StealOnClockRead):
         assert requeue_dead() == 1
 
     stolen = DeliveryRecord.objects.get(pk=stolen_id)
@@ -220,10 +221,10 @@ def test_a_requeued_row_is_owed_from_the_requeue(order: OrderPlaced, record: lis
     month after its event was recorded must not be past that bound already."""
     with transaction.atomic():
         fire(order)
-    EventRecord.objects.update(recorded_at=datetime.now(timezone.utc) - timedelta(days=30))
+    EventRecord.objects.update(recorded_at=django_timezone.now() - timedelta(days=30))
     DeliveryRecord.objects.update(status=DeliveryStatus.DEAD)
 
-    before = datetime.now(timezone.utc)
+    before = django_timezone.now()
     requeue_dead()
 
     due = list(DeliveryRecord.objects.values_list("due_at", flat=True))

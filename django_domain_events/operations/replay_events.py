@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 from django.db import transaction
+from django.utils import timezone
 
 from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.wake import notify_relay
@@ -76,7 +77,7 @@ def replay_events(
 
     wanted = set(receiver_keys) if receiver_keys is not None else None
     alias = write_alias()
-    now = datetime.now(timezone.utc)
+    now = timezone.now()
     counts = {"reopened": 0, "added": 0}
 
     for record in EventRecord.objects.filter(pk__in=list(event_ids)).order_by("pk"):

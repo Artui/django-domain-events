@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from django.db import connection, models, transaction
+from django.utils import timezone as django_timezone
 
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
@@ -15,7 +16,7 @@ from django_domain_events.models.receiver_last_success import ReceiverLastSucces
 from django_domain_events.operations import prune_events as prune_module
 from django_domain_events.operations.prune_events import prune_events
 from django_domain_events.types.delivery_status import DeliveryStatus
-from tests.conftest import Plans, delivery_table_access, event_deleted
+from tests.conftest import Plans, delivery_table_access, event_deleted, stored
 from tests.testapp.events import OrderPlaced, PinnedName
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -23,7 +24,7 @@ pytestmark = pytest.mark.django_db(transaction=True)
 
 def _age(days: int) -> None:
     """Backdate every event, since recorded_at is auto_now_add."""
-    EventRecord.objects.update(recorded_at=datetime.now(timezone.utc) - timedelta(days=days))
+    EventRecord.objects.update(recorded_at=django_timezone.now() - timedelta(days=days))
 
 
 def test_it_deletes_settled_events_past_the_window(order: OrderPlaced, record: list[str]) -> None:
@@ -163,7 +164,7 @@ def _recorded(
     age: timedelta = timedelta(0),
 ) -> EventRecord:
     """One event with one delivery row per status, recorded ``age`` ago."""
-    now = datetime.now(timezone.utc)
+    now = django_timezone.now()
     event = EventRecord.objects.create(
         name="testapp.OrderPlaced",
         payload={},
@@ -454,7 +455,7 @@ def test_each_receiver_s_last_success_outlives_its_deliveries() -> None:
     receiver whose deleted rows never succeeded."""
     _recorded(SUCCEEDED, DEAD, delete_when="settled")
     newest = _recorded(SUCCEEDED, delete_when="settled")
-    latest = datetime.now(timezone.utc) + timedelta(minutes=5)
+    latest = django_timezone.now() + timedelta(minutes=5)
     DeliveryRecord.objects.filter(event=newest).update(succeeded_at=latest)
 
     assert prune_events() == 2
@@ -462,7 +463,7 @@ def test_each_receiver_s_last_success_outlives_its_deliveries() -> None:
 
 
 def test_a_prune_never_moves_a_last_success_backwards() -> None:
-    later = datetime.now(timezone.utc) + timedelta(days=1)
+    later = django_timezone.now() + timedelta(days=1)
     ReceiverLastSuccess.objects.create(receiver_key="testapp.r0", last_succeeded_at=later)
     _recorded(SUCCEEDED, delete_when="succeeded")
 
@@ -471,7 +472,7 @@ def test_a_prune_never_moves_a_last_success_backwards() -> None:
 
 
 def test_a_prune_moves_a_last_success_forwards() -> None:
-    earlier = datetime.now(timezone.utc) - timedelta(days=1)
+    earlier = django_timezone.now() - timedelta(days=1)
     ReceiverLastSuccess.objects.create(receiver_key="testapp.r0", last_succeeded_at=earlier)
     _recorded(SUCCEEDED, delete_when="succeeded")
 
@@ -488,7 +489,7 @@ def test_a_chunk_records_its_last_successes_too() -> None:
         row.save()
 
     assert prune_events(batch_size=2) == 1
-    assert _successes() == {"testapp.fan": datetime(2026, 1, 3, tzinfo=timezone.utc)}
+    assert _successes() == {"testapp.fan": stored(datetime(2026, 1, 3, tzinfo=timezone.utc))}
 
 
 def test_the_last_success_is_written_in_the_delete_s_transaction(
@@ -548,7 +549,7 @@ def test_each_kind_of_due_is_one_index_range(plans_without_seqscan: Plans) -> No
     row of the event through the unique one. The window arm's
     ``retention_seconds IS NOT NULL`` is not held here: Postgres 17 infers it
     from the strict arithmetic beside it."""
-    now = datetime.now(timezone.utc)
+    now = django_timezone.now()
     EventRecord.objects.bulk_create(
         EventRecord(name="testapp.OrderPlaced", payload={}, occurred_at=now) for _ in range(3000)
     )
@@ -598,7 +599,7 @@ def test_a_stop_ends_the_prune_between_batches() -> None:
         EventRecord.objects.create(
             name="testapp.OrderPlaced",
             payload={},
-            occurred_at=datetime.now(timezone.utc),
+            occurred_at=django_timezone.now(),
             delete_when="settled",
         )
 

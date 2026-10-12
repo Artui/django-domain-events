@@ -11,12 +11,13 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from io import StringIO
 
 import pytest
 from django.core.management import call_command
 from django.db import OperationalError, connection, connections, transaction
+from django.utils import timezone as django_timezone
 
 from django_domain_events.delivery import run_relay as run_relay_module
 from django_domain_events.delivery.fire import fire
@@ -59,7 +60,7 @@ def _consumed_event() -> EventRecord:
     return EventRecord.objects.create(
         name="testapp.OrderPlaced",
         payload={},
-        occurred_at=datetime.now(timezone.utc),
+        occurred_at=django_timezone.now(),
         delete_when="settled",
     )
 
@@ -273,7 +274,7 @@ def _fan_out_events(count: int) -> datetime:
     having succeeded n seconds after the base, so every batch moves every
     receiver's recorded last success forward - the contended write. Returns the
     newest success."""
-    base = datetime.now(timezone.utc) - timedelta(hours=1)
+    base = django_timezone.now() - timedelta(hours=1)
     for n in range(count):
         event = EventRecord.objects.create(
             name="testapp.OrderPlaced", payload={}, occurred_at=base, delete_when="succeeded"

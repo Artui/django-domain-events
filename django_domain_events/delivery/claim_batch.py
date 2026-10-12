@@ -9,7 +9,7 @@ from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import DEFAULT_LANE
-from django_domain_events.utils import not_yet_due
+from django_domain_events.utils import in_project_time, not_yet_due
 
 
 def claim_batch(
@@ -73,6 +73,10 @@ def claim_batch(
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
 
+    # It writes ``now`` as the claim, so it has to be in the form the column
+    # holds, whoever passed it: it is public, so a caller need not have
+    # converted it (test_a_claim_told_an_aware_time_writes_it_as_local_time).
+    now = in_project_time(now)
     retryable = models.Q(status__in=[DeliveryStatus.PENDING, DeliveryStatus.FAILED])
     if not ignore_backoff:
         retryable &= models.Q(available_at__lte=now)

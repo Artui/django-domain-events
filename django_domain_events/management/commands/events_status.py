@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from django.core.management.base import BaseCommand
+from django.utils import timezone
 
 from django_domain_events.introspection.outbox_health import outbox_health
 
@@ -73,4 +74,4 @@ def _age(moment: datetime | None) -> int | None:
     """
     if moment is None:
         return None
-    return int((datetime.now(timezone.utc) - moment).total_seconds())
+    return int((timezone.now() - moment).total_seconds())

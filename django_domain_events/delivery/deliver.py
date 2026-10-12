@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import logging
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
+from django.utils import timezone
 
 from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.backoff import backoff
@@ -25,7 +26,13 @@ from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
-from django_domain_events.utils import RETRYABLE, TERMINAL, decode_payload, parse_datetime
+from django_domain_events.utils import (
+    RETRYABLE,
+    TERMINAL,
+    decode_payload,
+    in_project_time,
+    parse_datetime,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +124,7 @@ def _deliver_one(
             return None
 
     delivery = DeliveryRecord.objects.select_related("event").get(pk=delivery_id)
-    now = datetime.now(timezone.utc)
+    now = timezone.now()
     if not _owed(delivery, now):
         logger.info(
             "delivery %s is %s and not owed now, so it was not run",
@@ -175,7 +182,7 @@ def _deliver_one(
             status=DeliveryStatus.DEAD,
             attempts=delivery.attempts + 1,
             last_error=f"{type(exc).__name__}: {exc}"[:2000],
-            completed_at=datetime.now(timezone.utc),
+            completed_at=timezone.now(),
         )
 
     attempt = delivery.attempts + 1
@@ -197,7 +204,7 @@ def _deliver_one(
             caused_by(delivery.event.pk, delivery.event.correlation_id),
         ):
             call_receiver(receiver.func, receiver.takes_context, event, context)
-            acknowledged = datetime.now(timezone.utc)
+            acknowledged = timezone.now()
             outcome = fence.write(
                 status=DeliveryStatus.SUCCEEDED,
                 attempts=attempt,
@@ -299,7 +306,7 @@ def _take(delivery_id: int, claimed_by: str | None, claimed_at: str | None, work
         status=DeliveryStatus.CLAIMED,
         claimed_by=claimed_by,
         claimed_at=None if claimed_at is None else parse_datetime(claimed_at),
-    ).update(claimed_by=worker_id, claimed_at=datetime.now(timezone.utc))
+    ).update(claimed_by=worker_id, claimed_at=timezone.now())
     return bool(taken)
 
 
@@ -403,7 +410,7 @@ def dispatch_one(
     # would be refused. Each half has its own test, since the two are one arc:
     # test_an_unclaimed_row_is_not_enqueued and test_a_lost_row_is_not_enqueued.
     if delivery.status != DeliveryStatus.CLAIMED or not fence.extend_lease(
-        datetime.now(timezone.utc), receiver.lease_seconds
+        timezone.now(), receiver.lease_seconds
     ):
         logger.warning(
             "worker %s does not hold delivery %s, so it was not enqueued", worker_id, delivery_id
@@ -445,7 +452,7 @@ def _fail(
     registration ``deliver_one`` resolved for this attempt rather than from the
     row: a curve changed by a deploy applies to deliveries already in flight.
     """
-    now = datetime.now(timezone.utc)
+    now = timezone.now()
     attempts = attempt if attempt is not None else row.attempts + 1
     exhausted = terminal or attempts >= row.max_attempts
     status = DeliveryStatus.DEAD if exhausted else DeliveryStatus.FAILED
@@ -533,7 +540,7 @@ def _defer(
             error_type=type(exc).__name__,
         )
 
-    now = datetime.now(timezone.utc)
+    now = timezone.now()
     owed_since = row.due_at if row.due_at is not None else row.event.recorded_at
     if _given_up(owed_since, now, receiver.give_up_after):
         truncated = (
@@ -841,7 +848,7 @@ def deliver_pending(
     #   (test_a_task_that_failed_inside_the_hand_off_is_retried_within_the_drain).
     set_aside: set[int] = set()
     while True:
-        claimed_at = now if now is not None else datetime.now(timezone.utc)
+        claimed_at = in_project_time(now) if now is not None else timezone.now()
         ids = claim_batch(
             worker_id=worker_id,
             now=claimed_at,

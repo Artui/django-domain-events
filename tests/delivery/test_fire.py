@@ -15,6 +15,7 @@ from unittest import mock
 import pytest
 from django.contrib.auth.models import User
 from django.db import transaction
+from django.utils import timezone as django_timezone
 
 from django_domain_events.declaration.event import event
 from django_domain_events.declaration.receiver import receiver
@@ -32,6 +33,7 @@ from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.retention import Retention
+from tests.conftest import stored
 from tests.testapp.events import Eagerly, OrderPlaced, PinnedName, Unheard
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -143,8 +145,8 @@ def test_dedupe_key_and_occurred_at_are_recorded(order: OrderPlaced, record: lis
         fire(order, dedupe_key="order-7", occurred_at=happened)
     row = EventRecord.objects.get()
     assert row.dedupe_key == "order-7"
-    assert row.occurred_at == happened
-    assert row.recorded_at > happened
+    assert row.occurred_at == stored(happened)
+    assert row.recorded_at > stored(happened)
 
 
 def test_max_attempts_is_copied_onto_the_row(order: OrderPlaced, record: list[str]) -> None:
@@ -531,7 +533,7 @@ def test_a_fixed_delay_writes_the_row_due_that_long_after_the_event_occurred(
     @receiver(OrderPlaced, key="probe.expire", due=timedelta(hours=48))
     def expire(evt: OrderPlaced) -> None: ...
 
-    occurred = datetime.now(timezone.utc) - timedelta(minutes=5)
+    occurred = django_timezone.now() - timedelta(minutes=5)
     with transaction.atomic():
         fire(order, occurred_at=occurred)
 
@@ -548,7 +550,7 @@ def test_a_callable_is_handed_the_event_and_its_answer_is_the_due_time(
     order: OrderPlaced, record: list[str]
 ) -> None:
     seen: list[object] = []
-    when = datetime.now(timezone.utc) + timedelta(days=3)
+    when = django_timezone.now() + timedelta(days=3)
 
     def newsletter_time(evt: OrderPlaced) -> datetime:
         seen.append(evt)
@@ -577,7 +579,7 @@ def test_a_due_time_already_past_is_due_when_the_row_is_written(
     def late(evt: OrderPlaced) -> None: ...
 
     with transaction.atomic():
-        fire(order, occurred_at=datetime.now(timezone.utc) - timedelta(days=30))
+        fire(order, occurred_at=django_timezone.now() - timedelta(days=30))
 
     row = _row("probe.late")
     assert (row.available_at, row.due_at) == (row.event.recorded_at,) * 2
@@ -592,11 +594,14 @@ def test_a_due_time_already_past_is_due_when_the_row_is_written(
     ],
 )
 def test_a_callable_answering_anything_but_an_aware_datetime_fails_the_change(
-    order: OrderPlaced, record: list[str], answer: object, error: type, message: str
+    order: OrderPlaced, record: list[str], answer: object, error: type, message: str, settings
 ) -> None:
     """Raised, never skipped, because the alternative is a reaction that
     silently never happens. A naive datetime is refused rather than guessed
-    at: read as UTC or as local time, it is wrong for somebody by hours."""
+    at under ``USE_TZ = True``: read as UTC or as local time, it is wrong for
+    somebody by hours. Under ``False`` it is local time and accepted
+    (``tests/test_naive_datetimes.py``)."""
+    settings.USE_TZ = True
 
     @receiver(OrderPlaced, key="probe.bad_due", due=lambda evt: answer)
     def bad(evt: OrderPlaced) -> None: ...
@@ -616,7 +621,7 @@ def test_a_scheduled_receiver_is_given_its_due_time(order: OrderPlaced, record: 
     def ctx(evt: OrderPlaced, context: DeliveryContext) -> None:
         seen.append(context)
 
-    occurred = datetime.now(timezone.utc)
+    occurred = django_timezone.now()
     with transaction.atomic():
         fire(order, occurred_at=occurred)
     drain_outbox(now=occurred + timedelta(hours=1))

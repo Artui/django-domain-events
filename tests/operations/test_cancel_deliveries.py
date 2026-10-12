@@ -11,6 +11,7 @@ from unittest import mock
 import pytest
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone as django_timezone
 
 from django_domain_events import cancel_deliveries
 from django_domain_events.delivery.claim_batch import claim_batch
@@ -20,6 +21,7 @@ from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.operations.prune_events import prune_events
 from django_domain_events.types.delivery_status import DeliveryStatus
+from tests.conftest import stored
 from tests.testapp.events import OrderPlaced
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -53,7 +55,7 @@ def test_unclaimed_rows_are_settled_and_never_run(order: OrderPlaced, record: li
 
     assert set(_statuses(event_id).values()) == {DeliveryStatus.CANCELLED}
     assert drain_outbox() == {}
-    assert drain_outbox(now=datetime.now(timezone.utc) + timedelta(days=365)) == {}
+    assert drain_outbox(now=django_timezone.now() + timedelta(days=365)) == {}
     assert record == []
 
 
@@ -64,7 +66,7 @@ def test_a_cancelled_row_records_when_it_was_settled_and_no_success(
     ``succeeded_at`` stays empty: the receiver never ran, so a receiver whose
     work is all cancelled is one that has not been seen to work."""
     event_id = _fired(order)
-    before = datetime.now(timezone.utc)
+    before = django_timezone.now()
 
     cancel_deliveries([event_id])
 
@@ -83,7 +85,7 @@ def test_a_failed_row_awaiting_its_retry_is_cancelled_too(
     DeliveryRecord.objects.filter(receiver_key=DURABLE).update(
         status=DeliveryStatus.FAILED,
         attempts=1,
-        available_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        available_at=django_timezone.now() + timedelta(hours=1),
     )
     DeliveryRecord.objects.filter(receiver_key=CONTEXT).update(status=DeliveryStatus.SUCCEEDED)
 
@@ -130,7 +132,7 @@ def test_a_settled_row_keeps_its_outcome(
 
     assert cancel_deliveries([event_id]) == {"cancelled": 0, "in_flight": 0}
     assert set(_statuses(event_id).values()) == {settled}
-    assert set(DeliveryRecord.objects.values_list("completed_at", flat=True)) == {finished}
+    assert set(DeliveryRecord.objects.values_list("completed_at", flat=True)) == {stored(finished)}
 
 
 def test_only_the_named_events_are_touched(order: OrderPlaced, record: list[str]) -> None:
@@ -280,17 +282,17 @@ def test_it_will_not_cancel_a_row_claimed_after_the_lock(
     module = importlib.import_module("django_domain_events.operations.cancel_deliveries")
     event_id = _fired(order)
     stolen_id = DeliveryRecord.objects.get(event=event_id, receiver_key=DURABLE).pk
-    real_datetime = module.datetime
+    real_timezone = module.timezone
 
     class StealOnClockRead:
         @staticmethod
-        def now(tz: Any = None) -> datetime:
+        def now() -> datetime:
             DeliveryRecord.objects.filter(pk=stolen_id).update(
                 status=DeliveryStatus.CLAIMED, claimed_by="relay-b"
             )
-            return real_datetime.now(tz)
+            return real_timezone.now()
 
-    with mock.patch.object(module, "datetime", StealOnClockRead):
+    with mock.patch.object(module, "timezone", StealOnClockRead):
         assert cancel_deliveries([event_id]) == {"cancelled": 1, "in_flight": 1}
 
     stolen = DeliveryRecord.objects.get(pk=stolen_id)
@@ -357,7 +359,7 @@ def test_a_cancel_waits_for_a_claim_in_flight_and_leaves_the_row_claimed(
         claimed.extend(
             claim_batch(
                 worker_id="relay-a",
-                now=datetime.now(timezone.utc),
+                now=django_timezone.now(),
                 lease=timedelta(minutes=5),
                 limit=1,
             )
@@ -394,14 +396,14 @@ def test_a_relay_skips_a_row_a_cancel_holds_and_never_claims_it_after(
 
     thread, _, release = _in_thread(lambda: cancel_deliveries([event_id]))
     try:
-        now = datetime.now(timezone.utc)
+        now = django_timezone.now()
         during = claim_batch(worker_id="relay-a", now=now, lease=timedelta(minutes=5), limit=10)
     finally:
         release.set()
         thread.join(10)
     after = claim_batch(
         worker_id="relay-a",
-        now=datetime.now(timezone.utc),
+        now=django_timezone.now(),
         lease=timedelta(minutes=5),
         limit=10,
     )

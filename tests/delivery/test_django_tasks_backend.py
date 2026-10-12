@@ -5,11 +5,12 @@ import logging
 import threading
 import time
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from unittest import mock
 
 import pytest
 from django.db import connection, connections, transaction
+from django.utils import timezone as django_timezone
 
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.deliver import dispatch_one
@@ -85,7 +86,7 @@ def _handed_off(order: OrderPlaced, worker_id: str = "w1") -> tuple[int, list]:
     with transaction.atomic():
         fire(order)
     claim_batch(
-        worker_id=worker_id, now=datetime.now(timezone.utc), lease=timedelta(minutes=5), limit=10
+        worker_id=worker_id, now=django_timezone.now(), lease=timedelta(minutes=5), limit=10
     )
     delivery_id = DeliveryRecord.objects.values_list("pk", flat=True).get(
         receiver_key="testapp.durable_receiver"
@@ -189,9 +190,7 @@ def test_the_django_tasks_adapter_enqueues(
     }
     with transaction.atomic():
         fire(order)
-    claim_batch(
-        worker_id="w1", now=datetime.now(timezone.utc), lease=timedelta(minutes=5), limit=10
-    )
+    claim_batch(worker_id="w1", now=django_timezone.now(), lease=timedelta(minutes=5), limit=10)
     delivery_id = DeliveryRecord.objects.values_list("pk", flat=True).get(
         receiver_key="testapp.durable_receiver"
     )
@@ -325,7 +324,7 @@ def test_the_task_site_extends_the_lease_before_enqueueing(
     """The path where the wait is the point: the row now has to survive the
     queue's backlog as well as the receiver's runtime, and this is the last
     moment before the relay stops looking at it."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import timedelta
 
     from django_domain_events.delivery.claim_batch import claim_batch
     from django_domain_events.delivery.deliver import dispatch_one
@@ -354,7 +353,7 @@ def test_the_task_site_extends_the_lease_before_enqueueing(
     with transaction.atomic():
         fire(order)
     row = DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").get()
-    started = datetime.now(timezone.utc)
+    started = django_timezone.now()
     claim_batch(worker_id="w1", now=started, lease=timedelta(seconds=5), limit=10)
 
     with (
@@ -457,7 +456,7 @@ def test_a_message_for_a_failed_row_not_yet_due_does_not_run(
     DeliveryRecord.objects.filter(pk=delivery_id).update(
         status=DeliveryStatus.FAILED,
         attempts=1,
-        available_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        available_at=django_timezone.now() + timedelta(hours=1),
     )
     record.clear()
 
@@ -476,9 +475,9 @@ def test_a_stale_message_does_not_run_a_row_the_relay_reclaimed(
     arriving now would run beside the new one."""
     delivery_id, message = _handed_off(order)
     DeliveryRecord.objects.filter(pk=delivery_id).update(
-        lease_expires_at=datetime.now(timezone.utc) - timedelta(seconds=1)
+        lease_expires_at=django_timezone.now() - timedelta(seconds=1)
     )
-    claim_batch(worker_id="w2", now=datetime.now(timezone.utc), lease=timedelta(hours=1), limit=10)
+    claim_batch(worker_id="w2", now=django_timezone.now(), lease=timedelta(hours=1), limit=10)
     record.clear()
 
     _replay(message)
@@ -510,7 +509,7 @@ def test_a_message_from_an_earlier_claim_by_the_same_worker_does_not_take_the_ro
     own lapsed row under the same worker id, so only the timestamp tells the
     two claims apart."""
     delivery_id, message = _handed_off(order)
-    later = datetime.now(timezone.utc) + timedelta(seconds=1)
+    later = django_timezone.now() + timedelta(seconds=1)
     DeliveryRecord.objects.filter(pk=delivery_id).update(claimed_at=later)
     record.clear()
 

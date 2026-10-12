@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from unittest import mock
 
 import pytest
 from django.db import transaction
+from django.utils import timezone as django_timezone
 
 import django_domain_events
 from django_domain_events.declaration.receiver import receiver
@@ -42,7 +43,7 @@ def _no_leaked_receivers() -> Iterator[None]:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return django_timezone.now()
 
 
 def _fire() -> None:

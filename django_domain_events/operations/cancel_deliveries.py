@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timezone
 
 from django.db import models, transaction
+from django.utils import timezone
 
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.settings import setting
@@ -108,7 +108,7 @@ def cancel_deliveries(
                 .order_by("pk")
                 .values_list("pk", flat=True)
             )
-            now = datetime.now(timezone.utc)
+            now = timezone.now()
             counts["cancelled"] += (
                 DeliveryRecord.objects.using(alias)
                 .filter(scope, status__in=RETRYABLE)

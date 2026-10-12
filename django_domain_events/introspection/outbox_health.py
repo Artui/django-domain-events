@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from django.db import models
 from django.db.models.functions import Coalesce
+from django.utils import timezone
 
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.outbox_health import OutboxHealth
 from django_domain_events.types.receiver_backlog import ReceiverBacklog
-from django_domain_events.utils import not_yet_due, owed
+from django_domain_events.utils import in_project_time, not_yet_due, owed
 
 
 def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
@@ -31,7 +32,7 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
 
-    moment = now or datetime.now(timezone.utc)
+    moment = in_project_time(now) if now is not None else timezone.now()
     # Every predicate below is a partial index's own condition, word for word,
     # because that is the only form Postgres matches a partial index to: "not
     # terminal" means the same rows but implies none of the owed or dead

@@ -73,8 +73,10 @@ measured from it would dead-letter its first deferral.
     uncommitted rows. **If it raises, or returns anything but an aware
     `datetime`, `fire()` raises** and the caller's change rolls back. A naive
     datetime is refused rather than read as UTC or as local time, either of
-    which is wrong for somebody by hours. A reaction that silently never
-    happened is the failure this package exists to rule out.
+    which is wrong for somebody by hours - unless the project runs with
+    [`USE_TZ = False`](settings.md#use_tz-false), where naive is local time by
+    the project's own convention and is accepted. A reaction that silently
+    never happened is the failure this package exists to rule out.
 
 !!! note "The due time is frozen at fire time"
     Like `max_attempts`, it is resolved once, when the event fires, and written
@@ -216,7 +218,8 @@ work go ahead. A direct `deliver_one()` reschedules the same way and returns
 waiting out its backoff.
 
 `until` must be an aware `datetime` in the future when the exception is built.
-A naive one is refused, and so is a time already come: spending no attempt, the
+A naive one is refused - under [`USE_TZ = False`](settings.md#use_tz-false) it
+is local time instead, and accepted - and so is a time already come: spending no attempt, the
 row would be claimed straight back and answered the same way, a loop nothing
 would end. Both are refused where the exception is constructed, so a receiver
 raising either has raised an ordinary `TypeError` or `ValueError`, which the
