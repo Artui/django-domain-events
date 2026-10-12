@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A project on `USE_TZ = False` could not run the relay. The package took "now"
+  as an aware UTC value, so comparing it with a column read back raised
+  `TypeError` - every `RetryAfter(counts=False)`, a FAILED row run without a
+  claim, `quiet_receivers()`, the `events_status` ages, scheduled due times and
+  replay - and on SQLite every write of one failed. "Now" is
+  `django.utils.timezone.now()`, and every datetime an application hands in -
+  a `now=` argument, the relay's clock, `NotYet`, a `due=` answer,
+  `fire(occurred_at=)` - is converted to the project's form first: under
+  `USE_TZ = False` an aware value becomes `TIME_ZONE` local time, never UTC,
+  and a naive `NotYet` or `due=` answer is accepted as local time rather than
+  refused. The Postgres CI job now runs under each setting.
+- An idle relay woke once for every notification sent while it was busy
+  delivering, each wake an empty claim: psycopg holds those notifications in a
+  backlog and yields them first on the next wait, and the wait returned after
+  one. One wake now drains the backlog.
+
+### Added
+- Every failed attempt the relay records is logged once at `WARNING`, naming
+  the receiver, the delivery, the attempt, the exception's type and whether the
+  row is now `failed` or `dead`, with no traceback. A deferral and the give-up
+  that ends one are logged too. As with `on_failure`, a worker whose lease
+  lapsed logs nothing.
+- `ReceiverBacklog.claimed`: how many of a receiver's owed rows a worker holds,
+  the per-receiver half of `OutboxHealth.claimed`, from the same grouped query.
+  `events_status` prints it per receiver and carries it in `--format json`.
+
+### Changed
+- A task message turned away because its row's claim has moved on - a
+  redelivered copy, or one the queue held past its lease - is logged at `INFO`
+  rather than `WARNING`. It is the outcome the claim exists for, and a lapsed
+  backlog produces thousands of them.
+- The delivery and operations pages now say that the backoff is a floor under
+  a row's place in the queue, not its delay; that a lane is strictly ordered,
+  with no priority or fairness inside it; how to size a `site="task"` lease to
+  the queue's backlog, and what a lapsed one looks like; and why a side effect
+  inside the acknowledging transaction can repeat after a lost connection,
+  with `DeliveryContext.delivery_id` as the destination's idempotency key.
+
 ## [0.11.1] — 2026-10-11
 
 ### Added
