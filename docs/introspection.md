@@ -172,7 +172,7 @@ climbing, while one wedged receiver has a backlog and everything else fine.
 | `dead` | Dead-lettered. **Not** counted as owed |
 | `oldest_owed_at` | When the oldest still-owed delivery **became owed**: its due time where it has one, its event's recording otherwise; `None` when nothing is owed |
 | `lapsed_leases` | Claimed rows whose lease has expired |
-| `receivers` | Per-receiver backlog, worst first, omitting the ones with nothing owed, dead or scheduled. Each carries its own `owed`, `scheduled`, `dead` and `oldest_owed_at`; one with only scheduled work sorts after every receiver that is behind |
+| `receivers` | Per-receiver backlog, worst first, omitting the ones with nothing owed, dead or scheduled. Each carries its own `owed`, `scheduled`, `claimed`, `dead` and `oldest_owed_at`; one with only scheduled work sorts after every receiver that is behind |
 
 A [cancelled](operations.md#cancel-owed-work) delivery is settled, so it appears
 in none of these: not owed, not scheduled and not dead. An outbox holding only
@@ -208,6 +208,11 @@ receiver outruns its lease and has its work thrown away every time - see
 gives its unstarted rows back by expiring their leases, so a brief non-zero
 reading after a deploy is that, not a dying worker.
 
+The per-receiver `claimed` adds up to the total, and says whose rows the
+workers hold. A receiver with every owed row claimed and none finishing is wedged,
+or its [task queue](operations.md#handing-delivery-to-a-task-queue) is sitting on
+the messages; the same total spread across receivers is a relay at work.
+
 Every figure here is answered from an index and none of them scans the
 delivery table, so the call is cheap enough to scrape on an interval.
 
@@ -230,11 +235,12 @@ dead          0
 lapsed leases 0
 oldest owed   42s ago
 
-  billing.send_invoice	owed=3	dead=0	scheduled=0	oldest=42s
-  waitlist.expire_offer	owed=0	dead=0	scheduled=120	oldest=-
+  billing.send_invoice	owed=3	dead=0	scheduled=0	claimed=1	oldest=42s
+  waitlist.expire_offer	owed=0	dead=0	scheduled=120	claimed=0	oldest=-
 ```
 
-`--format json` carries `scheduled` at the top level and on each receiver.
+`--format json` carries `scheduled` and `claimed` at the top level and on each
+receiver.
 
 ## System checks
 

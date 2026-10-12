@@ -37,7 +37,7 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
 | The relay delivers the rest | `DURABLE`, effectively once for the receivers that touch only this database |
 | An event fired inside a receiver | causation recorded with nothing threaded through the call site |
 | The refund keeps failing | backoff, dead-lettering, and `requeue_dead` |
-| `outbox_health()` | whether the queue is draining, as opposed to whether a receiver is running |
+| `outbox_health()` | whether the queue is draining, as opposed to whether a receiver is running, and per receiver how many of its rows a worker holds |
 | A backfill | `suppressed()` recording without delivering, and saying why |
 | A row from before a field existed | the `upgrade()` hook migrating a v1 payload |
 | The marketplace answers `410 Gone` | `PermanentFailure` dead-lettering on the attempt that raised it, one of five spent |

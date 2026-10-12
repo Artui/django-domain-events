@@ -40,7 +40,7 @@ def test_it_names_the_receivers_that_are_behind(order: OrderPlaced, record: list
         fire(order)
     output = _run()
     assert "owed          2" in output
-    assert "testapp.durable_receiver\towed=1\tdead=0\tscheduled=0\toldest=" in output
+    assert "testapp.durable_receiver\towed=1\tdead=0\tscheduled=0\tclaimed=0\toldest=" in output
 
 
 def test_the_oldest_owed_is_reported_as_an_age(order: OrderPlaced, record: list[str]) -> None:
@@ -99,7 +99,7 @@ def test_scheduled_work_is_reported_apart_from_what_is_owed(
     output = _run()
     assert "owed          1" in output
     assert "scheduled     1" in output
-    assert "testapp.durable_receiver\towed=0\tdead=0\tscheduled=1\toldest=-" in output
+    assert "testapp.durable_receiver\towed=0\tdead=0\tscheduled=1\tclaimed=0\toldest=-" in output
 
 
 def test_json_carries_the_scheduled_counts(order: OrderPlaced, record: list[str]) -> None:
@@ -111,6 +111,24 @@ def test_json_carries_the_scheduled_counts(order: OrderPlaced, record: list[str]
     by_key = {r["key"]: r for r in parsed["receivers"]}
     assert by_key["testapp.durable_receiver"]["scheduled"] == 1
     assert by_key["testapp.with_context"]["scheduled"] == 0
+
+
+def test_each_receiver_says_how_many_of_its_rows_are_claimed(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The per-receiver claimed count reaches both outputs, so the operator and
+    the scraper can each tell a wedged receiver from a relay at work."""
+    with transaction.atomic():
+        fire(order)
+    DeliveryRecord.objects.filter(receiver_key="testapp.with_context").update(
+        status=DeliveryStatus.CLAIMED, claimed_by="w1"
+    )
+    output = _run()
+    assert "testapp.with_context\towed=1\tdead=0\tscheduled=0\tclaimed=1\toldest=" in output
+    parsed = json.loads(_run("--format", "json"))
+    by_key = {r["key"]: r for r in parsed["receivers"]}
+    assert by_key["testapp.with_context"]["claimed"] == 1
+    assert by_key["testapp.durable_receiver"]["claimed"] == 0
 
 
 def test_cancelled_work_is_neither_owed_nor_dead(order: OrderPlaced, record: list[str]) -> None:

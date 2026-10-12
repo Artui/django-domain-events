@@ -178,8 +178,15 @@ class Command(BaseCommand):
         print(f"   owed={health.owed} claimed={health.claimed} dead={health.dead}")
         print(f"   lapsed leases={health.lapsed_leases} oldest owed={health.oldest_owed_at}")
         for entry in health.receivers:
-            print(f"     {entry.key:24} owed={entry.owed} dead={entry.dead}")
+            print(
+                f"     {entry.key:24} owed={entry.owed} dead={entry.dead} claimed={entry.claimed}"
+            )
         check("a requeued row is owed again", health.owed, 1)
+        check(
+            "each receiver's claimed rows add up to the total",
+            sum(entry.claimed for entry in health.receivers),
+            health.claimed,
+        )
         check("and is no longer dead", health.dead, 0)
         if health.oldest_owed_at is None or health.oldest_owed_at > now():
             raise SystemExit("BROKEN: the oldest owed timestamp is in the future")

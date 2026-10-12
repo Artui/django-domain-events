@@ -133,6 +133,26 @@ def test_the_per_receiver_split_names_who_is_behind(order: OrderPlaced, record: 
     assert by_key["testapp.with_context"].dead == 1
 
 
+def test_the_per_receiver_split_says_who_holds_the_claims(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The total says rows are claimed; only the split says whose. A receiver
+    whose rows are all claimed and none finishing is a wedged receiver or a
+    queue holding its tasks, where the same total spread evenly is a relay at
+    work. The counts add up to the total, so the split loses nothing."""
+    with transaction.atomic():
+        fire(order)
+        fire(order)
+    DeliveryRecord.objects.filter(receiver_key="testapp.with_context").update(
+        status=DeliveryStatus.CLAIMED, claimed_by="w1"
+    )
+    health = outbox_health()
+    by_key = {r.key: r for r in health.receivers}
+    assert by_key["testapp.with_context"].claimed == 2
+    assert by_key["testapp.durable_receiver"].claimed == 0
+    assert sum(r.claimed for r in health.receivers) == health.claimed == 2
+
+
 def test_receivers_with_nothing_owed_or_dead_are_left_out(
     order: OrderPlaced, record: list[str]
 ) -> None:

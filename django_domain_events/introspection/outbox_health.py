@@ -46,6 +46,7 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
     # them anyway.
     is_owed = owed()
     is_dead = models.Q(status=DeliveryStatus.DEAD)
+    is_claimed = models.Q(status=DeliveryStatus.CLAIMED)
     waiting = not_yet_due(moment)
     # The negation keeps NULL due_at, which is every row nobody scheduled.
     due = ~waiting
@@ -57,7 +58,7 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
     totals = owed_rows.aggregate(
         owed=models.Count("pk", filter=due),
         scheduled=models.Count("pk", filter=waiting),
-        claimed=models.Count("pk", filter=models.Q(status=DeliveryStatus.CLAIMED)),
+        claimed=models.Count("pk", filter=is_claimed),
         oldest=models.Min(owed_since, filter=due),
         lapsed=models.Count(
             "pk",
@@ -68,7 +69,8 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
 
     # One grouped query for the per-receiver split rather than one per receiver:
     # this is meant to be scraped on a schedule, so its cost is paid forever.
-    # Three in total: this, the aggregate above, and the dead count.
+    # Three in total: this, the aggregate above, and the dead count. The claimed
+    # split is one more aggregate in this query, never a query of its own.
     per_receiver = (
         DeliveryRecord.objects.filter(is_dead | is_owed)
         .values("receiver_key")
@@ -76,6 +78,7 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
             owed=models.Count("pk", filter=is_owed & due),
             dead=models.Count("pk", filter=is_dead),
             scheduled=models.Count("pk", filter=is_owed & waiting),
+            claimed=models.Count("pk", filter=is_claimed),
             oldest=models.Min(owed_since, filter=is_owed & due),
         )
     )
@@ -86,6 +89,7 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
             dead=row["dead"],
             oldest_owed_at=row["oldest"],
             scheduled=row["scheduled"],
+            claimed=row["claimed"],
         )
         for row in per_receiver
     ]
