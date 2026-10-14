@@ -151,6 +151,13 @@ required-imports = ["from __future__ import annotations"]
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
 
+# No ``if TYPE_CHECKING:`` guard anywhere in the package. A guard hides an import
+# cycle from the interpreter while the type checker still sees it, so each one is
+# a cycle waiting to be broken; break it instead. TID251 is what enforces this.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"typing.TYPE_CHECKING".msg = "Break the import cycle instead of guarding it."
+"typing_extensions.TYPE_CHECKING".msg = "Break the import cycle instead of guarding it."
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
