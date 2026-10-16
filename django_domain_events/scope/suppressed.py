@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -19,7 +19,7 @@ _stack: ContextVar[tuple[_Suppression, ...]] = ContextVar(
 
 
 @contextmanager
-def suppressed(*event_classes: type, reason: str, record: bool = True) -> Iterator[None]:
+def suppressed(*event_classes: type, reason: str, record: bool = True) -> Generator[None]:
     """Fire these events without delivering them, and say why.
 
     The reason is required and lands on the row. A silently dropped event is

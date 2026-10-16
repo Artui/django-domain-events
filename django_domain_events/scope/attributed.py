@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
@@ -25,7 +25,7 @@ def attributed(
     actor_label: str = "",
     correlation_id: UUID | None = None,
     **data: Any,
-) -> Iterator[Scope]:
+) -> Generator[Scope]:
     """Attach ambient facts to every event fired inside this block.
 
     Nested blocks layer: an inner one overrides what it sets and inherits the
