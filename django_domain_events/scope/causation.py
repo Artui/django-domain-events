@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from uuid import UUID
@@ -11,7 +11,7 @@ _cause: ContextVar[tuple[int, UUID | None] | None] = ContextVar(
 
 
 @contextmanager
-def caused_by(event_id: int, correlation_id: UUID | None = None) -> Iterator[None]:
+def caused_by(event_id: int, correlation_id: UUID | None = None) -> Generator[None]:
     """Mark events fired inside this block as descended from ``event_id``.
 
     Set around every receiver, at every execution site, so an event a receiver
