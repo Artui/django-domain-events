@@ -227,11 +227,6 @@ jobs:
     # test here, not the Python or Django version, and the cross-product is
     # already covered above.
     #
-    # NOTE: at 0.1.0 there is no relay yet, so this runs the same suite against
-    # a real Postgres to prove the models and migrations work on both backends.
-    # When the relay lands, the coverage gate has to move here -- Postgres-only
-    # branches cannot be covered by a run that skips them.
-    #
     # Twice: once as most projects run, and once under USE_TZ = False, where
     # Django stores and returns naive local time. Comparing an aware value with
     # a naive one raises TypeError, so only a run under the other setting finds
