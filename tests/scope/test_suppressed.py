@@ -143,3 +143,17 @@ def test_a_reason_one_over_the_column_width_is_refused_on_entry() -> None:
     assert reason[:20] not in message
     # Sized to the width check, not the emptiness one.
     assert "needs a reason" not in message
+
+
+def test_a_reason_over_the_width_is_refused_even_when_nothing_is_recorded() -> None:
+    """``record=False`` writes no row, so the column cannot refuse anything, and
+    the refusal holds anyway: whether a block records can be decided by a code
+    path the caller's tests never take, and a reason that is fine there would
+    fail the first time the other path runs on Postgres. Fails if the check is
+    made conditional on ``record``."""
+    reason = "r" * (_REASON_LIMIT + 1)
+    with (
+        pytest.raises(ValueError, match="characters"),
+        suppressed(OrderPlaced, reason=reason, record=False),
+    ):
+        pytest.fail("the block must not be entered")
