@@ -119,6 +119,31 @@ def fire(
             f"known window, or drop the key."
         )
 
+    # Postgres raises DataError from the insert for a key longer than its column,
+    # inside the caller's transaction, and SQLite stores any length, so a key that
+    # works in the tests fails in production. The limit is read off the field so a
+    # widened column moves the refusal with it. After the early returns above: an
+    # event discarded by suppression writes nothing, so there is nothing to overflow.
+    # The value is not echoed, being the caller's. The other caller-supplied strings
+    # that land in 255-character columns are the actor's, which ``Actor`` truncates
+    # at capture, so they cannot arrive here longer than their columns. Two
+    # conjuncts the coverage gate cannot tell apart: ``is not None`` -
+    # test_dedupe_key_and_occurred_at_are_recorded and every fire without a key reach
+    # here with None, which ``len`` would raise on; and the comparison -
+    # test_a_dedupe_key_of_exactly_the_column_width_is_recorded fails on ``>=``,
+    # test_a_dedupe_key_one_over_the_column_width_is_refused_before_writing fails
+    # without the check.
+    dedupe_limit = EventRecord.dedupe_key.field.max_length
+    assert dedupe_limit is not None  # a CharField always has one; narrows it for the checker
+    if dedupe_key is not None and len(dedupe_key) > dedupe_limit:
+        raise ValueError(
+            f"fire({entry.name}) was given a dedupe_key of {len(dedupe_key)} characters; "
+            f"the limit is {dedupe_limit}, the width of the column the event row stores "
+            f"it in. A longer one is rejected by the database on Postgres and stored "
+            f"whole on SQLite, so it would work in tests and fail in production. "
+            f"Shorten the dedupe_key."
+        )
+
     record = EventRecord.objects.create(
         name=entry.name,
         version=entry.version,

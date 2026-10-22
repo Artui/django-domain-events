@@ -7,8 +7,12 @@ from dataclasses import dataclass
 
 import pytest
 
+import django_domain_events.declaration.registry as registry_module
 from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.declaration.registry import Registry
+from django_domain_events.models.delivery_record import DeliveryRecord
+from django_domain_events.models.event_record import EventRecord
+from django_domain_events.models.receiver_last_success import ReceiverLastSuccess
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_event import RegisteredEvent
 from django_domain_events.types.registered_receiver import RegisteredReceiver
@@ -202,3 +206,73 @@ def test_a_key_with_no_receiver_is_in_the_default_lane() -> None:
     """A receiver deleted since its rows were written leaves them in no named
     lane, and the default lane is every row no named lane takes."""
     assert _laned(Registry()).lane_for_key("app.deleted") == "default"
+
+
+# The widths are read off the columns rather than from the registry's constants, so
+# these tests run against a tree without them and pin the constants to the columns.
+_KEY_LIMIT = DeliveryRecord._meta.get_field("receiver_key").max_length
+_NAME_LIMIT = EventRecord._meta.get_field("name").max_length
+
+
+def test_the_registry_limits_are_the_widths_of_the_columns_that_store_them() -> None:
+    """The registry cannot read the fields: a decorator reaches it while apps are
+    still loading, and importing a model there raises ``AppRegistryNotReady``. So
+    it carries the numbers, and this holds them to every column that stores them."""
+    assert _KEY_LIMIT == _NAME_LIMIT == 255
+    assert ReceiverLastSuccess._meta.get_field("receiver_key").max_length == _KEY_LIMIT
+    assert registry_module.MAX_KEY_LENGTH == _KEY_LIMIT
+    assert registry_module.MAX_NAME_LENGTH == _NAME_LIMIT
+
+
+def test_a_receiver_key_of_exactly_the_limit_is_registered_directly() -> None:
+    """Holds the comparison: ``>=`` instead of ``>`` refuses this key. Passes on a
+    tree without the check, as it must; it is here for the mutant."""
+    r = Registry()
+    key = "k" * _KEY_LIMIT
+    r.register_receiver(_receiver(key, Alpha, lambda e: None))
+    assert r.receiver_for_key(key) is not None
+
+
+def test_a_receiver_key_over_the_limit_is_refused_by_the_registry_itself() -> None:
+    r = Registry()
+    key = "k" * (_KEY_LIMIT + 1)
+    with pytest.raises(ValueError, match=f"{_KEY_LIMIT + 1} characters") as caught:
+        r.register_receiver(_receiver(key, Alpha, lambda e: None))
+    message = str(caught.value)
+    assert str(_KEY_LIMIT) in message
+    assert "Set a shorter key=." in message
+    assert "already registered" not in message
+    assert r.receivers() == []
+
+
+def test_an_over_long_receiver_key_is_refused_before_the_clash_check() -> None:
+    """The length is checked first, so a clashing key that is also too long says
+    so rather than naming the other registration."""
+    r = Registry()
+    key = "k" * (_KEY_LIMIT + 1)
+    r._receivers[key] = _receiver(key, Beta, lambda e: None)
+    with pytest.raises(ValueError, match="characters") as caught:
+        r.register_receiver(_receiver(key, Alpha, lambda e: None))
+    assert "already registered" not in str(caught.value)
+
+
+def test_an_event_name_of_exactly_the_limit_is_registered_directly() -> None:
+    """Holds the comparison: ``>=`` instead of ``>`` refuses this name."""
+    r = Registry()
+    name = "n" * _NAME_LIMIT
+    r.register_event(_entry(Alpha, name))
+    assert r.event_for_name(name) is not None
+
+
+def test_an_event_name_over_the_limit_is_refused_by_the_registry_itself() -> None:
+    r = Registry()
+    name = "n" * (_NAME_LIMIT + 1)
+    with pytest.raises(ValueError, match=f"{_NAME_LIMIT + 1} characters") as caught:
+        r.register_event(_entry(Alpha, name))
+    message = str(caught.value)
+    assert str(_NAME_LIMIT) in message
+    assert "Set a shorter name=." in message
+    assert "already registered" not in message
+    # Neither index was written: the check precedes both writes.
+    assert r.events() == []
+    assert r.event_for_name(name) is None
