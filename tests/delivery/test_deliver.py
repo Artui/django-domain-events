@@ -25,6 +25,7 @@ from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.models.lane_pause_record import LanePauseRecord
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
@@ -884,6 +885,7 @@ def test_a_deferral_sets_its_lane_aside_and_the_pass_delivers_the_rest(
             lane="bulk",
         )
         assert sorted(taken) == handed_back, "another worker could not take them at once"
+    assert not LanePauseRecord.objects.exists(), "a pass with no clock recorded a pause"
 
 
 def test_a_deferral_in_the_lane_a_pass_serves_ends_the_pass(

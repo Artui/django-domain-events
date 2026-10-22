@@ -199,6 +199,23 @@ def test_a_malformed_lane_batch_size_is_refused(
     assert seen == []
 
 
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("default=0", "lane_batch_sizes['default'] must be positive"),
+        ("mail=2", "lane_batch_sizes names lane 'mail', which is not served here"),
+    ],
+    ids=["below-one", "not-served"],
+)
+def test_a_lane_size_the_pass_cannot_use_is_refused_as_python_refuses_it(
+    value: str, message: str
+) -> None:
+    """Left to ``deliver_pending``, so the command line and Python refuse a
+    size below one and a lane not served with the same error."""
+    with pytest.raises(ValueError, match=re.escape(message)):
+        call_command("deliver_events", "--once", "--lane-batch-size", value, stdout=StringIO())
+
+
 def test_a_single_pass_with_a_batch_size_delivers(order: OrderPlaced, record: list[str]) -> None:
     """The real single pass, with no stand-in: --limit defaults to None, so a
     --batch-size alone is not mistaken for the refused limit-and-batch pair."""

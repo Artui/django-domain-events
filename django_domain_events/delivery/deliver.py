@@ -1075,8 +1075,11 @@ def deliver_pending(
     itself runs and is recorded on the real clock, since a receiver's
     acknowledgement is a fact about when it ran.
     """
-    # Two guards, each a single conjunct beside ``limit``, and each alone is
-    # accepted in the test that names it, which holds both sides.
+    # Two guards, each one branch arc over two conditions, so each names the
+    # test that fails without either of them: each refusal, and each value
+    # accepted alone, are asserted in
+    # test_a_limit_and_a_batch_size_together_are_refused and
+    # test_a_limit_with_lane_sizes_is_refused.
     if limit is not None and batch_size is not None:
         raise ValueError(
             f"limit={limit} sizes each claim as its lane's share of it, so "
