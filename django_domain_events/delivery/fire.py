@@ -64,7 +64,8 @@ def fire(
     The event's declared ``retention`` is copied onto the row. A ``dedupe_key``
     is refused, with ``ValueError``, for an event declared to delete on
     consumption: the key is unique on the row, so it would protect only until
-    the prune deleted it.
+    the prune deleted it. A ``dedupe_key`` longer than the column that stores it
+    is refused with ``ValueError`` before anything is written.
     """
     # Imported here, not at module level: Django imports an app's package before
     # the app registry is ready, and this package's __init__ re-exports fire().

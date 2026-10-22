@@ -276,3 +276,15 @@ def test_an_event_name_over_the_limit_is_refused_by_the_registry_itself() -> Non
     # Neither index was written: the check precedes both writes.
     assert r.events() == []
     assert r.event_for_name(name) is None
+
+
+def test_an_over_long_event_name_is_refused_before_the_clash_check() -> None:
+    """The length is checked first, so a clashing name that is also too long says
+    so rather than naming the other registration. Holds the order: the check placed
+    after the clash ``raise`` fails this."""
+    r = Registry()
+    name = "n" * (_NAME_LIMIT + 1)
+    r._events_by_name[name] = _entry(Beta, name)
+    with pytest.raises(ValueError, match="characters") as caught:
+        r.register_event(_entry(Alpha, name))
+    assert "already registered" not in str(caught.value)
