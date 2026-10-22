@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import timedelta
+from io import StringIO
 from typing import Any
 
 from django.conf import settings as django_settings
 from django.contrib.auth.models import User
+from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.test import override_settings
@@ -443,7 +446,60 @@ class Command(BaseCommand):
         check("the retry budget lasts at most three hours", sum(ceilings), 3 * 3600)
         check("and an hour and a half on average", sum(ceilings) / 2, 1.5 * 3600)
 
-        head("15. A reminder due a fortnight after the invoice")
+        head("15. One relay serves both lanes, each in turn")
+        # The same two lanes, served by one process rather than one each: the
+        # relay visits them in sorted order, one claim per lane under that
+        # lane's own lease and batch size. A burst in one lane then delays the
+        # other by one of its batches, never by the whole burst. --once takes
+        # the same lanes, so this pass runs on SQLite too.
+        audit = "shop.audit"
+        replay_events([placed.pk], receiver_keys=[receipt, audit])
+        sent_before = SentEmail.objects.count()
+        before = {lane.lane: lane.owed for lane in outbox_health().lanes}
+        print(f"   owed by lane: {before}")
+        check(
+            "outbox_health() lists every lane, the default one included",
+            sorted(before),
+            ["default", "mail"],
+        )
+        delivered = StringIO()
+        call_command(
+            "deliver_events",
+            "--once",
+            "--lane",
+            "default",
+            "--lane",
+            "mail",
+            "--lane-batch-size",
+            "mail=5",
+            "--worker-id",
+            "demo",
+            stdout=delivered,
+        )
+        print(
+            f"   deliver_events --once --lane default --lane mail: {delivered.getvalue().strip()}"
+        )
+        replayed = dict(
+            DeliveryRecord.objects.filter(
+                event_id=placed.pk, receiver_key__in=[receipt, audit]
+            ).values_list("receiver_key", "status")
+        )
+        check(
+            "one pass delivers the replayed row in each lane",
+            replayed,
+            {receipt: "succeeded", audit: "succeeded"},
+        )
+        check("and sends the receipt once", SentEmail.objects.count(), sent_before + 1)
+        status = StringIO()
+        call_command("events_status", "--format", "json", stdout=status)
+        after = {lane["lane"]: lane["owed"] for lane in json.loads(status.getvalue())["lanes"]}
+        print(f"   events_status lanes: {after}")
+        check("events_status shows each lane", sorted(after), ["default", "mail"])
+        # The mail lane only: what else the default lane's turn finds due
+        # depends on how the earlier steps' backoffs were drawn.
+        check("and the mail lane is one row lighter", after["mail"], before["mail"] - 1)
+
+        head("16. A reminder due a fortnight after the invoice")
         chase = "shop.chase_unpaid_invoice"
         # The billing system sent both invoices thirteen days ago, so the
         # reminders, due fourteen days after that, are due tomorrow. The
@@ -549,7 +605,7 @@ class Command(BaseCommand):
             ("succeeded", 1, ""),
         )
         check("and sends exactly one email", SentEmail.objects.count(), emails + 1)
-        head("16. The invoice is paid, so its reminder is cancelled")
+        head("17. The invoice is paid, so its reminder is cancelled")
         # A new invoice for the open order, and its reminder due in a
         # fortnight. Then the customer pays: the billing code knows the
         # reminder is moot ahead of time, so rather than leave it to run and
@@ -585,7 +641,7 @@ class Command(BaseCommand):
             (0, []),
         )
 
-        head("17. A receiver declared async def runs to completion")
+        head("18. A receiver declared async def runs to completion")
         with transaction.atomic():
             from django_domain_events import fire
 
@@ -604,7 +660,7 @@ class Command(BaseCommand):
         )
         check("and its body ran, sending the request once", asked, 1)
 
-        head("18. A hook around each delivery puts its ids on every line")
+        head("19. A hook around each delivery puts its ids on every line")
         # Restocked, so the INLINE check lets the next two orders through.
         StockLevel.objects.filter(sku="WIDGET").update(available=10)
         lines = _Lines()
@@ -627,7 +683,7 @@ class Command(BaseCommand):
         )
         check("and the hook put back what was there when it exited", current_delivery.get(), "-")
 
-        head("19. A hook that cannot be entered fails the attempt")
+        head("20. A hook that cannot be entered fails the attempt")
         broken = {
             **django_settings.DJANGO_DOMAIN_EVENTS,
             "AROUND_DELIVERY": "shop.delivery_log.tracer_that_is_down",
