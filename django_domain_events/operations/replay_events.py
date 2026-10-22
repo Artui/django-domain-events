@@ -116,11 +116,17 @@ def replay_events(
                     target_digest(target): target
                     for target in _targets_now(receiver, record, entry.event_class)
                 }
-                existing = dict(
-                    DeliveryRecord.objects.filter(
+                # ``bytes()`` because psycopg2 reads the column back as a
+                # ``memoryview`` of format ``c``, which hashes like the computed
+                # digest and compares unequal to it: every row that exists would
+                # read as missing, be counted as added, and wake the relay for
+                # nothing.
+                existing = {
+                    bytes(digest): status
+                    for digest, status in DeliveryRecord.objects.filter(
                         event=record, receiver_key=receiver.key, target_digest__in=targets
                     ).values_list("target_digest", "status")
-                )
+                }
                 reopen = [d for d, status in existing.items() if status in TERMINAL]
                 # Now, or a scheduled receiver's due time where that is later:
                 # replaying a recent offer into its expiry must not expire it

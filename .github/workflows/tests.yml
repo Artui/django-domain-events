@@ -281,6 +281,63 @@ jobs:
       - name: pytest against Postgres
         run: uv run --no-sync pytest --cov-fail-under=0
 
+  test-psycopg2:
+    # The package names no driver: psycopg 3 is a dev-group pin only, so a
+    # project on psycopg2 installs and starts cleanly and every job above
+    # tests the other driver. The two differ where this package reaches past
+    # the ORM or reads a column back raw - the wake listens through psycopg 3's
+    # notifies(), and psycopg2 returns bytea as a memoryview - and nothing but a
+    # run under psycopg2 finds the next such place.
+    #
+    # psycopg 3 is uninstalled rather than merely joined by psycopg2: Django
+    # prefers psycopg 3 whenever it can import it, so with both present this
+    # would run the same suite as test-postgres. Coverage is gated on SQLite,
+    # as it is there.
+    name: postgres / psycopg2 / 3.13 / Django 6.1
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: django_domain_events
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DDE_TEST_DATABASE: postgres
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: django_domain_events
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+      - name: Install Python 3.13
+        run: uv python install 3.13
+      - name: Sync dev deps
+        run: uv sync --all-groups --all-extras --python 3.13
+      - name: Pin Django 6.1
+        run: uv pip install --reinstall-package django "django~=6.1.0"
+      - name: Swap psycopg 3 for psycopg2
+        run: |
+          uv pip uninstall psycopg psycopg-binary
+          uv pip install psycopg2-binary
+      # Fails the job if the swap did not take, rather than letting it pass as
+      # a second psycopg 3 run.
+      - name: Confirm Django loaded psycopg2
+        run: uv run --no-sync python -c "from django.db.backends.postgresql.psycopg_any import is_psycopg3; assert not is_psycopg3"
+      - name: pytest against Postgres under psycopg2
+        run: uv run --no-sync pytest --cov-fail-under=0
+
   coverage-badge:
     # Publishes a shields.io-compatible coverage.json to gh-pages so the README
     # badge reflects reality. Runs only on push to main, after the matrix has
@@ -429,7 +486,7 @@ jobs:
     # always(), never !cancelled(): a skipped job reports a skipped check, and
     # branch protection counts a skipped required check as passing.
     if: always()
-    needs: [lint, docs, example, floor, test, test-postgres]
+    needs: [lint, docs, example, floor, test, test-postgres, test-psycopg2]
     runs-on: ubuntu-latest
     steps:
       # Pass on an exact `success` from every job above, rather than failing on

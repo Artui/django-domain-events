@@ -294,6 +294,10 @@ fired a moment ago is delivered in milliseconds instead of on the next tick.
 `fire()` notifies after commit. The poll interval remains the floor, so a missed
 notification costs latency and never a delivery.
 
+Listening takes psycopg 3, which Django prefers whenever it is installed. Under
+psycopg2 the relay polls and `fire()` sends nothing, as under `WAKE = "poll"`, and
+the system check `W008` says so until you set `WAKE = "poll"` yourself.
+
 `notify_relay()` is public, for the case where you moved rows into `pending`
 yourself. It follows the same settings as `fire()`: under `WAKE = "poll"` it
 sends nothing, and it is coalesced.

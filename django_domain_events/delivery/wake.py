@@ -76,17 +76,40 @@ def _resolve(supported: bool | None, connection: Any) -> bool:
     """Whether this process notifies and listens at all.
 
     An explicit ``supported`` wins, so both branches stay reachable from either
-    backend. Otherwise it takes both a Postgres connection and ``WAKE =
-    "notify"``; ``WAKE = "poll"`` is the switch for a deployment that would
-    rather not pay a serialized commit per ``fire()`` (see the operations page).
+    backend. Otherwise it takes a Postgres connection, ``WAKE = "notify"``, and
+    a driver that can listen; ``WAKE = "poll"`` is the switch for a deployment
+    that would rather not pay a serialized commit per ``fire()`` (see the
+    operations page).
 
-    The ``WAKE`` conjunct is invisible to the coverage gate (one arc) and is held
-    by ``test_polling_sends_no_notification`` and
-    ``test_polling_does_not_listen_either``.
+    The driver has to be psycopg 3. The wait blocks in its ``notifies()``
+    generator, and psycopg2's ``notifies`` is a list filled by ``poll()``, so
+    under psycopg2 the relay polls and nothing sends a NOTIFY no relay could
+    hear. A system check says so where ``WAKE`` still asks for notify.
+
+    Neither the ``WAKE`` nor the driver conjunct is visible to the coverage gate
+    (one arc). ``WAKE`` is held by ``test_polling_sends_no_notification`` and
+    ``test_polling_does_not_listen_either``, the driver by
+    ``test_a_driver_that_cannot_listen_polls`` and
+    ``test_a_driver_that_cannot_listen_sends_no_notification``.
     """
     if supported is not None:
         return supported
-    return connection.vendor == "postgresql" and setting("WAKE") == "notify"
+    return connection.vendor == "postgresql" and setting("WAKE") == "notify" and _driver_listens()
+
+
+def _driver_listens() -> bool:
+    """Whether Django's Postgres backend loaded psycopg 3.
+
+    Imported here, and only once the connection is known to be Postgres:
+    ``psycopg_any`` imports psycopg 3 or else psycopg2 and raises if neither is
+    installed, which a project on another database never has. Its backend has
+    already imported the module by the time a connection names Postgres, so
+    this is a lookup rather than an import. Read at call time, so a test can
+    stand either driver in on any backend.
+    """
+    from django.db.backends.postgresql import psycopg_any
+
+    return psycopg_any.is_psycopg3
 
 
 def _coalesced(connection: Any, clock: Callable[[], float]) -> bool:

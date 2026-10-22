@@ -94,7 +94,7 @@ def test_a_row_from_before_the_column_reads_blank_and_still_delivers(
     latest.migrate(latest.loader.graph.leaf_nodes(APP))
     row = DeliveryRecord.objects.get(receiver_key="testapp.durable_receiver")
     assert row.target == ""
-    assert row.target_digest == hashlib.sha256(b"").digest()
+    assert bytes(row.target_digest) == hashlib.sha256(b"").digest()
     assert deliver_pending() == {DeliveryStatus.SUCCEEDED: 1}
 
     # And the constraint that replaced the old one still refuses a second blank

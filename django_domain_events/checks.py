@@ -6,11 +6,12 @@ from typing import Any
 
 from django.conf import settings
 from django.core.checks import Error, Warning
-from django.db import models
+from django.db import connections, models
 from django.utils.module_loading import import_string
 
 from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.declaration.registry import registry
+from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.settings import (
     DEFAULTS,
     SETTINGS_NAME,
@@ -72,6 +73,59 @@ def check_codec_dependency_is_installed(**kwargs: Any) -> list[Any]:
             )
         ]
     return []
+
+
+def check_wake_driver_can_listen(**kwargs: Any) -> list[Any]:
+    """``WAKE = "notify"`` on Postgres has a driver that can listen.
+
+    The wake listens through psycopg 3, so under psycopg2 the relay polls and
+    ``fire()`` sends no NOTIFY. That is correct, only slower to deliver, and
+    ``notify`` is the default, so a psycopg2 project would otherwise be running
+    a mode it never chose and never be told. A warning rather than an error for
+    the same reason: nothing is lost.
+
+    Of the write connection, because that is the one the relay listens on.
+    Reading its ``vendor`` opens no connection, so this needs no database tag.
+    The same predicate as the wake's own (``wake._resolve``), restated here
+    rather than shared through it: the wake's answer folds in the ``supported``
+    override, which a check has no use for.
+
+    One branch arc of three conjuncts, each held by a test that fails without
+    it: the vendor by
+    ``test_a_backend_without_notify_is_not_warned_about_its_driver``, ``WAKE`` by
+    ``test_poll_on_a_driver_that_cannot_listen_is_clean`` and the driver by
+    ``test_notify_on_psycopg3_is_clean``.
+    """
+    if (
+        connections[write_alias()].vendor != "postgresql"
+        or setting("WAKE") != "notify"
+        or _driver_listens()
+    ):
+        return []
+    return [
+        Warning(
+            "WAKE is 'notify', but the database driver is psycopg2, which cannot "
+            "listen for a notification. The relay polls every POLL_SECONDS "
+            "instead, and fire() sends no NOTIFY.",
+            hint=(
+                'Set WAKE = "poll" in DJANGO_DOMAIN_EVENTS to say so and silence '
+                "this, or install psycopg 3 to have the relay woken."
+            ),
+            id="django_domain_events.W008",
+        )
+    ]
+
+
+def _driver_listens() -> bool:
+    """Whether Django's Postgres backend loaded psycopg 3.
+
+    Imported here, and only once the write connection is known to be Postgres:
+    ``psycopg_any`` imports psycopg 3 or else psycopg2 and raises if neither is
+    installed, which a project on another database never has.
+    """
+    from django.db.backends.postgresql import psycopg_any
+
+    return psycopg_any.is_psycopg3
 
 
 def check_declared_events_are_decodable(**kwargs: Any) -> list[Any]:
