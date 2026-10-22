@@ -62,7 +62,11 @@ than discarding it.
 A suppressed row has **no delivery rows** at all. Nothing is owed, and nothing
 can dead-letter.
 
-- The reason is required.
+- The reason is required, and is at most 255 characters, the width of the
+  column it is recorded in. A longer one is refused with `ValueError` as the
+  block is entered, rather than by the database at the first `fire()` inside
+  it - which on Postgres is an error inside your transaction, and on SQLite
+  never happens at all.
 - Naming no classes suppresses **everything** fired inside the block.
 - Nested blocks accumulate rather than replace; the **innermost matching**
   reason is the one recorded. A library suppressing its own event type inside

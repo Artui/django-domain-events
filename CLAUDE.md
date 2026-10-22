@@ -240,11 +240,14 @@ says why.
 
 ## CI and pre-commit
 
-Eight jobs in `tests.yml`: `lint`, `docs`, `floor` (resolves every declared
-dependency at the bottom of its window and runs the suite there), `test` (the
-Python x Django matrix on SQLite), `test-postgres` (a real server, for the half
-SQLite cannot exercise, run once under each `USE_TZ`), `coverage-badge`, `secrets`, and the `tests-passed`
-gate that branch protection points at.
+Ten jobs in `tests.yml`: `lint`, `docs`, `example` (runs the shop's checks,
+migrations and asserting demo), `floor` (resolves every declared dependency at
+the bottom of its window and runs the suite there), `test` (the Python x Django
+matrix on SQLite), `test-postgres` (a real server, for the half SQLite cannot
+exercise, run once under each `USE_TZ`), `test-psycopg2` (the same server under
+psycopg2 with psycopg 3 uninstalled, since Django prefers psycopg 3 whenever it
+can import it), `coverage-badge`, `secrets`, and the `tests-passed` gate that
+branch protection points at.
 
 Releases are **main-triggered**: `make release-bump`, edit the changelog, open a
 PR, and merging to `main` runs the release. There is no tag to push - the

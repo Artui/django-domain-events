@@ -67,6 +67,8 @@ The hook around each durable attempt is a setting rather than a symbol: see
 ::: django_domain_events.types.catalogue_field.CatalogueField
 ::: django_domain_events.types.catalogue_receiver.CatalogueReceiver
 ::: django_domain_events.types.outbox_health.OutboxHealth
+::: django_domain_events.types.lane_backlog.LaneBacklog
+::: django_domain_events.types.lane_pause.LanePause
 ::: django_domain_events.types.quiet_receiver.QuietReceiver
 ::: django_domain_events.types.receiver_backlog.ReceiverBacklog
 ::: django_domain_events.types.registered_event.RegisteredEvent

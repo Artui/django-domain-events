@@ -117,7 +117,8 @@ because deleting it would drop work nothing recorded as lost.
 
 On Postgres the relay waits on `LISTEN`/`NOTIFY` rather than polling, so an
 event fired a moment ago is delivered in milliseconds. The poll remains the
-floor.
+floor. Listening takes psycopg 3; under psycopg2 the relay polls, and a system
+check says so.
 
 Add `django.contrib.admin` and both tables appear, read-only, with **Replay
 selected events** and **Requeue selected dead deliveries** as actions.
