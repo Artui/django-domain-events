@@ -51,8 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each pause it takes - the lane, its `worker_id`, when and until when - so
   operators can see it. It deletes its record when the pause ends and when it
   returns, and every record written deletes every record whose pause has
-  passed, whoever wrote it, so a relay that died leaves one only until its
-  `until`. No relay reads the table: a pause still governs only the relay that
+  passed, whoever wrote it. A relay that died leaves its record behind: it
+  stops showing once its `until` passes, and goes at the next deferral any
+  relay records. No relay reads the table: a pause still governs only the relay that
   heard the deferral. A relay that never defers never touches it, and a write
   that fails is logged and survived. `deliver_pending()` and `drain_outbox()`
   write none. Run `migrate` before deploying: `outbox_health()` and

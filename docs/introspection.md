@@ -225,8 +225,10 @@ records relays write when a receiver defers
 ([the pause is per process](delivery.md#the-pause-is-per-process)); a lane no
 receiver declares any more is listed while a relay still holds it paused, as
 happens when a lane is renamed mid-rollout. A pause names its relay because
-one that died leaves its record until `until` passes: check the `worker_id`
-against the relays running.
+one that died leaves its record showing until `until` passes: check the
+`worker_id` and `paused_at` against the relays running and when they started,
+since a relay restarted under the same `worker_id` takes the old record over
+only at its own first deferral.
 
 Every figure here is answered from an index and none of them scans the
 delivery table, so the call is cheap enough to scrape on an interval. It sends

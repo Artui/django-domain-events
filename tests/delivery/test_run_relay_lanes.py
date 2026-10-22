@@ -65,10 +65,10 @@ class _Runaway(BaseException):
 
 
 def _lane_receiver(lane: str, event_class: type, **options: Any) -> RegisteredReceiver:
+    options.setdefault("func", lambda evt: ORDER.append(lane))
     return RegisteredReceiver(
         key=f"tests.{lane}",
         event_class=event_class,
-        func=lambda evt: ORDER.append(lane),
         mode=DeliveryMode.DURABLE,
         takes_context=False,
         max_attempts=5,
@@ -542,6 +542,55 @@ def test_a_pause_that_ends_deletes_its_record(lanes: None) -> None:
     assert len(during) == 2
     assert [lane for lane, *_ in during[0]] == ["sms"]
     assert during[1] == [], "the pause ended and its record stayed"
+
+
+def test_a_pause_that_ends_deletes_only_its_own_lanes_record() -> None:
+    """Push pauses for an hour and SMS for five. When push's pause ends at its
+    turn, its record goes and SMS's stays, because SMS is still paused: a delete
+    keyed on the relay alone would clear a pause still in force from what
+    ``outbox_health`` reports."""
+
+    def deferring_once(lane: str, hours: int) -> Callable[[Any], None]:
+        calls: list[None] = []
+
+        def receive(evt: Any) -> None:
+            calls.append(None)
+            if len(calls) == 1:
+                raise RetryAfter(hours * 3600, reason="quota", counts=False)
+            ORDER.append(lane)
+
+        return receive
+
+    day = timedelta(days=1)
+    clocks: list[_Clock] = []
+    during: list[list[str]] = []
+
+    def wait(timeout: float) -> bool:
+        during.append([lane for lane, *_ in _pauses()])
+        return clocks[0].wait(timeout)
+
+    ORDER.clear()
+    with (
+        event_registered(Push, "tests.Push"),
+        event_registered(Sms, "tests.Sms"),
+        receiver_registered(
+            _lane_receiver("push", Push, give_up_after=day, func=deferring_once("push", 1))
+        ),
+        receiver_registered(
+            _lane_receiver("sms", Sms, give_up_after=day, func=deferring_once("sms", 5))
+        ),
+    ):
+        _fire(Push)
+        _fire(Sms)
+        # Read after the rows are written, so they are due on the first pass.
+        clocks.append(_Clock(step=3600))
+        run_relay(
+            worker_id="w1", passes=4, lane=["push", "sms"], now=clocks[0], wait=wait, **UNSAFE
+        )
+
+    assert ORDER == ["push"]
+    assert during[:2] == [["push", "sms"], ["sms"]]
+    ORDER.clear()
 
 
 def test_a_stop_deletes_the_records_of_lanes_still_paused(lanes: None) -> None:

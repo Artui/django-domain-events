@@ -269,6 +269,22 @@ def test_a_limit_is_shared_between_the_lanes_with_work(lanes: None, lane: list[s
     assert _delivered() == {"push": 5, "sms": 5}
 
 
+def test_an_uneven_share_is_rounded_up_for_the_earlier_lane(
+    lanes: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Five over two lanes: push, first in sorted order, takes three and sms the
+    two left. Rounded down, push would take two and sms three, which still
+    totals five and is why only an odd limit can tell the two apart."""
+    _fire(Push, 20)
+    _fire(Sms, 20)
+
+    with _claims(monkeypatch) as made:
+        deliver_pending(limit=5, lane=["push", "sms"])
+
+    assert [(claim["lane"], claim["limit"]) for claim in made] == [("push", 3), ("sms", 2)]
+    assert _delivered() == {"push": 3, "sms": 2}
+
+
 def test_a_drained_lanes_share_goes_to_the_lanes_with_work(
     lanes: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -426,6 +426,8 @@ def _record_pause_or_survive(
     process is what governs the relay, and it is already in force
     (``test_a_pause_record_that_cannot_be_written_does_not_stop_the_relay``).
     """
+    # Imported here, not at module level: the package's __init__ re-exports
+    # run_relay, and Django imports it before the app registry is ready.
     from django_domain_events.models.lane_pause_record import LanePauseRecord
 
     try:
@@ -450,6 +452,7 @@ def _forget_pauses_or_survive(lanes: Collection[str], worker_id: str, connection
     """
     if not lanes:
         return
+    # Imported here for the same reason as in _record_pause_or_survive.
     from django_domain_events.models.lane_pause_record import LanePauseRecord
 
     try:
