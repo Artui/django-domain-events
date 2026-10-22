@@ -202,3 +202,15 @@ def test_a_key_with_no_receiver_is_in_the_default_lane() -> None:
     """A receiver deleted since its rows were written leaves them in no named
     lane, and the default lane is every row no named lane takes."""
     assert _laned(Registry()).lane_for_key("app.deleted") == "default"
+
+
+def test_a_deleted_receivers_row_is_in_the_default_lane() -> None:
+    """A row written for a receiver in a named lane, whose receiver has since
+    been deleted, drains through the default lane: the key is read against the
+    receivers as they are now, not as they were when the row was written."""
+    r = _laned(Registry())
+    assert r.lane_for_key("app.a") == "mail"
+
+    del r._receivers["app.a"]
+
+    assert r.lane_for_key("app.a") == "default"

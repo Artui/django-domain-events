@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import signal
 import threading
 from collections.abc import Callable
@@ -9,13 +10,15 @@ from datetime import datetime, timedelta, timezone
 from io import StringIO
 
 import pytest
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 from django.db import connection, transaction
 
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.fire import fire
 from django_domain_events.management.commands import deliver_events
-from tests.conftest import receiver_replaced
+from django_domain_events.types.delivery_mode import DeliveryMode
+from django_domain_events.types.registered_receiver import RegisteredReceiver
+from tests.conftest import receiver_registered, receiver_replaced
 from tests.testapp.events import OrderPlaced
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -70,6 +73,7 @@ def test_without_a_lane_it_serves_the_default_lane(
     call_command("deliver_events", *argv, stdout=StringIO())
 
     assert (seen[0]["lane"], seen[0]["batch_size"]) == ("default", None)
+    assert seen[0]["lane_batch_sizes"] is None
 
 
 @pytest.mark.parametrize(
@@ -87,6 +91,114 @@ def test_a_lane_and_a_batch_size_are_passed_through(
     assert (seen[0]["lane"], seen[0]["batch_size"]) == ("mail", 2)
 
 
+@pytest.mark.parametrize(
+    ("argv", "name"),
+    [([], "run_relay"), (["--once"], "deliver_pending")],
+    ids=["relay", "once"],
+)
+def test_one_lane_alone_is_passed_as_that_lane(
+    argv: list[str], name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--lane mail`` serves ``mail`` and nothing else. ``--lane`` appends, and an
+    append starts from its default, so a default naming the default lane
+    would serve ``default`` and ``mail``. A lane given once goes through as
+    the string it was, so its path is the one a single lane always took."""
+    seen = _captured(monkeypatch, name)
+
+    call_command("deliver_events", *argv, "--lane", "mail", stdout=StringIO())
+
+    assert seen[0]["lane"] == "mail"
+
+
+@pytest.mark.parametrize(
+    ("argv", "name"),
+    [([], "run_relay"), (["--once"], "deliver_pending")],
+    ids=["relay", "once"],
+)
+def test_a_repeated_lane_serves_every_lane_named(
+    argv: list[str], name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = _captured(monkeypatch, name)
+
+    call_command("deliver_events", *argv, "--lane", "sms", "--lane", "push", stdout=StringIO())
+
+    assert seen[0]["lane"] == ["sms", "push"]
+
+
+def test_a_single_pass_over_two_lanes_delivers_both(order: OrderPlaced, record: list[str]) -> None:
+    """The real single pass, with no stand-in, over the default lane and a lane
+    of its own."""
+    mail = RegisteredReceiver(
+        key="tests.mail",
+        event_class=OrderPlaced,
+        func=lambda evt: None,
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=5,
+        eager=False,
+        site="relay",
+        lane="mail",
+    )
+    with receiver_registered(mail):
+        with transaction.atomic():
+            fire(order)
+        out = StringIO()
+        call_command("deliver_events", "--once", "--lane", "default", "--lane", "mail", stdout=out)
+
+    assert out.getvalue().strip() == "succeeded: 3"
+
+
+@pytest.mark.parametrize(
+    ("argv", "name"),
+    [([], "run_relay"), (["--once"], "deliver_pending")],
+    ids=["relay", "once"],
+)
+def test_a_lane_batch_size_is_split_at_its_last_equals_sign(
+    argv: list[str], name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lane name may contain ``=`` and a size cannot, so ``a=b=5`` sizes the
+    lane ``a=b``."""
+    seen = _captured(monkeypatch, name)
+
+    call_command(
+        "deliver_events",
+        *argv,
+        "--lane-batch-size",
+        "a=b=5",
+        "--lane-batch-size",
+        "mail=2",
+        stdout=StringIO(),
+    )
+
+    assert seen[0]["lane_batch_sizes"] == {"a=b": 5, "mail": 2}
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        (["mail"], "--lane-batch-size takes LANE=N, got 'mail'"),
+        (["=5"], "--lane-batch-size '=5' names no lane"),
+        (
+            ["mail=five"],
+            "--lane-batch-size 'mail=five' sizes lane 'mail' with 'five', not an integer",
+        ),
+        (["mail=2", "mail=2"], "--lane-batch-size sizes lane 'mail' twice"),
+    ],
+    ids=["no-equals", "no-lane", "not-an-integer", "twice"],
+)
+def test_a_malformed_lane_batch_size_is_refused(
+    values: list[str], message: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Before anything runs. A lane sized twice is refused even with one value,
+    since two values could conflict and the command should not pick one."""
+    seen = _captured(monkeypatch, "run_relay")
+    argv = [arg for value in values for arg in ("--lane-batch-size", value)]
+
+    with pytest.raises(CommandError, match=re.escape(message)):
+        call_command("deliver_events", *argv, stdout=StringIO())
+    assert seen == []
+
+
 def test_a_single_pass_with_a_batch_size_delivers(order: OrderPlaced, record: list[str]) -> None:
     """The real single pass, with no stand-in: --limit defaults to None, so a
     --batch-size alone is not mistaken for the refused limit-and-batch pair."""
@@ -98,7 +210,7 @@ def test_a_single_pass_with_a_batch_size_delivers(order: OrderPlaced, record: li
 
 
 def test_a_single_pass_refuses_a_limit_with_a_batch_size() -> None:
-    with pytest.raises(ValueError, match="limit=3 is one claim of that many rows"):
+    with pytest.raises(ValueError, match="limit=3 sizes each claim as its lane.s share of it"):
         call_command("deliver_events", "--once", "--limit", "3", "--batch-size", "2")
 
 
