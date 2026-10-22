@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import pytest
 from django.contrib.auth import get_user_model
 from django.db import DEFAULT_DB_ALIAS, OperationalError, connection, connections, transaction
+from django.db.backends.postgresql import psycopg_any
 from django.utils import timezone as django_timezone
 
 from django_domain_events.declaration.registry import registry
@@ -140,10 +141,26 @@ def test_a_failure_while_idling_does_not_kill_the_daemon() -> None:
         calls.append(timeout)
         raise RuntimeError("the database went away mid-wait")
 
-    counts = run_relay(worker_id="w1", passes=2, wait=explode, **UNSAFE)
+    counts = run_relay(worker_id="w1", passes=2, sleep=lambda _: None, wait=explode, **UNSAFE)
 
     assert counts == {}
     assert len(calls) == 2, "the relay stopped at the first failed wait"
+
+
+def test_a_wait_that_fails_at_once_still_idles_for_the_poll(settings) -> None:
+    """A wait that raises returns at once, and the next pass claims straight
+    away: an idle relay whose wait always fails would claim and log in a tight
+    loop for as long as it stayed idle. So the relay sleeps the poll after one,
+    whatever raised and whatever the driver."""
+    settings.DJANGO_DOMAIN_EVENTS = {"POLL_SECONDS": 0.25}
+    slept: list[float] = []
+
+    def explode(timeout: float) -> bool:
+        raise TypeError("'list' object is not callable")
+
+    run_relay(worker_id="w1", passes=2, sleep=slept.append, wait=explode, **UNSAFE)
+
+    assert slept == [0.25, 0.25], "a failed wait was followed by an immediate claim"
 
 
 # --- surviving the database ---------------------------------------------------
@@ -209,7 +226,7 @@ def test_a_raw_driver_error_while_idling_closes_the_connection(closes: list[str]
     def drop(timeout: float) -> bool:
         raise conn.Database.OperationalError("the connection is lost")
 
-    run_relay(worker_id="w1", passes=1, wait=drop, **UNSAFE)
+    run_relay(worker_id="w1", passes=1, sleep=lambda _: None, wait=drop, **UNSAFE)
 
     assert closes == [write_alias()]
 
@@ -239,7 +256,7 @@ def test_an_error_that_is_not_the_databases_keeps_the_connection(closes: list[st
     def explode(timeout: float) -> bool:
         raise RuntimeError("not a database problem")
 
-    run_relay(worker_id="w1", passes=1, wait=explode, **UNSAFE)
+    run_relay(worker_id="w1", passes=1, sleep=lambda _: None, wait=explode, **UNSAFE)
 
     assert closes == []
 
@@ -302,6 +319,11 @@ def test_a_connection_killed_while_idling_is_replaced(
     """
     if connection.vendor != "postgresql":
         pytest.skip("needs a server whose backend can be terminated")
+    if not psycopg_any.is_psycopg3:
+        pytest.skip(
+            "psycopg2 cannot listen, so its wait sleeps without touching the "
+            "connection and the claim's transaction finds the death instead"
+        )
     with transaction.atomic():
         fire(order)
     record.clear()

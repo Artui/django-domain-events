@@ -105,6 +105,9 @@ says; see [Behind pgbouncer](operations.md#behind-pgbouncer).
 A value other than `"notify"` or `"poll"` fails the system check `E006`, rather
 than quietly meaning "poll".
 
+Listening takes psycopg 3. Under psycopg2, `"notify"` behaves as `"poll"`, and
+the system check `W008` warns until `WAKE` says `"poll"`.
+
 ### `NOTIFY_COALESCE_SECONDS`
 
 A process sends at most one `NOTIFY` per this interval, per database. Skipping

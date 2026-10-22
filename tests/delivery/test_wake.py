@@ -4,11 +4,18 @@ import time
 
 import pytest
 from django.db import connection
+from django.db.backends.postgresql import psycopg_any
 
 from django_domain_events.delivery import wake as wake_module
 from django_domain_events.delivery.wake import notify_relay, wait_for_work
 
 pytestmark = pytest.mark.django_db(transaction=True)
+
+# The driver Django loaded, read before any test stands a different one in.
+# Every environment the suite runs in has one: psycopg 3 from the dev group, or
+# psycopg2 in the CI job that swaps it in.
+LOADED_IS_PSYCOPG3 = psycopg_any.is_psycopg3
+PSYCOPG2_CANNOT_LISTEN = "psycopg2 has no blocking notifies(); the relay polls there"
 
 
 @pytest.fixture(autouse=True)
@@ -16,6 +23,15 @@ def _no_notification_left_over() -> None:
     """The last-sent times are process state, so a NOTIFY an earlier test (or an
     earlier ``fire()``) sent would suppress the one this test expects to see."""
     wake_module._last_sent.clear()
+
+
+@pytest.fixture(autouse=True)
+def _fakes_stand_for_psycopg3(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fake connections below model psycopg 3's ``notifies``, so they run as
+    psycopg 3 whichever driver is installed, and the coalescing and draining
+    they hold are asserted under psycopg2 too. A test about the driver itself
+    sets it again, or reads ``LOADED_IS_PSYCOPG3``, which this does not touch."""
+    monkeypatch.setattr(psycopg_any, "is_psycopg3", True)
 
 
 def test_it_sleeps_where_the_backend_cannot_notify() -> None:
@@ -37,12 +53,16 @@ def test_it_times_out_when_nothing_is_owed() -> None:
     poll stays as the floor rather than being replaced."""
     if connection.vendor != "postgresql":
         pytest.skip("LISTEN/NOTIFY is Postgres only")
+    if not LOADED_IS_PSYCOPG3:
+        pytest.skip(PSYCOPG2_CANNOT_LISTEN)
     assert wait_for_work(0.2) is False
 
 
 def test_a_notification_wakes_the_waiter() -> None:
     if connection.vendor != "postgresql":
         pytest.skip("LISTEN/NOTIFY is Postgres only")
+    if not LOADED_IS_PSYCOPG3:
+        pytest.skip(PSYCOPG2_CANNOT_LISTEN)
     import threading
     import time
 
@@ -70,6 +90,8 @@ def test_notifications_queued_while_busy_wake_the_relay_once() -> None:
     before the relay waits for real again."""
     if connection.vendor != "postgresql":
         pytest.skip("LISTEN/NOTIFY is Postgres only")
+    if not LOADED_IS_PSYCOPG3:
+        pytest.skip(PSYCOPG2_CANNOT_LISTEN)
     import psycopg
     from django.db import connections
 
@@ -232,6 +254,42 @@ def test_polling_does_not_listen_either(settings) -> None:
     assert wait_for_work(0.5, sleep=slept.append, connection=connection) is False
     assert slept == [0.5]
     assert connection.sql == []
+
+
+def test_a_driver_that_cannot_listen_polls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """psycopg2's ``notifies`` is a list the driver fills on ``poll()``, not
+    psycopg 3's blocking generator, so the wait cannot run on it: the relay
+    sleeps for the poll and issues no LISTEN. Everything else here says notify -
+    a Postgres connection, ``WAKE`` at its default, a notification queued - so
+    the driver is the only thing that can answer."""
+    monkeypatch.setattr(psycopg_any, "is_psycopg3", False)
+    slept: list[float] = []
+    connection = FakeConnection(notifications=1)
+    assert wait_for_work(0.5, sleep=slept.append, connection=connection) is False
+    assert slept == [0.5]
+    assert connection.sql == []
+
+
+def test_a_driver_that_cannot_listen_sends_no_notification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both halves read one answer, as they do for ``WAKE``: a NOTIFY nothing
+    can hear would cost the serialized commit and buy nothing."""
+    monkeypatch.setattr(psycopg_any, "is_psycopg3", False)
+    connection = FakeConnection()
+    notify_relay(connection=connection)
+    assert connection.sql == []
+
+
+def test_psycopg2_polls_on_a_real_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The same on the server, through the driver Django actually loaded rather
+    than one stood in for it."""
+    if connection.vendor != "postgresql" or LOADED_IS_PSYCOPG3:
+        pytest.skip("needs Postgres under psycopg2")
+    monkeypatch.setattr(psycopg_any, "is_psycopg3", LOADED_IS_PSYCOPG3)
+    slept: list[float] = []
+    assert wait_for_work(0.05, sleep=slept.append) is False
+    assert slept == [0.05]
 
 
 def test_notify_is_the_default_on_postgres() -> None:

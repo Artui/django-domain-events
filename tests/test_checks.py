@@ -8,12 +8,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import pytest
-from django.db import connection, transaction
+from django.db import connection, connections, transaction
+from django.db.backends.postgresql import psycopg_any
 
 from django_domain_events import checks
 from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.scope.suppressed import suppressed
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_receiver import RegisteredReceiver
@@ -261,6 +263,56 @@ def test_a_misspelt_wake_mode_is_an_error(settings, mode: object) -> None:
     assert [p.id for p in problems] == ["django_domain_events.E006"]
     assert repr(mode) in problems[0].msg
     assert "'notify', 'poll'" in problems[0].hint
+
+
+@pytest.fixture
+def driver(monkeypatch: pytest.MonkeyPatch) -> Callable[[str, bool], None]:
+    """Stand in a backend and a driver for the write connection, on any backend.
+
+    Reading ``vendor`` opens no connection, so the check never learns the
+    connection behind it is SQLite.
+    """
+
+    def stand_in(vendor: str, psycopg3: bool) -> None:
+        monkeypatch.setattr(connections[write_alias()], "vendor", vendor)
+        monkeypatch.setattr(psycopg_any, "is_psycopg3", psycopg3)
+
+    return stand_in
+
+
+def test_notify_on_a_driver_that_cannot_listen_is_a_warning(
+    driver: Callable[[str, bool], None],
+) -> None:
+    """``WAKE = "notify"`` is the default, so a psycopg2 project gets the poll
+    without having asked for it, and nothing else says so."""
+    driver("postgresql", False)
+    problems = checks.check_wake_driver_can_listen()
+    assert [p.id for p in problems] == ["django_domain_events.W008"]
+    assert "psycopg2" in problems[0].msg
+    assert "polls" in problems[0].msg
+    assert 'WAKE = "poll"' in problems[0].hint
+
+
+def test_poll_on_a_driver_that_cannot_listen_is_clean(
+    settings, driver: Callable[[str, bool], None]
+) -> None:
+    """Asking for the poll is how the warning is silenced."""
+    driver("postgresql", False)
+    settings.DJANGO_DOMAIN_EVENTS = {"WAKE": "poll"}
+    assert checks.check_wake_driver_can_listen() == []
+
+
+def test_a_backend_without_notify_is_not_warned_about_its_driver(
+    driver: Callable[[str, bool], None],
+) -> None:
+    """SQLite and MySQL poll by design, and ``notify`` is their default too."""
+    driver("sqlite", False)
+    assert checks.check_wake_driver_can_listen() == []
+
+
+def test_notify_on_psycopg3_is_clean(driver: Callable[[str, bool], None]) -> None:
+    driver("postgresql", True)
+    assert checks.check_wake_driver_can_listen() == []
 
 
 @pytest.mark.parametrize("interval", [0, 0.0, 0.5, 2])

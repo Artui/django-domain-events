@@ -293,14 +293,22 @@ def run_relay(
                 # still the floor: a notification sent while nobody was
                 # listening is lost.
                 _wait_or_survive(
-                    wait or (lambda t: wait_for_work(t, sleep=sleep)), poll, worker_id, connection
+                    wait or (lambda t: wait_for_work(t, sleep=sleep)),
+                    poll,
+                    worker_id,
+                    connection,
+                    sleep,
                 )
     _forget_pauses_or_survive(paused, worker_id, connection)
     return counts
 
 
 def _wait_or_survive(
-    wait: Callable[[float], bool], poll: float, worker_id: str, connection: Any
+    wait: Callable[[float], bool],
+    poll: float,
+    worker_id: str,
+    connection: Any,
+    sleep: Callable[[float], None],
 ) -> None:
     """Idle without letting a database blip take the daemon down.
 
@@ -315,12 +323,19 @@ def _wait_or_survive(
     nothing closes one that dies outside one: without the close below, every
     later claim fails with "the connection is lost" for as long as the process
     lives.
+
+    A wait that raises has not waited, so the poll is slept here instead.
+    Without it a wait that fails at once - a driver the wait does not fit, a
+    server refusing every connection - turns idle into a loop that claims and
+    logs a traceback as fast as it can go
+    (``test_a_wait_that_fails_at_once_still_idles_for_the_poll``).
     """
     try:
         wait(poll)
     except Exception as exc:
         logger.exception("relay %s could not wait for work", worker_id)
         _close_after(exc, connection, worker_id)
+        sleep(poll)
 
 
 def _sweep_or_survive(worker_id: str, connection: Any, stop: Callable[[], bool]) -> None:
