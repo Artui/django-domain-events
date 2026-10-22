@@ -16,6 +16,17 @@ inside the band, at the cost of a crashed row holding 10 percent longer. Fixed,
 not a setting, because its only meaning is WAL against recovery time."""
 
 
+# The widths of the columns a registration is later written to: ``receiver_key`` on
+# ``DeliveryRecord`` and on ``ReceiverLastSuccess``, ``name`` on ``EventRecord``, each
+# ``CharField(max_length=255)``. Carried as numbers rather than read off the fields
+# because a decorator reaches the registry while apps are still loading - declaring a
+# receiver with an explicit ``key=`` works before ``django.setup()`` - and importing a
+# model there raises ``AppRegistryNotReady``. Held to the columns by
+# test_the_registry_limits_are_the_widths_of_the_columns_that_store_them.
+MAX_KEY_LENGTH = 255
+MAX_NAME_LENGTH = 255
+
+
 class Registry:
     """What exists, and what listens to it.
 
@@ -29,6 +40,21 @@ class Registry:
         self._receivers: dict[str, RegisteredReceiver] = {}
 
     def register_event(self, entry: RegisteredEvent) -> None:
+        # Here rather than in ``@event`` so every route to registration shares one
+        # check. Before the clash check and both index writes, so a refused name
+        # registers nothing. SQLite enforces nothing, so a longer name works there;
+        # Postgres raises DataError from the insert in fire(), inside the caller's
+        # transaction. The coverage gate cannot see the boundary:
+        # test_an_event_name_of_exactly_the_limit_is_registered_directly fails on
+        # ``>=``, and test_an_event_name_over_the_limit_is_refused_by_the_registry_itself
+        # fails without the check.
+        if len(entry.name) > MAX_NAME_LENGTH:
+            raise ValueError(
+                f"Event name {entry.name[:60]!r}... is {len(entry.name)} characters; "
+                f"the limit is {MAX_NAME_LENGTH}, the width of the column event rows "
+                f"store a name in. A longer one is rejected by the database only when "
+                f"an event fires. Set a shorter name=."
+            )
         existing = self._events_by_name.get(entry.name)
         if existing is not None and existing.event_class is not entry.event_class:
             raise ValueError(
@@ -40,6 +66,23 @@ class Registry:
         self._events_by_name[entry.name] = entry
 
     def register_receiver(self, receiver: RegisteredReceiver) -> None:
+        # Here rather than in ``@receiver`` so every route to registration shares
+        # one check, and before the clash check so a key both too long and taken says
+        # which. Postgres truncates the key in the bulk insert (Django 5.2.0-5.2.9,
+        # 6.0.0) or raises DataError at fire time; SQLite enforces nothing. INLINE
+        # and ON_COMMIT write no row, and are held to the rule anyway so a key stays
+        # valid when its mode changes: the check reads no mode. The coverage gate
+        # cannot see the boundary: test_a_receiver_key_of_exactly_the_limit_is_registered_directly
+        # fails on ``>=``; and test_a_long_key_is_refused_in_every_mode fails on a
+        # check scoped to DURABLE.
+        if len(receiver.key) > MAX_KEY_LENGTH:
+            raise ValueError(
+                f"Receiver key {receiver.key[:60]!r}... is {len(receiver.key)} characters; "
+                f"the limit is {MAX_KEY_LENGTH}, the width of the column delivery rows "
+                f"store a key in, and it applies in every mode so that a key stays valid "
+                f"when its mode changes. A longer one is truncated or rejected by the "
+                f"database only when an event fires. Set a shorter key=."
+            )
         # Equality, not identity of the callable. Tolerating "same function"
         # was meant to survive a double import, but stacked decorators are
         # exactly that shape - one function, two events, one derived key - so

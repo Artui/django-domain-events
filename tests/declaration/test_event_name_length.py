@@ -14,7 +14,7 @@ from dataclasses import make_dataclass
 
 import pytest
 
-import django_domain_events.declaration.event as event_module
+import django_domain_events.declaration.registry as registry_module
 from django_domain_events.declaration.event import event
 from django_domain_events.declaration.registry import registry
 from django_domain_events.models.event_record import EventRecord
@@ -70,7 +70,7 @@ def test_the_limit_is_the_width_of_the_column_that_stores_the_name() -> None:
     assert LIMIT == 255
     # Read off the module rather than imported by name, so a tree without the
     # constant fails this one test instead of failing the whole file at collection.
-    assert event_module._MAX_NAME_LENGTH == LIMIT
+    assert registry_module.MAX_NAME_LENGTH == LIMIT
 
 
 def test_a_name_of_exactly_the_limit_is_accepted() -> None:

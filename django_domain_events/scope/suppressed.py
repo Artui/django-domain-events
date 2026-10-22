@@ -22,7 +22,8 @@ _stack: ContextVar[tuple[_Suppression, ...]] = ContextVar(
 def suppressed(*event_classes: type, reason: str, record: bool = True) -> Generator[None]:
     """Fire these events without delivering them, and say why.
 
-    The reason is required and lands on the row. A silently dropped event is
+    The reason is required and lands on the row, so one longer than the column
+    that stores it is refused with ``ValueError`` on entry. A silently dropped event is
     unauditable, which is the failure mode suppression is most likely to cause,
     so the default writes the event and marks it rather than discarding it.
 
@@ -40,6 +41,26 @@ def suppressed(*event_classes: type, reason: str, record: bool = True) -> Genera
         raise ValueError(
             "suppressed() needs a reason. It lands on the row, and an event "
             "dropped without one is indistinguishable from a bug."
+        )
+    # Imported here, not at module level: this module is imported while apps are
+    # still loading, and a model import then raises AppRegistryNotReady. Read at
+    # call time because a block is entered at request time, and from the field so a
+    # widened column moves the refusal with it. The reason is written to a
+    # 255-character column; Postgres raises DataError from fire()'s insert, inside
+    # the caller's transaction, long after the block that chose the reason, and
+    # SQLite stores any length. Held by
+    # test_a_reason_one_over_the_column_width_is_refused_on_entry (the check) and
+    # test_a_reason_of_exactly_the_column_width_is_accepted_and_recorded (fails on ``>=``).
+    from django_domain_events.models.event_record import EventRecord
+
+    limit = EventRecord.suppressed_reason.field.max_length
+    assert limit is not None  # a CharField always has one; narrows it for the checker
+    if len(reason) > limit:
+        raise ValueError(
+            f"suppressed() was given a reason of {len(reason)} characters; the limit is "
+            f"{limit}, the width of the column the event row stores it in. A longer one "
+            f"is rejected by the database on Postgres and stored whole on SQLite, so it "
+            f"would work in tests and fail in production. Shorten the reason."
         )
     for candidate in event_classes:
         if not isinstance(candidate, type):

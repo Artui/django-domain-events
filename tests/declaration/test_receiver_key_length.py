@@ -14,7 +14,7 @@ from contextlib import contextmanager
 
 import pytest
 
-import django_domain_events.declaration.receiver as receiver_module
+import django_domain_events.declaration.registry as registry_module
 from django_domain_events.declaration.receiver import receiver
 from django_domain_events.declaration.registry import registry
 from django_domain_events.models.delivery_record import DeliveryRecord
@@ -69,7 +69,7 @@ def test_the_limit_is_the_width_of_both_columns_that_store_the_key() -> None:
     assert ReceiverLastSuccess._meta.get_field("receiver_key").max_length == LIMIT
     # Read off the module rather than imported by name, so a tree without the
     # constant fails this one test instead of failing the whole file at collection.
-    assert receiver_module._MAX_KEY_LENGTH == LIMIT
+    assert registry_module.MAX_KEY_LENGTH == LIMIT
 
 
 def test_a_key_of_exactly_the_limit_is_accepted() -> None:
