@@ -819,7 +819,8 @@ same transaction, and the report takes the later of that and the rows still
 there.</p>
 <h2 id="how-the-prune-runs">How the prune runs<a class="headerlink" href="#how-the-prune-runs" title="Permanent link">&para;</a></h2>
 <p>A consumed event is deleted at the next prune, so how often the prune runs is the
-policy's latency. A relay that finds nothing to claim runs it, at most once per
+policy's latency. A relay that finds nothing to claim in any lane it serves, or
+finds every one of them paused, runs it, at most once per
 <code>RELAY_PRUNE_SECONDS</code> (60), the first one an interval after the relay starts. That
 makes "deleted as soon as consumed" true within about a minute of a sendout's
 last delivery, with nothing to schedule:</p>
@@ -828,7 +829,8 @@ last delivery, with nothing to schedule:</p>
   of lane relays prunes too. Several relays each sweep once per interval; that is
   safe against loss and double deletion because the prune re-checks at the
   delete that an event is still due, and it is cheap for the reason below.</li>
-<li><strong>A relay with work does not sweep.</strong> The sweep runs from an idle pass, so a
+<li><strong>A relay with work does not sweep.</strong> The sweep runs from an idle pass, and a
+  pass in which any lane claimed work is not idle, so a
   saturated relay defers it until it catches up, and a fleet that is never idle
   never prunes. If that is your deployment, schedule <code>prune_events</code> as well.</li>
 <li><strong><code>deliver_events --once</code> never sweeps.</strong> It is a schedule's job, and the

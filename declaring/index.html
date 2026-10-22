@@ -866,8 +866,11 @@ would strand rows written under the old name:</p>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">OrderSubmitted</span><span class="p">:</span> <span class="o">...</span>
 </span></code></pre></div>
 <p>A name is at most 255 characters, the width of the column event rows store it
-in, whether given as <code>name=</code> or derived from the app label and class name; a
-longer one is refused at the decorator.</p>
+in, whether given as <code>name=</code> or derived from the app label and class name. A
+longer one is refused with <code>ValueError</code> at registration, whatever the route:
+the decorator, or a <code>RegisteredEvent</code> handed to <code>registry.register_event</code>
+directly. SQLite stores a name of any length, so the check is what keeps one
+that works in tests from failing every <code>fire()</code> on Postgres.</p>
 <p>An event is kept for <code>RETENTION_DAYS</code> unless its declaration says otherwise:
 <code>retention=timedelta(...)</code> for a window of its own, or <code>Retention.SUCCEEDED</code> or
 <code>Retention.SETTLED</code> to delete it, with its delivery rows, as soon as it has been
@@ -906,7 +909,7 @@ orphaned.</p>
 <tr>
 <td><code>key</code></td>
 <td><code>&lt;app_label&gt;.&lt;func_name&gt;</code></td>
-<td>The identity delivery rows address. At most 255 characters, the width of the column delivery rows store it in; a longer one is refused at the decorator, in every mode.</td>
+<td>The identity delivery rows address. At most 255 characters, the width of the column delivery rows store it in; a longer one is refused at registration, by the decorator or <code>registry.register_receiver</code> alike, in every mode.</td>
 </tr>
 <tr>
 <td><code>max_attempts</code></td>

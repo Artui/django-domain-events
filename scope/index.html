@@ -803,7 +803,11 @@ than discarding it.</p>
 <p>A suppressed row has <strong>no delivery rows</strong> at all. Nothing is owed, and nothing
 can dead-letter.</p>
 <ul>
-<li>The reason is required.</li>
+<li>The reason is required, and is at most 255 characters, the width of the
+  column it is recorded in. A longer one is refused with <code>ValueError</code> as the
+  block is entered, rather than by the database at the first <code>fire()</code> inside
+  it - which on Postgres is an error inside your transaction, and on SQLite
+  never happens at all.</li>
 <li>Naming no classes suppresses <strong>everything</strong> fired inside the block.</li>
 <li>Nested blocks accumulate rather than replace; the <strong>innermost matching</strong>
   reason is the one recorded. A library suppressing its own event type inside

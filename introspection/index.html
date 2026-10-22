@@ -922,6 +922,10 @@ climbing, while one wedged receiver has a backlog and everything else fine.</p>
 <td><code>receivers</code></td>
 <td>Per-receiver backlog, worst first, omitting the ones with nothing owed, dead or scheduled. Each carries its own <code>owed</code>, <code>scheduled</code>, <code>claimed</code>, <code>dead</code> and <code>oldest_owed_at</code>; one with only scheduled work sorts after every receiver that is behind</td>
 </tr>
+<tr>
+<td><code>lanes</code></td>
+<td>The same backlog split by <a href="../operations/#lanes-a-relay-per-kind-of-work">lane</a>, worst first, ranked as <code>receivers</code> is. Every lane a relay can serve is listed, the default and each declared one, zeros included, so a dashboard keeps one series per lane. Each <code>LaneBacklog</code> carries its own <code>owed</code>, <code>scheduled</code>, <code>claimed</code>, <code>dead</code> and <code>oldest_owed_at</code>, and <code>pauses</code>: a <code>LanePause</code> per relay holding the lane paused after a <a href="../delivery/#the-pause-is-per-process">deferral</a>, with its <code>worker_id</code>, <code>paused_at</code> and <code>until</code></td>
+</tr>
 </tbody>
 </table>
 <p>A <a href="../operations/#cancel-owed-work">cancelled</a> delivery is settled, so it appears
@@ -958,8 +962,25 @@ reading after a deploy is that, not a dying worker.</p>
 workers hold. A receiver with every owed row claimed and none finishing is wedged,
 or its <a href="../operations/#handing-delivery-to-a-task-queue">task queue</a> is sitting on
 the messages; the same total spread across receivers is a relay at work.</p>
+<p><code>lanes</code> is the per-receiver backlog rolled up by the lane each receiver is
+declared in. A row whose receiver has
+since been deleted is counted in the default lane, which is where it drains.
+Its <code>oldest_owed_at</code> is the number to alert on per lane
+(<a href="../operations/#knowing-it-is-working">knowing it is working</a>), against a
+threshold sized to that lane's work rather than one shared by all of them. A
+lane's <code>pauses</code> come from the
+records relays write when a receiver defers
+(<a href="../delivery/#the-pause-is-per-process">the pause is per process</a>); a lane no
+receiver declares any more is listed while a relay still holds it paused, as
+happens when a lane is renamed mid-rollout. A pause names its relay because
+one that died leaves its record showing until <code>until</code> passes: check the
+<code>worker_id</code> and <code>paused_at</code> against the relays running and when they started,
+since a relay restarted under the same <code>worker_id</code> takes the old record over
+only at its own first deferral.</p>
 <p>Every figure here is answered from an index and none of them scans the
-delivery table, so the call is cheap enough to scrape on an interval.</p>
+delivery table, so the call is cheap enough to scrape on an interval. It sends
+four queries: three over the delivery table, and one over the pause records,
+which hold at most one row per lane per relay.</p>
 <p><code>owed</code> means "not terminal and due", a superset of what the relay can claim at
 any given moment: a row inside its backoff window is owed and not yet claimable.
 The superset is the useful side - this cannot report an empty queue while work
@@ -967,20 +988,31 @@ is still outstanding. A row whose due time has not come is not outstanding yet,
 which is why it is <code>scheduled</code> instead; at exactly its due time it is owed, as
 the relay can claim it then. The prune settles by "not terminal", so it waits
 for <code>owed</code> and <code>scheduled</code> rows alike.</p>
-<p><code>events_status</code> prints the same figures, <code>scheduled</code> among them, and a line per
+<p><code>events_status</code> prints the same figures, <code>scheduled</code> among them, then a line per
+lane, with a line under it for each relay holding it paused, and a line per
 receiver:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>owed          3
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>scheduled     120
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>owed          5
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>scheduled     12
 </span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>claimed       1
 </span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>dead          0
 </span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>lapsed leases 0
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>oldest owed   42s ago
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>oldest owed   310s ago
 </span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
-</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>  billing.send_invoice  owed=3  dead=0  scheduled=0 claimed=1   oldest=42s
-</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>  waitlist.expire_offer owed=0  dead=0  scheduled=120   claimed=0   oldest=-
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>lanes
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>  default   owed=3  dead=0  scheduled=12    claimed=1   oldest=42s
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>  mail  owed=2  dead=0  scheduled=0 claimed=0   oldest=310s
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>    paused by relay-2:7 for 3539s more
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>receivers
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>  billing.send_invoice  owed=3  dead=0  scheduled=0 claimed=1   oldest=42s
+</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a>  mail.send_receipt owed=2  dead=0  scheduled=0 claimed=0   oldest=310s
+</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a>  waitlist.expire_offer owed=0  dead=0  scheduled=12    claimed=0   oldest=-
 </span></code></pre></div>
 <p><code>--format json</code> carries <code>scheduled</code> and <code>claimed</code> at the top level and on each
-receiver.</p>
+receiver, and a <code>"lanes"</code> list beside <code>"receivers"</code>: each lane's <code>lane</code>,
+<code>owed</code>, <code>scheduled</code>, <code>claimed</code>, <code>dead</code> and <code>oldest_owed_age_seconds</code>, and
+<code>"paused"</code>, a list of <code>{"worker_id", "paused_for_seconds"}</code> where
+<code>paused_for_seconds</code> is the time left until the pause ends.</p>
 <h2 id="system-checks">System checks<a class="headerlink" href="#system-checks" title="Permanent link">&para;</a></h2>
 <p>Run with <code>python manage.py check</code>.</p>
 <table>
@@ -1057,6 +1089,11 @@ receiver.</p>
 <td>Warning</td>
 <td><code>DJANGO_DOMAIN_EVENTS</code> holds a key this package never reads</td>
 </tr>
+<tr>
+<td><code>W008</code></td>
+<td>Warning</td>
+<td><code>WAKE</code> is <code>"notify"</code> on Postgres, but Django loaded psycopg2, which cannot listen; the relay polls instead</td>
+</tr>
 </tbody>
 </table>
 <p><code>E001</code> matters because nothing else would ever say so: the event cannot be fired,
@@ -1071,6 +1108,13 @@ transaction, so the event exists, and only the decode refuses - in the relay,
 in another process, one dead letter per receiver. A codec that does not
 implement <code>unsupported_fields</code> is not interrogated, because this package should
 not guess at what a codec it did not write can do.</p>
+<p><code>W008</code> is a warning rather than an error because nothing is lost. The relay
+listens for a notification through psycopg 3; under psycopg2 it polls every
+<code>POLL_SECONDS</code> and <code>fire()</code> sends no <code>NOTIFY</code>, which is correct and only slower
+to deliver. <code>"notify"</code> is the default, so without the check a project on
+psycopg2 would run a mode it never chose and never be told. Set <code>WAKE</code> to
+<code>"poll"</code> to say so, or install psycopg 3 to have the relay woken
+(<a href="../operations/#listen-notify"><code>LISTEN</code> / <code>NOTIFY</code></a>).</p>
 <p><code>W006</code> and <code>W007</code> exist because both mistakes are otherwise silent. <code>setting()</code>
 reads only the keys this package asks for, so a typo sits in the settings
 looking effective; and the dict is <code>DJANGO_DOMAIN_EVENTS</code> while the app label

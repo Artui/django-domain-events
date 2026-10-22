@@ -977,7 +977,7 @@ are changing.</p>
 <tr>
 <td><code>BATCH_SIZE</code></td>
 <td><code>50</code></td>
-<td>Rows per claim and per requeue chunk. A relay may override it for its claims.</td>
+<td>Rows per claim and per requeue chunk. A relay may override it for its claims, and per lane.</td>
 </tr>
 <tr>
 <td><code>LEASE_SECONDS</code></td>
@@ -1101,6 +1101,8 @@ pgbouncer in transaction-pooling mode never hears a notification whatever this
 says; see <a href="../operations/#behind-pgbouncer">Behind pgbouncer</a>.</p>
 <p>A value other than <code>"notify"</code> or <code>"poll"</code> fails the system check <code>E006</code>, rather
 than quietly meaning "poll".</p>
+<p>Listening takes psycopg 3. Under psycopg2, <code>"notify"</code> behaves as <code>"poll"</code>, and
+the system check <code>W008</code> warns until <code>WAKE</code> says <code>"poll"</code>.</p>
 <h3 id="notify_coalesce_seconds"><code>NOTIFY_COALESCE_SECONDS</code><a class="headerlink" href="#notify_coalesce_seconds" title="Permanent link">&para;</a></h3>
 <p>A process sends at most one <code>NOTIFY</code> per this interval, per database. Skipping
 one is safe for the reason losing one is: a single wake makes the relay claim
@@ -1120,6 +1122,13 @@ knob for a <a href="../operations/#lanes-a-relay-per-kind-of-work">lane</a> of s
 receivers, which wants a batch it can work through inside the lease its claim
 stamps (<a href="../operations/#the-lease-a-claim-stamps">operations</a>) while pruning
 keeps its larger statements.</p>
+<p>A relay serving several lanes can size each one's claims apart:
+<code>deliver_events --lane default --lane mail --lane-batch-size mail=5</code>, or
+<code>run_relay(lane=["default", "mail"], lane_batch_sizes={"mail": 5})</code>. A lane it
+names takes that size, and every other lane <code>--batch-size</code>, or <code>BATCH_SIZE</code>
+where that is not given. In a shared relay that size is what one turn of the
+lane costs the others
+(<a href="../operations/#one-relay-several-lanes">one relay, several lanes</a>).</p>
 <h3 id="prune_batch_rows"><code>PRUNE_BATCH_ROWS</code><a class="headerlink" href="#prune_batch_rows" title="Permanent link">&para;</a></h3>
 <p>How many rows one prune transaction deletes, counting each event's delivery rows
 and the event row itself. A setting of its own, rather than <code>BATCH_SIZE</code>, because
