@@ -288,3 +288,15 @@ def test_an_over_long_event_name_is_refused_before_the_clash_check() -> None:
     with pytest.raises(ValueError, match="characters") as caught:
         r.register_event(_entry(Alpha, name))
     assert "already registered" not in str(caught.value)
+
+
+def test_a_deleted_receivers_row_is_in_the_default_lane() -> None:
+    """A row written for a receiver in a named lane, whose receiver has since
+    been deleted, drains through the default lane: the key is read against the
+    receivers as they are now, not as they were when the row was written."""
+    r = _laned(Registry())
+    assert r.lane_for_key("app.a") == "mail"
+
+    del r._receivers["app.a"]
+
+    assert r.lane_for_key("app.a") == "default"

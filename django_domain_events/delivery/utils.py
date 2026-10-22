@@ -104,33 +104,6 @@ def lane_claim_sizes(
     return lambda name: overrides.get(name, default)
 
 
-def partition_by_lane(delivery_ids: list[int], lane: str) -> tuple[list[int], list[int]]:
-    """Split ids into those whose receiver is in ``lane`` and the rest, in order.
-
-    What ``deliver_pending`` uses on a deferral to find which of its unstarted
-    rows to hand back. ``run_relay`` needs no split, because it claims one lane
-    at a time and every row of its batch is in the lane that deferred. Membership is the registry's, as the claim reads it: a
-    row whose receiver no longer exists is in the default lane, which is where
-    it drains (``test_a_deleted_receivers_row_is_in_the_default_lane``).
-
-    One query, run only on a deferral. A batch claimed for one lane needs no
-    split - every row is in it - but asking is what lets a pass over every lane
-    hand back the throttled lane's rows and go on delivering the others.
-    """
-    from django_domain_events.models.delivery_record import DeliveryRecord
-
-    keys = dict(
-        DeliveryRecord.objects.filter(pk__in=delivery_ids).values_list("pk", "receiver_key")
-    )
-    inside = [pk for pk in delivery_ids if _lane_of(keys.get(pk, "")) == lane]
-    return inside, [pk for pk in delivery_ids if pk not in inside]
-
-
-def _lane_of(receiver_key: str) -> str:
-    """The lane a row is claimed in, as the registry reads it."""
-    return registry.lane_for_key(receiver_key)
-
-
 def driver_listens() -> bool:
     """Whether Django's Postgres backend loaded psycopg 3, the driver the wake listens through.
 

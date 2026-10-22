@@ -23,9 +23,9 @@ from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
 from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.retry_after import RetryAfter
-from django_domain_events.delivery.utils import partition_by_lane
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.models.lane_pause_record import LanePauseRecord
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
@@ -852,18 +852,28 @@ def _given_back(key: str) -> list[int]:
 
 
 def test_a_deferral_sets_its_lane_aside_and_the_pass_delivers_the_rest(
-    order: OrderPlaced, record: list[str]
+    order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Serving every lane, the claimed batch mixes them. The deferring lane's
-    unstarted rows are handed back rather than attempted, and the other lanes'
-    rows in the same batch are still delivered."""
+    """Serving every lane, the pass claims each lane in turn, so a batch is one
+    lane's. The throttled lane, ``bulk``, sorts before ``default``: its
+    unstarted rows are handed back rather than attempted, it is not claimed
+    again, and the default lane after it is still delivered in the same call."""
     seen: list[int] = []
-    with receiver_registered(_throttled_mail(seen)):
+    claimed: list[str | None] = []
+    real = deliver_module.claim_batch
+
+    def spy(**kwargs: Any) -> list[int]:
+        claimed.append(kwargs["lane"])
+        return real(**kwargs)
+
+    with receiver_registered(dataclasses.replace(_throttled_mail(seen), lane="bulk")):
         for _ in range(3):
             _fire(order)
+        monkeypatch.setattr(deliver_module, "claim_batch", spy)
 
         assert deliver_pending() == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 6}
 
+        assert claimed == ["bulk", "default", "default"]
         assert len(seen) == 1, "the throttled lane's other rows were attempted"
         handed_back = _given_back("tests.throttled")
         assert len(handed_back) == 2
@@ -872,9 +882,10 @@ def test_a_deferral_sets_its_lane_aside_and_the_pass_delivers_the_rest(
             now=django_timezone.now(),
             lease=timedelta(minutes=5),
             limit=10,
-            lane="mail",
+            lane="bulk",
         )
         assert sorted(taken) == handed_back, "another worker could not take them at once"
+    assert not LanePauseRecord.objects.exists(), "a pass with no clock recorded a pause"
 
 
 def test_a_deferral_in_the_lane_a_pass_serves_ends_the_pass(
@@ -997,23 +1008,6 @@ def test_a_give_up_this_worker_could_not_record_tells_on_failure_nothing(
     assert heard == []
 
 
-def test_a_deleted_receivers_row_is_in_the_default_lane(order: OrderPlaced) -> None:
-    """As the claim reads it: a row whose receiver is gone names no lane, and
-    it drains through the default one, so a default-lane deferral hands it back
-    with the rest."""
-    with receiver_registered(_laned_mail()):
-        _fire(order)
-    ids = list(DeliveryRecord.objects.order_by("pk").values_list("pk", flat=True))
-    gone = _delivery_id("tests.mail")
-
-    with receiver_deleted("testapp.durable_receiver"):
-        inside, rest = partition_by_lane(ids, "default")
-
-    assert inside == ids, "a row with no receiver was not counted in the default lane"
-    assert rest == []
-    assert gone in inside
-
-
 def test_deliver_pending_refuses_a_lane_nobody_declared(order: OrderPlaced) -> None:
     with pytest.raises(ValueError, match="No receiver is declared in lane 'mial'"):
         deliver_pending(lane="mial")
@@ -1041,12 +1035,13 @@ def test_deliver_pending_claims_in_batches_of_the_size_it_is_given(
 def test_a_limit_and_a_batch_size_together_are_refused(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """A limit is one claim of that many rows, so the batch would be ignored -
-    and claiming a hundred rows under one lease is what a small batch is asked
-    for to prevent. Each alone is accepted, which holds both conjuncts."""
+    """A limit sizes each claim as its lane's share of what is left, so the
+    batch would be ignored - and claiming a hundred rows under one lease is
+    what a small batch is asked for to prevent. Each alone is accepted, which
+    holds both conjuncts."""
     _fire(order)
 
-    with pytest.raises(ValueError, match="limit=100 is one claim of that many rows"):
+    with pytest.raises(ValueError, match="limit=100 sizes each claim as its lane.s share of it"):
         deliver_pending(limit=100, batch_size=5)
     assert deliver_pending(limit=1) == {DeliveryStatus.SUCCEEDED: 1}
     assert deliver_pending(batch_size=5) == {DeliveryStatus.SUCCEEDED: 1}
