@@ -49,8 +49,11 @@ def claim_batch(
     arms, so a relay never takes over another lane's lapsed claims
     (``test_a_lapsed_claim_in_a_named_lane_stays_out_of_the_default_lane``).
 
-    ``exclude_lanes`` leaves lanes out of the claim, and is how a relay serving
-    every lane keeps the others flowing while one is paused after a deferral.
+    ``exclude_lanes`` leaves lanes out of the claim, for a caller claiming
+    several lanes in one statement that has paused one of them. The package's
+    own relay and ``deliver_pending`` no longer pass it: they claim one lane at
+    a time and skip a paused lane's turn instead, which is what lets each lane
+    keep its own lease and batch size.
     It is each lane's own condition negated, so it covers both arms as ``lane``
     does - the rows a deferral handed back are lapsed claims, and exactly the
     ones not to take straight back
