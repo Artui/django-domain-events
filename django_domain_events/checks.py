@@ -11,6 +11,7 @@ from django.utils.module_loading import import_string
 
 from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.declaration.registry import registry
+from django_domain_events.delivery.utils import driver_listens
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.settings import (
     DEFAULTS,
@@ -99,7 +100,7 @@ def check_wake_driver_can_listen(**kwargs: Any) -> list[Any]:
     if (
         connections[write_alias()].vendor != "postgresql"
         or setting("WAKE") != "notify"
-        or _driver_listens()
+        or driver_listens()
     ):
         return []
     return [
@@ -114,18 +115,6 @@ def check_wake_driver_can_listen(**kwargs: Any) -> list[Any]:
             id="django_domain_events.W008",
         )
     ]
-
-
-def _driver_listens() -> bool:
-    """Whether Django's Postgres backend loaded psycopg 3.
-
-    Imported here, and only once the write connection is known to be Postgres:
-    ``psycopg_any`` imports psycopg 3 or else psycopg2 and raises if neither is
-    installed, which a project on another database never has.
-    """
-    from django.db.backends.postgresql import psycopg_any
-
-    return psycopg_any.is_psycopg3
 
 
 def check_declared_events_are_decodable(**kwargs: Any) -> list[Any]:

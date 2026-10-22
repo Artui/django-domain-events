@@ -7,6 +7,7 @@ from typing import Any
 
 from django.db import connections
 
+from django_domain_events.delivery.utils import driver_listens
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.settings import setting
 
@@ -94,22 +95,7 @@ def _resolve(supported: bool | None, connection: Any) -> bool:
     """
     if supported is not None:
         return supported
-    return connection.vendor == "postgresql" and setting("WAKE") == "notify" and _driver_listens()
-
-
-def _driver_listens() -> bool:
-    """Whether Django's Postgres backend loaded psycopg 3.
-
-    Imported here, and only once the connection is known to be Postgres:
-    ``psycopg_any`` imports psycopg 3 or else psycopg2 and raises if neither is
-    installed, which a project on another database never has. Its backend has
-    already imported the module by the time a connection names Postgres, so
-    this is a lookup rather than an import. Read at call time, so a test can
-    stand either driver in on any backend.
-    """
-    from django.db.backends.postgresql import psycopg_any
-
-    return psycopg_any.is_psycopg3
+    return connection.vendor == "postgresql" and setting("WAKE") == "notify" and driver_listens()
 
 
 def _coalesced(connection: Any, clock: Callable[[], float]) -> bool:

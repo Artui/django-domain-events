@@ -129,3 +129,19 @@ def partition_by_lane(delivery_ids: list[int], lane: str) -> tuple[list[int], li
 def _lane_of(receiver_key: str) -> str:
     """The lane a row is claimed in, as the registry reads it."""
     return registry.lane_for_key(receiver_key)
+
+
+def driver_listens() -> bool:
+    """Whether Django's Postgres backend loaded psycopg 3, the driver the wake listens through.
+
+    Shared by the wake and the system check that warns when it cannot listen.
+    Imported here, and called only once a connection is known to be Postgres:
+    ``psycopg_any`` imports psycopg 3 or else psycopg2 and raises if neither is
+    installed, which a project on another database never has. Its backend has
+    already imported the module by the time a connection names Postgres, so
+    this is a lookup rather than an import. Read at call time, so a test can
+    stand either driver in on any backend.
+    """
+    from django.db.backends.postgresql import psycopg_any
+
+    return psycopg_any.is_psycopg3
