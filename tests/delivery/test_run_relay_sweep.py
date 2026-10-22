@@ -21,6 +21,7 @@ from django.utils import timezone as django_timezone
 
 from django_domain_events.delivery import run_relay as run_relay_module
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.run_relay import run_relay
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.models.delivery_record import DeliveryRecord
@@ -30,8 +31,8 @@ from django_domain_events.operations.prune_events import prune_events
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
-from tests.conftest import receiver_registered
-from tests.testapp.events import OrderPlaced, calls
+from tests.conftest import receiver_registered, receiver_replaced
+from tests.testapp.events import OrderPlaced, PinnedName, Unheard, calls
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -150,16 +151,17 @@ def test_the_first_sweep_is_an_interval_after_the_relay_starts(
     assert sweeps.at == []
 
 
-def _late_relay(monkeypatch: pytest.MonkeyPatch, **kwargs: object) -> _Sweeps:
-    """One pass of a relay whose clock reads zero at its start and 1000 seconds
-    on every reading after, so any idle pass is long past the interval."""
+def _late_relay(monkeypatch: pytest.MonkeyPatch, passes: int = 1, **kwargs: object) -> _Sweeps:
+    """``passes`` passes of a relay whose clock reads zero at its start and 1000
+    seconds on every reading after, so any idle pass is long past the
+    interval."""
     clock = _Clock()
     sweeps = _Sweeps(clock)
     monkeypatch.setattr(run_relay_module, "prune_events", sweeps)
     readings = iter([0.0])
     run_relay(
         worker_id="w1",
-        passes=1,
+        passes=passes,
         monotonic=lambda: next(readings, 1000.0),
         wait=clock.wait,
         **UNSAFE,
@@ -207,6 +209,70 @@ def test_a_named_lane_sweeps_too(monkeypatch: pytest.MonkeyPatch) -> None:
         sweeps = _late_relay(monkeypatch, lane="mail")
 
     assert len(sweeps.at) == 1
+
+
+def _lane(lane: str, event_class: type, **options: object) -> RegisteredReceiver:
+    """A receiver in ``lane`` on an event the test app never listens to, so a
+    lane has rows only when a test fires that event."""
+    return RegisteredReceiver(
+        key=f"tests.sweep_{lane}",
+        event_class=event_class,
+        func=lambda evt: calls.append(lane),
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=5,
+        eager=False,
+        site="relay",
+        lane=lane,
+        **options,
+    )
+
+
+def test_a_lane_with_work_keeps_the_pass_from_idling(
+    monkeypatch: pytest.MonkeyPatch, record: list[str]
+) -> None:
+    """``push`` claims work and ``sms``, last, claims nothing: the pass is not
+    idle, so it neither sweeps nor waits, however overdue the sweep is. Idle
+    is every lane empty or paused, not the last one."""
+    with receiver_registered(_lane("push", Unheard)), receiver_registered(_lane("sms", PinnedName)):
+        with transaction.atomic():
+            fire(Unheard(value=1))
+        sweeps = _late_relay(monkeypatch, lane=["push", "sms"])
+
+    assert calls == ["push"]
+    assert sweeps.at == []
+    assert sweeps.clock.waits == 0
+
+
+def test_a_pass_whose_every_lane_is_empty_is_idle(monkeypatch: pytest.MonkeyPatch) -> None:
+    with receiver_registered(_lane("push", Unheard)), receiver_registered(_lane("sms", PinnedName)):
+        sweeps = _late_relay(monkeypatch, lane=["push", "sms"])
+
+    assert len(sweeps.at) == 1
+    assert sweeps.clock.waits == 1
+
+
+def test_a_pass_whose_lanes_are_empty_or_paused_is_idle(
+    monkeypatch: pytest.MonkeyPatch, record: list[str]
+) -> None:
+    """The first pass claims SMS, which defers for an hour. In the second,
+    ``push`` is empty and ``sms`` paused, so that pass idles: one wait, and the
+    sweep it was owed."""
+
+    def deferring(evt: PinnedName) -> None:
+        calls.append("sms")
+        raise RetryAfter(3600, reason="credit", counts=False)
+
+    sms = _lane("sms", PinnedName, give_up_after=timedelta(days=1))
+    with receiver_registered(_lane("push", Unheard)), receiver_registered(sms):
+        with transaction.atomic():
+            fire(PinnedName(value=1))
+        with receiver_replaced(sms.key, deferring):
+            sweeps = _late_relay(monkeypatch, passes=2, lane=["push", "sms"])
+
+    assert calls == ["sms"]
+    assert len(sweeps.at) == 1
+    assert sweeps.clock.waits == 1
 
 
 def test_a_single_pass_never_sweeps(order: OrderPlaced, record: list[str]) -> None:

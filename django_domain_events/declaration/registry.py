@@ -108,6 +108,17 @@ class Registry:
         """Every lane a relay can serve, sorted: the default and each one declared."""
         return sorted({DEFAULT_LANE} | {r.lane for r in self._receivers.values()})
 
+    def lane_for_key(self, key: str) -> str:
+        """The lane a row of ``key`` is claimed in: its receiver's, or the default.
+
+        A key no receiver holds - one deleted since its rows were written -
+        is in the default lane, because that lane is phrased as every row no
+        named lane takes, and it is where those rows drain
+        (``test_a_key_with_no_receiver_is_in_the_default_lane``).
+        """
+        receiver = self._receivers.get(key)
+        return DEFAULT_LANE if receiver is None else receiver.lane
+
     def claim_lease_seconds(self, lane: str | None, *, default: int, eager: bool = False) -> float:
         """The lease a claim of ``lane`` stamps, in seconds: its base times the headroom.
 

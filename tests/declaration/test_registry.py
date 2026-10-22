@@ -188,3 +188,17 @@ def test_a_declared_lane_the_default_and_every_lane_are_accepted(lane: str | Non
     receiver's rows drain - and None is every lane at once."""
     _laned(Registry()).require_lane(lane)
     Registry().require_lane("default")
+
+
+def test_a_key_is_in_its_receivers_lane() -> None:
+    r = _laned(Registry())
+
+    assert r.lane_for_key("app.a") == "mail"
+    assert r.lane_for_key("app.b") == "search"
+    assert r.lane_for_key("app.c") == "default"
+
+
+def test_a_key_with_no_receiver_is_in_the_default_lane() -> None:
+    """A receiver deleted since its rows were written leaves them in no named
+    lane, and the default lane is every row no named lane takes."""
+    assert _laned(Registry()).lane_for_key("app.deleted") == "default"

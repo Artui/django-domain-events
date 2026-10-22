@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import logging
 from datetime import datetime, timedelta
 
@@ -674,32 +675,41 @@ def test_the_pause_ends_when_the_requested_delay_has_passed_on_the_injected_cloc
     assert len(seen) == attempted
 
 
-def test_a_relay_serving_every_lane_delivers_the_rest_of_a_mixed_batch(
+def _search() -> RegisteredReceiver:
+    """A receiver in a lane that sorts after ``mail``, so a relay serving both
+    reaches it after a deferral in ``mail``."""
+    return dataclasses.replace(
+        _mail(), key="tests.search", func=lambda evt: calls.append("search"), lane="search"
+    )
+
+
+def test_a_deferral_in_one_lane_leaves_the_next_lanes_claim_in_the_same_pass(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Only the deferring lane's unstarted rows go back; the default lane's
-    rows after the deferral are delivered in the same pass."""
+    """Only the deferring lane's batch goes back, and the pass goes on to the
+    next lane: ``search``'s rows are claimed and delivered in the same pass."""
     seen: list[int] = []
-    with receiver_registered(_throttled(seen)):
+    with receiver_registered(_throttled(seen)), receiver_registered(_search()):
         _fire_three(order)
+        record.clear()
         clock = _Clock()
 
         counts = run_relay(
             worker_id="w1", passes=1, lane=None, now=clock, wait=clock.wait, **UNSAFE
         )
 
-        assert counts == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 6}
+        assert counts == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 9}
         assert len(seen) == 1
         assert len(_given_back("tests.throttled")) == 2
+        assert record.count("search") == 3
 
 
 def test_a_relay_serving_every_lane_keeps_claiming_the_other_lanes_while_one_is_paused(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Batches of three put the later events' rows in later claims. Those
-    claims leave the paused lane out and still take the default lane's rows;
-    without the exclusion the second claim would take a throttled row and
-    attempt it."""
+    """Batches of three put the default lane's later rows in a second pass, which
+    claims them while ``mail`` is still paused and leaves ``mail`` alone: its
+    handed-back rows stay given back rather than being taken and attempted."""
     seen: list[int] = []
     with receiver_registered(_throttled(seen)):
         _fire_three(order)
@@ -717,21 +727,17 @@ def test_a_relay_serving_every_lane_keeps_claiming_the_other_lanes_while_one_is_
 
         assert counts == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 6}
         assert len(seen) == 1
-        assert (
-            DeliveryRecord.objects.filter(
-                receiver_key="tests.throttled", status=DeliveryStatus.PENDING
-            ).count()
-            == 2
-        ), "the paused lane's unclaimed rows were touched"
+        assert len(_given_back("tests.throttled")) == 2, "the paused lane was claimed again"
 
 
 def test_a_stop_after_a_deferral_hands_back_only_what_is_still_held(
     order: OrderPlaced, record: list[str], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The deferral already gave the throttled rows back. The stop gives back
-    the three default rows left unstarted, and counts those alone."""
+    """The deferral already gave ``mail``'s rows back. The stop, two rows into
+    ``search``'s batch, gives back the one row of it left unstarted and counts
+    that alone."""
     seen: list[int] = []
-    with receiver_registered(_throttled(seen)):
+    with receiver_registered(_throttled(seen)), receiver_registered(_search()):
         _fire_three(order)
         record.clear()
         clock = _Clock()
@@ -739,22 +745,23 @@ def test_a_stop_after_a_deferral_hands_back_only_what_is_still_held(
         with caplog.at_level(logging.INFO, logger="django_domain_events.delivery.run_relay"):
             run_relay(
                 worker_id="w1",
-                lane=None,
-                stop=lambda: len(record) >= 3,
+                lane=["mail", "search"],
+                stop=lambda: record.count("search") >= 2,
                 now=clock,
                 wait=clock.wait,
                 **UNSAFE,
             )
 
-    assert "handed back 3 unstarted rows" in caplog.text
+    assert "paused lane mail after a deferral; handed back 2 unstarted rows" in caplog.text
+    assert "stopping; handed back 1 unstarted rows" in caplog.text
 
 
 def test_a_relay_whose_lane_is_paused_does_not_query_it(
     order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The claim would come back empty anyway, since the paused lane is also
-    excluded from it. Skipping it spares a query per poll that would walk past
-    every row the lane is owed to find nothing."""
+    """Skipping it spares a query per poll that would walk past every row the
+    lane is owed to find nothing it may take. Counted by the claims made, so
+    the pause record a deferral writes is not mistaken for one."""
     claims: list[dict[str, object]] = []
     real = run_relay_module.claim_batch
 
@@ -779,10 +786,10 @@ def test_a_set_aside_that_fails_abandons_the_batch(
     closes: list[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Which rows were in the paused lane is unknown after the failure, so none
-    of the rest is attempted - each could be another call to a throttled
-    destination - and the rows wait out their lease, as a crashed worker's do.
-    The relay itself goes on, and the lane is still paused."""
+    """The batch is the paused lane's, so none of the rest is attempted after
+    the failure - each could be another call to a throttled destination - and
+    the rows wait out their lease, as a crashed worker's do. The relay itself
+    goes on."""
     seen: list[int] = []
 
     def broken(*args: object, **kwargs: object) -> int:
@@ -794,14 +801,14 @@ def test_a_set_aside_that_fails_abandons_the_batch(
         clock = _Clock()
 
         counts = run_relay(
-            worker_id="w1", passes=3, lane=None, now=clock, wait=clock.wait, **UNSAFE
+            worker_id="w1", passes=3, lane="mail", now=clock, wait=clock.wait, **UNSAFE
         )
 
-        assert counts == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 2}
+        assert counts == {DeliveryStatus.FAILED: 1}
         assert len(seen) == 1
         abandoned = DeliveryRecord.objects.filter(
             status=DeliveryStatus.CLAIMED, lease_expires_at__gt=django_timezone.now()
         )
-        assert abandoned.count() == 6, "the rest of the batch was not left to its lease"
+        assert abandoned.count() == 2, "the rest of the batch was not left to its lease"
     assert "could not hand back the rows of paused lane mail" in caplog.text
     assert closes == [write_alias()]
