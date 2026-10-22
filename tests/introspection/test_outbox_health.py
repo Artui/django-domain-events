@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from collections.abc import Iterator
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 from django.db import connection, transaction
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone as django_timezone
 
 from django_domain_events.delivery.drain_outbox import drain_outbox
@@ -14,9 +17,19 @@ from django_domain_events.delivery.fire import fire
 from django_domain_events.introspection.outbox_health import outbox_health
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.models.lane_pause_record import LanePauseRecord
+from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.types.outbox_health import OutboxHealth
+from django_domain_events.types.registered_receiver import RegisteredReceiver
 from django_domain_events.utils import TERMINAL
-from tests.conftest import Plans, delivery_table_access
+from tests.conftest import (
+    Plans,
+    delivery_table_access,
+    event_registered,
+    receiver_deleted,
+    receiver_registered,
+)
 from tests.testapp.events import OrderPlaced
 
 pytestmark = pytest.mark.django_db
@@ -360,6 +373,10 @@ def test_no_query_outbox_health_sends_scans_the_delivery_table(
     # rows serves the per-receiver split too, in one scan where the three
     # above take a bitmap OR; it holds no succeeded row either.
     assert access[2] in (owed | dead, {"dde_unfinished_by_event"}), plans
+    # The pause table is read fourth and last, which is what keeps the three
+    # above describing the delivery table's queries.
+    assert len(plans) == 4, plans
+    assert LanePauseRecord._meta.db_table in plans[3], plans
 
 
 def test_a_receiver_with_only_scheduled_work_sorts_after_one_that_is_behind(
@@ -378,3 +395,223 @@ def test_a_receiver_with_only_scheduled_work_sorts_after_one_that_is_behind(
         ("testapp.with_context", 1, 0),
         ("testapp.durable_receiver", 0, 1),
     ]
+
+
+def test_a_consumer_constructing_outbox_health_positionally_keeps_working() -> None:
+    """``lanes`` is defaulted and comes after ``scheduled``, so a call written
+    before it existed still lands each value in the field it meant."""
+    health = OutboxHealth(0, 0, 0, None, 0, (), 5)
+    assert health.scheduled == 5
+    assert health.lanes == ()
+
+
+# Per-lane health. The test app's receivers all sit in the default lane, so
+# these declare two lanes of their own, each with one receiver on an event
+# nothing else listens to. The names are chosen against the alphabet: the lane
+# that sorts last, ``zulu``, is the one made worst, so an ordering that fell
+# back to the registry's sorted lane names would read differently.
+
+
+@dataclass(frozen=True, slots=True)
+class Mike:
+    value: int
+
+
+@dataclass(frozen=True, slots=True)
+class Zulu:
+    value: int
+
+
+def _lane_receiver(lane: str, event_class: type) -> RegisteredReceiver:
+    return RegisteredReceiver(
+        key=f"tests.{lane}",
+        event_class=event_class,
+        func=lambda evt: None,
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=5,
+        eager=False,
+        site="health",
+        lane=lane,
+    )
+
+
+@pytest.fixture
+def lanes() -> Iterator[None]:
+    with (
+        event_registered(Mike, "tests.Mike"),
+        event_registered(Zulu, "tests.Zulu"),
+        receiver_registered(_lane_receiver("mike", Mike)),
+        receiver_registered(_lane_receiver("zulu", Zulu)),
+    ):
+        yield
+
+
+def _fire(*events: Any) -> None:
+    with transaction.atomic():
+        for event in events:
+            fire(event)
+
+
+def _counts(health: OutboxHealth) -> list[tuple[Any, ...]]:
+    """Each lane as (lane, owed, scheduled, claimed, dead), in the order given."""
+    return [(b.lane, b.owed, b.scheduled, b.claimed, b.dead) for b in health.lanes]
+
+
+def _pause(lane: str, worker_id: str, until: datetime) -> None:
+    LanePauseRecord.objects.create(
+        lane=lane, worker_id=worker_id, paused_at=until - timedelta(hours=3), until=until
+    )
+
+
+def test_an_empty_outbox_still_lists_the_default_lane() -> None:
+    """A lane is listed whether or not anything is owed in it, so a dashboard
+    has a series per lane rather than one that vanishes when it drains."""
+    (default,) = outbox_health().lanes
+    assert (default.lane, default.owed, default.scheduled, default.claimed, default.dead) == (
+        "default",
+        0,
+        0,
+        0,
+        0,
+    )
+    assert (default.oldest_owed_at, default.pauses) == (None, ())
+
+
+def test_every_declared_lane_is_listed_with_zeros(lanes: None) -> None:
+    assert _counts(outbox_health()) == [
+        ("default", 0, 0, 0, 0),
+        ("mike", 0, 0, 0, 0),
+        ("zulu", 0, 0, 0, 0),
+    ]
+
+
+def test_a_lane_sums_its_receivers_and_carries_the_oldest_of_them(
+    order: OrderPlaced, record: list[str], lanes: None
+) -> None:
+    """Both test-app receivers are in the default lane. The older owed row is
+    made the one of the receiver that ranks *second*, so a rollup taking the
+    first receiver's age rather than the minimum reads the wrong one."""
+    _fire(order, replace(order, order_id=8))
+    now = django_timezone.now()
+    stuck = now - timedelta(hours=5)
+    later = now + timedelta(days=1)
+    durable = DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").order_by("pk")
+    context = DeliveryRecord.objects.filter(receiver_key="testapp.with_context").order_by("pk")
+    DeliveryRecord.objects.filter(pk=durable[0].pk).update(due_at=stuck)
+    DeliveryRecord.objects.filter(pk=durable[1].pk).update(due_at=later, available_at=later)
+    DeliveryRecord.objects.filter(pk=context[0].pk).update(
+        status=DeliveryStatus.CLAIMED, claimed_by="w1"
+    )
+    DeliveryRecord.objects.filter(pk=context[1].pk).update(status=DeliveryStatus.DEAD)
+
+    health = outbox_health(now=now)
+
+    assert [r.key for r in health.receivers] == [
+        "testapp.with_context",
+        "testapp.durable_receiver",
+    ]
+    assert _counts(health)[0] == ("default", 2, 1, 1, 1)
+    assert health.lanes[0].oldest_owed_at == stuck
+    # Nothing is lost or counted twice in the rollup.
+    assert sum(b.owed for b in health.lanes) == health.owed
+    assert sum(b.scheduled for b in health.lanes) == health.scheduled
+    assert sum(b.claimed for b in health.lanes) == health.claimed
+    assert sum(b.dead for b in health.lanes) == health.dead
+
+
+def test_a_named_lane_counts_its_own_receivers_and_no_others(
+    order: OrderPlaced, record: list[str], lanes: None
+) -> None:
+    _fire(order, Zulu(value=1), Zulu(value=2), Mike(value=1))
+    stuck = django_timezone.now() - timedelta(hours=2)
+    DeliveryRecord.objects.filter(receiver_key="tests.zulu").update(due_at=stuck)
+
+    health = outbox_health()
+
+    by_lane = {b.lane: b for b in health.lanes}
+    assert (by_lane["zulu"].owed, by_lane["zulu"].oldest_owed_at) == (2, stuck)
+    assert by_lane["mike"].owed == 1
+    assert by_lane["default"].owed == 2
+
+
+def test_a_deleted_receivers_rows_are_counted_in_the_default_lane(
+    order: OrderPlaced, record: list[str], lanes: None
+) -> None:
+    """A key no receiver holds drains through the default lane, so that is
+    where its backlog shows - not in the lane it was declared in, and not
+    nowhere. With the receiver gone ``zulu`` is declared by nobody, so it is
+    not listed either."""
+    _fire(Zulu(value=1), Zulu(value=2))
+    with receiver_deleted("tests.zulu"):
+        health = outbox_health()
+    assert _counts(health) == [("default", 2, 0, 0, 0), ("mike", 0, 0, 0, 0)]
+
+
+def test_lanes_are_ranked_by_owed_then_dead_then_name(lanes: None) -> None:
+    """The receivers' ranking. ``zulu`` is owed the most and sorts last by
+    name; ``mike`` owes nothing but has a dead row, so it comes before the
+    default lane, which sorts before it by name; and ``alpha``, a paused lane
+    nobody declares, ties the default lane on both counts and is put first by
+    its name alone."""
+    now = django_timezone.now()
+    _fire(Zulu(value=1), Zulu(value=2), Mike(value=1))
+    DeliveryRecord.objects.filter(receiver_key="tests.mike").update(status=DeliveryStatus.DEAD)
+    _pause("alpha", "host:1", now + timedelta(hours=1))
+
+    assert _counts(outbox_health(now=now)) == [
+        ("zulu", 2, 0, 0, 0),
+        ("mike", 0, 0, 0, 1),
+        ("alpha", 0, 0, 0, 0),
+        ("default", 0, 0, 0, 0),
+    ]
+
+
+def test_a_lanes_unexpired_pauses_are_shown_and_expired_ones_are_not(lanes: None) -> None:
+    """A pause ends at its ``until`` exactly, as the relay reads it, so a row
+    whose ``until`` is now is over. Two relays pausing one lane are two
+    pauses, ordered by worker, which here is not the order of their ends."""
+    now = django_timezone.now()
+    _pause("zulu", "host:2", now + timedelta(hours=1))
+    _pause("zulu", "host:1", now + timedelta(hours=2))
+    _pause("mike", "host:3", now)
+
+    by_lane = {b.lane: b for b in outbox_health(now=now).lanes}
+
+    assert [(p.worker_id, p.until) for p in by_lane["zulu"].pauses] == [
+        ("host:1", now + timedelta(hours=2)),
+        ("host:2", now + timedelta(hours=1)),
+    ]
+    assert by_lane["zulu"].pauses[0].paused_at == now - timedelta(hours=1)
+    assert by_lane["mike"].pauses == ()
+    assert by_lane["default"].pauses == ()
+
+
+def test_a_paused_lane_nobody_declares_is_listed_with_zero_counts() -> None:
+    """A lane renamed while a relay of the old name still runs: its pause is
+    real and an operator needs to see it, though no receiver is in it any
+    more. Once the pause has passed, the lane is gone."""
+    now = django_timezone.now()
+    _pause("renamed", "host:1", now + timedelta(minutes=5))
+    _pause("retired", "host:2", now - timedelta(seconds=1))
+
+    health = outbox_health(now=now)
+
+    assert _counts(health) == [("default", 0, 0, 0, 0), ("renamed", 0, 0, 0, 0)]
+    assert health.lanes[1].oldest_owed_at is None
+    assert [p.worker_id for p in health.lanes[1].pauses] == ["host:1"]
+
+
+def test_the_pause_table_is_read_last_and_the_rollup_costs_no_query() -> None:
+    """Four queries: the three over the delivery table, and the pause table
+    after them. The lane counts come from the per-receiver split already
+    read, never a query of their own; and the order is what keeps
+    ``test_no_query_outbox_health_sends_scans_the_delivery_table``, which
+    reads the first three plans, about the delivery table."""
+    pause_table = LanePauseRecord._meta.db_table
+    with CaptureQueriesContext(connection) as captured:
+        outbox_health()
+    statements = [query["sql"] for query in captured.captured_queries]
+    assert len(statements) == 4, statements
+    assert pause_table in statements[3]
+    assert not any(pause_table in sql for sql in statements[:3])

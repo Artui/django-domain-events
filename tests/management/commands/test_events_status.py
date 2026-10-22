@@ -9,11 +9,13 @@ from io import StringIO
 import pytest
 from django.core.management import call_command
 from django.db import transaction
+from django.utils import timezone as django_timezone
 
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.models.lane_pause_record import LanePauseRecord
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.testapp.events import OrderPlaced
 
@@ -145,3 +147,83 @@ def test_cancelled_work_is_neither_owed_nor_dead(order: OrderPlaced, record: lis
     parsed = json.loads(_run("--format", "json"))
     assert (parsed["owed"], parsed["dead"], parsed["scheduled"]) == (0, 0, 0)
     assert parsed["receivers"] == []
+
+
+def _pause(lane: str, worker_id: str, left: timedelta) -> None:
+    now = django_timezone.now()
+    LanePauseRecord.objects.create(lane=lane, worker_id=worker_id, paused_at=now, until=now + left)
+
+
+def test_json_carries_each_lane_and_how_long_its_pauses_have_left(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """A lane renamed while a relay of the old name still runs is listed with
+    its pause and nothing owed. ``paused_for_seconds`` is the time left, which
+    is what an operator deciding whether to wait it out needs."""
+    with transaction.atomic():
+        fire(order)
+    EventRecord.objects.update(recorded_at=datetime.now(timezone.utc) - timedelta(hours=2))
+    DeliveryRecord.objects.filter(receiver_key="testapp.with_context").update(
+        status=DeliveryStatus.CLAIMED, claimed_by="w1"
+    )
+    _pause("renamed", "host:1", timedelta(hours=1))
+    _pause("renamed", "host:2", timedelta(minutes=10))
+
+    lanes = json.loads(_run("--format", "json"))["lanes"]
+
+    assert [lane["lane"] for lane in lanes] == ["default", "renamed"]
+    default, renamed = lanes
+    assert {k: default[k] for k in ("owed", "scheduled", "claimed", "dead", "paused")} == {
+        "owed": 2,
+        "scheduled": 0,
+        "claimed": 1,
+        "dead": 0,
+        "paused": [],
+    }
+    assert 7200 <= default["oldest_owed_age_seconds"] < 7260
+    assert (renamed["owed"], renamed["oldest_owed_age_seconds"]) == (0, None)
+    assert [p["worker_id"] for p in renamed["paused"]] == ["host:1", "host:2"]
+    first, second = (p["paused_for_seconds"] for p in renamed["paused"])
+    assert 3540 < first <= 3600
+    assert 540 < second <= 600
+
+
+def test_json_lists_the_default_lane_on_an_empty_outbox() -> None:
+    assert json.loads(_run("--format", "json"))["lanes"] == [
+        {
+            "lane": "default",
+            "owed": 0,
+            "scheduled": 0,
+            "claimed": 0,
+            "dead": 0,
+            "oldest_owed_age_seconds": None,
+            "paused": [],
+        }
+    ]
+
+
+def test_the_text_lists_each_lane_and_its_pauses_above_the_receivers(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    with transaction.atomic():
+        fire(order)
+    _pause("default", "host:1", timedelta(hours=1))
+
+    output = _run()
+
+    lane_line = "  default\towed=2\tdead=0\tscheduled=0\tclaimed=0\toldest="
+    assert "\nlanes\n" + lane_line in output
+    assert "\n    paused by host:1 for 3" in output
+    assert output.index(lane_line) < output.index("\nreceivers\n")
+    assert output.index("\nreceivers\n") < output.index("testapp.durable_receiver\towed=")
+
+
+def test_the_text_lists_the_lanes_of_a_drained_outbox_too(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    with transaction.atomic():
+        fire(order)
+    drain_outbox()
+    output = _run()
+    assert "\nlanes\n  default\towed=0\tdead=0\tscheduled=0\tclaimed=0\toldest=-\n" in output
+    assert output.index("\nlanes\n") < output.index("nothing owed and nothing dead")
