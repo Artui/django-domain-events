@@ -113,3 +113,33 @@ def test_it_refuses_something_that_is_not_a_class() -> None:
     with pytest.raises(TypeError, match="event classes"):  # noqa: SIM117 - the nesting is what this asserts
         with suppressed("testapp.OrderPlaced", reason="oops"):
             pass
+
+
+# Read off the column, as suppressed() reads it, so a widened column moves the
+# refusal with it.
+_REASON_LIMIT = EventRecord._meta.get_field("suppressed_reason").max_length
+
+
+def test_a_reason_of_exactly_the_column_width_is_accepted_and_recorded(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Holds the comparison: ``>=`` instead of ``>`` refuses this reason. Passes on
+    a tree without the check, as it must; it is here for the mutant."""
+    assert _REASON_LIMIT == 255
+    with transaction.atomic(), suppressed(OrderPlaced, reason="r" * _REASON_LIMIT):
+        fire(order)
+    assert len(EventRecord.objects.get().suppressed_reason) == _REASON_LIMIT
+
+
+def test_a_reason_one_over_the_column_width_is_refused_on_entry() -> None:
+    reason = "r" * (_REASON_LIMIT + 1)
+    with pytest.raises(ValueError) as caught, suppressed(OrderPlaced, reason=reason):
+        pytest.fail("the block must not be entered")
+    message = str(caught.value)
+    assert "reason" in message
+    assert f"{_REASON_LIMIT + 1} characters" in message
+    assert f"limit is {_REASON_LIMIT}" in message
+    # The reason is the caller's, so it is not echoed.
+    assert reason[:20] not in message
+    # Sized to the width check, not the emptiness one.
+    assert "needs a reason" not in message
