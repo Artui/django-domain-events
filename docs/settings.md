@@ -17,7 +17,7 @@ are changing.
 | --- | --- | --- |
 | `CODEC` | `...DataclassCodec` | Encodes and decodes payloads. See [codecs](declaring.md#codecs). |
 | `WARN_OUTSIDE_ATOMIC` | `True` | Warn when `fire()` is called with no transaction open. |
-| `BATCH_SIZE` | `50` | Rows per claim and per requeue chunk. A relay may override it for its claims. |
+| `BATCH_SIZE` | `50` | Rows per claim and per requeue chunk. A relay may override it for its claims, and per lane. |
 | `LEASE_SECONDS` | `300` | The lease a delivery needs where its receiver declares none; a claim stamps its lane's lease x 1.1 ([operations](operations.md#the-lease-a-claim-stamps)). |
 | `POLL_SECONDS` | `1.0` | Relay poll interval, and the floor under `LISTEN`/`NOTIFY`. |
 | `WAKE` | `"notify"` | `"notify"` or `"poll"`. `"poll"` sends no `NOTIFY` and the relay does not `LISTEN`; latency is then `POLL_SECONDS`. |
@@ -105,6 +105,9 @@ says; see [Behind pgbouncer](operations.md#behind-pgbouncer).
 A value other than `"notify"` or `"poll"` fails the system check `E006`, rather
 than quietly meaning "poll".
 
+Listening takes psycopg 3. Under psycopg2, `"notify"` behaves as `"poll"`, and
+the system check `W008` warns until `WAKE` says `"poll"`.
+
 ### `NOTIFY_COALESCE_SECONDS`
 
 A process sends at most one `NOTIFY` per this interval, per database. Skipping
@@ -129,6 +132,14 @@ knob for a [lane](operations.md#lanes-a-relay-per-kind-of-work) of slow
 receivers, which wants a batch it can work through inside the lease its claim
 stamps ([operations](operations.md#the-lease-a-claim-stamps)) while pruning
 keeps its larger statements.
+
+A relay serving several lanes can size each one's claims apart:
+`deliver_events --lane default --lane mail --lane-batch-size mail=5`, or
+`run_relay(lane=["default", "mail"], lane_batch_sizes={"mail": 5})`. A lane it
+names takes that size, and every other lane `--batch-size`, or `BATCH_SIZE`
+where that is not given. In a shared relay that size is what one turn of the
+lane costs the others
+([one relay, several lanes](operations.md#one-relay-several-lanes)).
 
 ### `PRUNE_BATCH_ROWS`
 

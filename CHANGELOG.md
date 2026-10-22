@@ -7,6 +7,129 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-10-22
+
+### Added
+- One relay serves a set of lanes. `run_relay(lane=...)` takes a collection of
+  lane names as well as one, and `deliver_events --lane` repeats:
+  `--lane default --lane mail`. The relay visits its lanes in sorted order, one
+  claim each, and claims each lane's batch immediately before delivering it,
+  under that lane's own lease and batch size, so no batch burns its lease while
+  another lane delivers. A lane paused after a deferral is skipped without a
+  query while the others go on. One rotation is one pass, so `passes=` counts
+  rotations, and a pass is idle - it waits, and may prune - only when every
+  lane in it was empty or paused. Between two claims of one lane the relay
+  delivers at most one batch of each other lane it serves, so a burst in one
+  lane delays another by what one of its batches takes, never by the burst. A
+  lane named twice is served once; an empty collection, a member that is not a
+  `str` and a lane no receiver is declared in are refused at start. A single
+  `lane="mail"` or `--lane mail` behaves exactly as before. Measured on
+  Postgres 17, a claim of a quiet lane does not walk a burst in another: 0.07
+  ms beside 15,000 owed rows, 0.78 ms with 400,000 settled rows besides, from a
+  single run on synthetic data. No index was added.
+- `lane_batch_sizes` on `run_relay` and `deliver_pending`, and
+  `deliver_events --lane-batch-size LANE=N`, repeatable: the claim size of one
+  served lane in place of `batch_size` or `--batch-size`. In a shared relay it
+  is the lever on how long the other lanes wait. The command splits the value
+  at its last `=`, since a lane name may contain one. A size below one and a
+  lane the call does not serve are refused at start, from Python and the
+  command line alike; the command also refuses a value with no `=`, an empty
+  lane, a size that is not an integer, and a lane sized twice.
+- `deliver_pending(lane=...)` takes the same collection, and visits the lanes in
+  the same rotation until a whole rotation claims nothing.
+- `OutboxHealth.lanes`: one `LaneBacklog` per lane - `lane`, `owed`,
+  `scheduled`, `claimed`, `dead`, `oldest_owed_at` and `pauses`, a `LanePause`
+  (`worker_id`, `paused_at`, `until`) per relay holding the lane paused. Every
+  lane a relay can serve is listed, zeros included, so a dashboard keeps one
+  series per lane, and so is a lane no receiver declares while a relay still
+  holds it paused; worst first, ranked as `receivers` is. The rows of a deleted
+  receiver count in the default lane, where they drain. It is last and
+  defaulted, so constructing an `OutboxHealth` by keyword is unchanged.
+  `LaneBacklog` and `LanePause` are exported from the package root.
+  `events_status` prints a line per lane with a line under it per pause, and
+  its JSON carries `"lanes"`, each with `oldest_owed_age_seconds` and
+  `"paused"`, a list of `worker_id` and `paused_for_seconds`.
+- `LanePauseRecord` and migration `0009_lanepauserecord`: the relay records
+  each pause it takes - the lane, its `worker_id`, when and until when - so
+  operators can see it. It deletes its record when the pause ends and when it
+  returns, and every record written deletes every record whose pause has
+  passed, whoever wrote it. A relay that died leaves its record behind: it
+  stops showing once its `until` passes, and goes at the next deferral any
+  relay records. No relay reads the table: a pause still governs only the relay that
+  heard the deferral. A relay that never defers never touches it, and a write
+  that fails is logged and survived. `deliver_pending()` and `drain_outbox()`
+  write none. Run `migrate` before deploying: `outbox_health()` and
+  `events_status` read the table, and raise until it exists, where the relay's
+  own writes to it are logged and survived.
+- psycopg2 is supported. Under it the relay polls rather than listening, and
+  `fire()` sends no `NOTIFY`, as under `WAKE = "poll"`: the wait blocks in
+  psycopg 3's `notifies()`, which psycopg2 does not have. System check `W008`
+  warns when `WAKE` is `"notify"` on Postgres and Django loaded psycopg2; set
+  `WAKE = "poll"` to say so, or install psycopg 3 to have the relay woken. CI
+  runs the suite on Postgres under psycopg2 with psycopg 3 uninstalled.
+
+### Changed
+- `lane=None` - `run_relay(lane=None)`, and `deliver_pending()` and
+  `drain_outbox()`, whose default it is - claims lane by lane in the rotation
+  above, each claim under that lane's own lease, where it was one claim across
+  every lane in `available_at` order under `LEASE_SECONDS` times 1.1 whenever
+  the lanes' leases differed. In a project with named lanes the order across
+  lanes is now the rotation, and an idle pass sends one claim query per
+  declared lane rather than one. In a project that names no lane there is only
+  the default lane, and the queries and their count are unchanged.
+- `deliver_pending(limit=)`, `drain_outbox(limit=)` and
+  `deliver_events --once --limit` cap the call's total and share it between
+  the lanes with work, where the limit used to be one claim of that many rows.
+  Each lane's claim takes what is left of the limit divided by the lanes still
+  open in the rotation, rounded up; a lane that claims less than its share is
+  drained for the rest of the call, and the others take what it left. So a lane
+  with work gets at least the limit divided by the number of lanes, rounded
+  down, and a burst in one lane cannot spend every cron run. A limit below the
+  number of lanes gives one row each to the first lanes in sorted order. Rows
+  handed back after a deferral do not count against it. With one lane this is
+  one claim of the whole limit, as before.
+- The refusal of `limit` with `batch_size` is reworded, from "limit=N is one
+  claim of that many rows" to "limit=N sizes each claim as its lane's share of
+  it", and `limit` with `lane_batch_sizes` is refused the same way. Code
+  matching the old message needs the new one.
+- `outbox_health()` sends four queries where it sent three: the fourth reads
+  the pause records, after the three over the delivery table. A test counting
+  its queries sees one more.
+- `events_status` text output gains a `lanes` block between the totals and the
+  per-receiver lines, which now sit under a `receivers` heading. Anything
+  parsing the text by position needs updating; the JSON only gains a key.
+- The 255-character refusals of a receiver key and an event name moved from
+  `@receiver` and `@event` into `registry.register_receiver` and
+  `registry.register_event`, so a `RegisteredReceiver` or `RegisteredEvent`
+  registered directly is refused too, with the same message. A declaration
+  through the decorators is refused exactly as before.
+- `fire()` refuses a `dedupe_key` longer than 255 characters with `ValueError`
+  before writing anything, and `suppressed()` a `reason` longer than 255 as the
+  block is entered: 255 is the width of the column each is stored in. This is
+  a break on SQLite, which stored either whole, so a project passing one
+  there now fails at the call. On Postgres both already failed, with
+  `DataError` from `fire()`'s insert inside the caller's transaction, and now
+  fail earlier, with a message naming the length and the limit. A `reason`
+  given with `record=False`, which is never stored, is refused all the same, on
+  every backend. The actor's key
+  and label keep their truncation at capture, which already holds them to
+  their columns.
+
+### Fixed
+- Under psycopg2 an idle relay spun. Every idle wait raised `TypeError` from
+  psycopg2's `notifies`, which is a list rather than psycopg 3's generator, and
+  the relay logged it and claimed again at once: a claim query and a traceback
+  per loop for as long as it was idle, under `WAKE = "notify"`, the default on
+  Postgres. It now polls under psycopg2 (see Added).
+- Whatever the driver, a wait that raised was followed by no sleep, so a wait
+  failing at once - a server refusing every connection - turned an idle relay
+  into a loop of claims. The relay now sleeps `POLL_SECONDS` in its place.
+- Under psycopg2, `replay_events` counted every target that already had a row
+  as added, and sent a `NOTIFY` for a replay that changed nothing: psycopg2
+  reads the digest column back as a `memoryview`, which compared unequal to
+  the digest computed. The rows it wrote were right. It reads the digests back
+  as `bytes` now.
+
 ## [0.12.0] — 2026-10-12
 
 ### Fixed
@@ -906,7 +1029,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/Artui/django-domain-events/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/Artui/django-domain-events/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/Artui/django-domain-events/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/Artui/django-domain-events/compare/v0.11.0...v0.11.1

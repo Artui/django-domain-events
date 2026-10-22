@@ -14,18 +14,16 @@ from contextlib import contextmanager
 
 import pytest
 
-import django_domain_events.declaration.receiver as receiver_module
 from django_domain_events.declaration.receiver import receiver
 from django_domain_events.declaration.registry import registry
 from django_domain_events.models.delivery_record import DeliveryRecord
-from django_domain_events.models.receiver_last_success import ReceiverLastSuccess
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.utils import label_for
 from tests.testapp.events import OrderPlaced
 
 # Read from the models rather than from the constant under test, so these tests
-# cannot die at import on a tree without the constant, and so the constant is
-# pinned to the columns it protects without being imported.
+# cannot die at import on a tree without the constant; ``test_registry`` holds
+# the constant to the columns.
 LIMIT = DeliveryRecord._meta.get_field("receiver_key").max_length
 
 
@@ -56,20 +54,6 @@ def _derived_function(length: int) -> Callable[[OrderPlaced], None]:
     prefix = label_for(fn.__module__, "")
     fn.__name__ = "x" * (length - len(prefix))
     return fn
-
-
-def test_the_limit_is_the_width_of_both_columns_that_store_the_key() -> None:
-    """Pins the constant the decorator checks against to the columns it protects.
-
-    The decorator cannot read the field: it runs while apps are still loading,
-    and importing a model there raises ``AppRegistryNotReady``. So it carries
-    the number, and this holds the number to the columns.
-    """
-    assert LIMIT == 255
-    assert ReceiverLastSuccess._meta.get_field("receiver_key").max_length == LIMIT
-    # Read off the module rather than imported by name, so a tree without the
-    # constant fails this one test instead of failing the whole file at collection.
-    assert receiver_module._MAX_KEY_LENGTH == LIMIT
 
 
 def test_a_key_of_exactly_the_limit_is_accepted() -> None:

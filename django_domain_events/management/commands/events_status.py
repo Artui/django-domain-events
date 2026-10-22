@@ -30,6 +30,24 @@ class Command(BaseCommand):
                         "dead": health.dead,
                         "lapsed_leases": health.lapsed_leases,
                         "oldest_owed_age_seconds": age,
+                        "lanes": [
+                            {
+                                "lane": b.lane,
+                                "owed": b.owed,
+                                "scheduled": b.scheduled,
+                                "claimed": b.claimed,
+                                "dead": b.dead,
+                                "oldest_owed_age_seconds": _age(b.oldest_owed_at),
+                                "paused": [
+                                    {
+                                        "worker_id": p.worker_id,
+                                        "paused_for_seconds": _left(p.until),
+                                    }
+                                    for p in b.pauses
+                                ],
+                            }
+                            for b in health.lanes
+                        ],
                         "receivers": [
                             {
                                 "key": r.key,
@@ -53,10 +71,24 @@ class Command(BaseCommand):
         self.stdout.write(f"dead          {health.dead}")
         self.stdout.write(f"lapsed leases {health.lapsed_leases}")
         self.stdout.write(f"oldest owed   {'-' if age is None else f'{age}s ago'}")
+        # The lanes come first because a lane is what an operator scales and
+        # pauses; the receivers below say which reaction inside it is behind.
+        self.stdout.write("")
+        self.stdout.write("lanes")
+        for lane in health.lanes:
+            oldest = _age(lane.oldest_owed_at)
+            self.stdout.write(
+                f"  {lane.lane}\towed={lane.owed}\tdead={lane.dead}"
+                f"\tscheduled={lane.scheduled}\tclaimed={lane.claimed}"
+                f"\toldest={'-' if oldest is None else f'{oldest}s'}"
+            )
+            for pause in lane.pauses:
+                self.stdout.write(f"    paused by {pause.worker_id} for {_left(pause.until)}s more")
+        self.stdout.write("")
         if not health.receivers:
             self.stdout.write("nothing owed and nothing dead")
             return
-        self.stdout.write("")
+        self.stdout.write("receivers")
         for entry in health.receivers:
             oldest = _age(entry.oldest_owed_at)
             self.stdout.write(
@@ -75,3 +107,12 @@ def _age(moment: datetime | None) -> int | None:
     if moment is None:
         return None
     return int((timezone.now() - moment).total_seconds())
+
+
+def _left(moment: datetime) -> int:
+    """Seconds until a timestamp: how long a pause has to run.
+
+    The time left rather than the end, for the reason ``_age`` gives an age:
+    a threshold or an operator deciding whether to wait reads a duration.
+    """
+    return int((moment - timezone.now()).total_seconds())

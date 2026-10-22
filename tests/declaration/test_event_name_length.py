@@ -14,15 +14,14 @@ from dataclasses import make_dataclass
 
 import pytest
 
-import django_domain_events.declaration.event as event_module
 from django_domain_events.declaration.event import event
 from django_domain_events.declaration.registry import registry
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.utils import label_for
 
 # Read from the model rather than from the constant under test, so these tests
-# cannot die at import on a tree without the constant, and so the constant is
-# pinned to the column it protects without being imported.
+# cannot die at import on a tree without the constant; ``test_registry`` holds
+# the constant to the column.
 LIMIT = EventRecord._meta.get_field("name").max_length
 
 
@@ -58,19 +57,6 @@ def _derived_class(length: int) -> type:
 
 def _snapshot() -> tuple[dict[str, object], dict[type, object]]:
     return dict(registry._events_by_name), dict(registry._events_by_class)
-
-
-def test_the_limit_is_the_width_of_the_column_that_stores_the_name() -> None:
-    """Pins the constant the decorator checks against to the column it protects.
-
-    The decorator cannot read the field: it runs while apps are still loading,
-    and importing a model there raises ``AppRegistryNotReady``. So it carries
-    the number, and this holds the number to the column.
-    """
-    assert LIMIT == 255
-    # Read off the module rather than imported by name, so a tree without the
-    # constant fails this one test instead of failing the whole file at collection.
-    assert event_module._MAX_NAME_LENGTH == LIMIT
 
 
 def test_a_name_of_exactly_the_limit_is_accepted() -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from django_domain_events.types.lane_backlog import LaneBacklog
 from django_domain_events.types.receiver_backlog import ReceiverBacklog
 
 
@@ -56,3 +57,11 @@ class OutboxHealth:
     receiver declared with ``due=`` that are waiting for it. Not owed and not
     aged, so a backlog alert does not fire for work that is on time. Defaulted
     and last, so adding it does not break a consumer constructing one."""
+
+    lanes: tuple[LaneBacklog, ...] = ()
+    """The same backlog split by lane, with each lane's pauses. Every lane a
+    relay can serve is listed, the default and each declared one, with zeros
+    where nothing is owed, so a dashboard keeps one series per lane; so is a
+    lane nobody declares any more while a relay still holds it paused. Worst
+    backlog first, ranked as ``receivers`` is. Defaulted and last for the
+    reason ``scheduled`` is."""

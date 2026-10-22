@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+import math
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Mapping
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -19,7 +20,11 @@ from django_domain_events.delivery.hand_back import hand_back
 from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.permanent_failure import PermanentFailure
 from django_domain_events.delivery.retry_after import RetryAfter
-from django_domain_events.delivery.utils import OnDeferral, claim_size, partition_by_lane
+from django_domain_events.delivery.utils import (
+    OnDeferral,
+    lane_claim_sizes,
+    served_lanes,
+)
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.scope.causation import caused_by
 from django_domain_events.settings import get_around_delivery, get_task_backend, setting
@@ -994,8 +999,9 @@ def deliver_pending(
     *,
     worker_id: str = "deliver_pending",
     ignore_backoff: bool = False,
-    lane: str | None = None,
+    lane: str | Collection[str] | None = None,
     batch_size: int | None = None,
+    lane_batch_sizes: Mapping[str, int] | None = None,
     now: datetime | None = None,
 ) -> dict[DeliveryStatus, int]:
     """Claim and deliver what is owed, and report the outcome.
@@ -1007,22 +1013,60 @@ def deliver_pending(
     concurrent passes there can both take the same row.
 
     ``lane`` delivers only that lane's rows, as ``run_relay(lane=...)`` claims
-    them; ``"default"`` is every row no named lane takes. None, the default
-    here, is every lane, which is what this function did before lanes existed
-    and what ``drain_outbox`` promises. ``deliver_events --once`` passes the
-    default lane unless told otherwise, as the relay does.
+    them; ``"default"`` is every row no named lane takes. A ``str`` is one
+    lane, and a collection is served as its distinct members; an empty one, a
+    member that is not a ``str`` and a member no receiver is declared in are
+    refused, as the relay refuses them. None, the default here, is every lane
+    the registry declares, which is what this function did before lanes
+    existed and what ``drain_outbox`` promises. ``deliver_events --once``
+    passes the default lane unless told otherwise, as the relay does.
 
-    ``batch_size`` sizes each claim in place of ``BATCH_SIZE``. It cannot be
-    combined with ``limit``, which is one claim of exactly that many rows under
-    one lease: accepting both would silently ignore the batch, and claiming a
-    hundred rows at once is what a small batch is asked for to prevent
-    (``test_a_limit_and_a_batch_size_together_are_refused``).
+    The lanes are visited as the relay visits them: in sorted order, one claim
+    each, each claimed under its own lease immediately before it is delivered,
+    and again in turn until a whole rotation claims nothing
+    (``test_a_set_is_served_once_per_lane_in_sorted_order_until_a_rotation_claims_nothing``).
+    So a burst in one lane delays another by one of its batches rather than by
+    the burst (``test_a_burst_in_one_lane_does_not_hold_back_another_under_every_lane``),
+    and ``None`` delivers across lanes in that rotation rather than in one
+    ``available_at`` order. In a project that names no lane, None is the
+    default lane alone and sends what it always sent
+    (``test_with_no_named_lanes_every_lane_sends_what_it_always_sent``).
+
+    ``batch_size`` sizes each claim in place of ``BATCH_SIZE``, and
+    ``lane_batch_sizes`` sizes the claims of the lanes it names in place of
+    ``batch_size``; a size below one, or a lane in it this call does not
+    serve, is refused.
+
+    ``limit`` caps the call's total and is shared between the lanes with work,
+    so a cron running ``--once --limit 100`` over a lane with a burst and a
+    lane without one does not spend every run on the burst. Each lane's claim
+    takes its share of what is left: what is left divided by the lanes still
+    open in this rotation, itself included, rounded up
+    (``test_a_limit_is_shared_between_the_lanes_with_work``). A lane that
+    claims fewer than its share is drained, and is not claimed again in the
+    call; what it did not take falls to the lanes after it, and the call
+    rotates again while some of the limit is left and some lane is open
+    (``test_a_drained_lanes_share_goes_to_the_lanes_with_work``). So a lane
+    with work gets at least ``limit // n`` of a call serving ``n`` lanes, and
+    with one lane this is one claim of ``limit`` rows. A limit below the
+    number of lanes gives one row each to the first lanes in sorted order
+    (``test_a_limit_below_the_number_of_lanes_serves_the_first_lanes``). Rows
+    handed back on a deferral do not count against it, since they were not
+    delivered
+    (``test_rows_handed_back_on_a_deferral_do_not_count_against_the_limit``).
+
+    The sizes cannot be combined with ``limit``, which sizes each claim as its
+    lane's share of it: accepting both would silently ignore the sizes
+    (``test_a_limit_and_a_batch_size_together_are_refused``,
+    ``test_a_limit_with_lane_sizes_is_refused``).
 
     A receiver deferring with ``RetryAfter(counts=False)`` sets its lane aside
-    for the rest of the call: the lane's unstarted rows in the batch are
-    handed back rather than attempted, and later claims leave the lane out,
-    while every other lane goes on being delivered
+    for the rest of the call: the unstarted rest of the batch, every row of
+    which is in that lane, is handed back rather than attempted, and the lane
+    is not claimed again, while every other lane goes on being delivered
     (``test_a_deferral_sets_its_lane_aside_and_the_pass_delivers_the_rest``).
+    Unlike the relay's pause, this one is held for the call alone and writes
+    no ``LanePauseRecord``.
 
     ``now`` is the moment every claim of the call is made at, in place of the
     clock: what is due, which backoff has run out and which lease has lapsed
@@ -1031,22 +1075,35 @@ def deliver_pending(
     itself runs and is recorded on the real clock, since a receiver's
     acknowledgement is a fact about when it ran.
     """
+    # Two guards, each one branch arc over two conditions, so each names the
+    # test that fails without either of them: each refusal, and each value
+    # accepted alone, are asserted in
+    # test_a_limit_and_a_batch_size_together_are_refused and
+    # test_a_limit_with_lane_sizes_is_refused.
     if limit is not None and batch_size is not None:
         raise ValueError(
-            f"limit={limit} is one claim of that many rows, so batch_size={batch_size} "
-            f"would be ignored. Pass one or the other."
+            f"limit={limit} sizes each claim as its lane's share of it, so "
+            f"batch_size={batch_size} would be ignored. Pass one or the other."
         )
-    registry.require_lane(lane)
-    batch_size = claim_size(batch_size)
+    if limit is not None and lane_batch_sizes is not None:
+        raise ValueError(
+            f"limit={limit} sizes each claim as its lane's share of it, so "
+            f"lane_batch_sizes would be ignored. Pass one or the other."
+        )
+    lanes = served_lanes(lane)
+    size_of = lane_claim_sizes(lanes, batch_size=batch_size, lane_batch_sizes=lane_batch_sizes)
 
     counts: dict[DeliveryStatus, int] = {}
-    # Lanes set aside for the rest of this call by a deferral that did not
-    # count. For the rest of the call rather than for the requested delay: a
-    # pass has no clock to wait on, and with the backoff ignored - as
+    # Lanes this call claims no more. A lane set aside by a deferral that did
+    # not count, for the rest of the call rather than for the requested delay:
+    # a pass has no clock to wait on, and with the backoff ignored - as
     # drain_outbox ignores it - nothing else would stop it claiming the
-    # deferred row again, forever (test_a_drain_meeting_a_deferral_ends).
-    paused: set[str] = set()
+    # deferred row again, forever (test_a_drain_meeting_a_deferral_ends). And,
+    # under a limit, a lane found drained, whose unspent share the others take.
+    closed: set[str] = set()
     deferred: list[str] = []
+    # What is left of ``limit``, re-read at every claim. None without one.
+    remaining = limit
     # Rows this call is done with although the claim could still take them,
     # left out of its later claims, when it was told a ``now``. Two kinds, and both are rows the claim
     # would not take again on the real clock but would when told a later
@@ -1069,53 +1126,82 @@ def deliver_pending(
     #   (test_a_task_that_failed_inside_the_hand_off_is_retried_within_the_drain).
     set_aside: set[int] = set()
     while True:
-        claimed_at = in_project_time(now) if now is not None else timezone.now()
-        ids = claim_batch(
-            worker_id=worker_id,
-            now=claimed_at,
-            # The lane's own lease with its headroom, so a row that starts
-            # soon after the claim needs no extension; read per claim, as the
-            # lane's membership is (test_a_uniform_lane_is_claimed_under_its_own_lease).
-            lease=timedelta(
-                seconds=registry.claim_lease_seconds(lane, default=setting("LEASE_SECONDS"))
-            ),
-            limit=limit if limit is not None else batch_size,
-            ignore_backoff=ignore_backoff,
-            lane=lane,
-            exclude_lanes=paused,
-            exclude_ids=set_aside,
-        )
-        unstarted = list(ids)
-        while unstarted:
-            delivery_id = unstarted.pop(0)
-            outcome = dispatch_one(
-                delivery_id,
+        # Every lane is re-read at each rotation under None, as membership is
+        # at each claim.
+        rotation = [
+            name for name in (registry.lanes() if lanes is None else lanes) if name not in closed
+        ]
+        claimed = False
+        for turn, this_lane in enumerate(rotation):
+            if remaining is None:
+                size = size_of(this_lane)
+            elif remaining == 0:
+                # Spent: no claim of nothing for the lanes after it
+                # (test_a_limit_below_the_number_of_lanes_serves_the_first_lanes).
+                return counts
+            else:
+                size = math.ceil(remaining / (len(rotation) - turn))
+            claimed_at = in_project_time(now) if now is not None else timezone.now()
+            ids = claim_batch(
                 worker_id=worker_id,
-                on_deferral=lambda deferred_lane, _seconds: deferred.append(deferred_lane),
+                now=claimed_at,
+                # The lane's own lease with its headroom, so a row that starts
+                # soon after the claim needs no extension; read per claim, as the
+                # lane's membership is (test_a_uniform_lane_is_claimed_under_its_own_lease,
+                # test_every_lane_is_claimed_under_its_own_lease).
+                lease=timedelta(
+                    seconds=registry.claim_lease_seconds(
+                        this_lane, default=setting("LEASE_SECONDS")
+                    )
+                ),
+                limit=size,
+                ignore_backoff=ignore_backoff,
+                lane=this_lane,
+                exclude_ids=set_aside,
             )
-            # Only where ``now`` was passed: on the real clock a rescheduled
-            # row's time and a handed-off row's lease are both ahead of the
-            # clock when written, so a later claim takes the row again only
-            # once that time has really come. Nothing to exclude, and skipping the
-            # read-back spares a query per task hand-off and keeps the claim's
-            # NOT IN list empty. Held by
-            # test_a_task_row_on_the_real_clock_is_not_read_back_or_excluded and
-            # test_a_row_rescheduled_in_place_on_the_real_clock_is_not_excluded.
-            if now is not None:
-                if outcome is DeliveryStatus.PENDING:
-                    set_aside.add(delivery_id)
-                elif outcome is None and _left_unfinished(delivery_id):
-                    # Read back only where no outcome came back, so a row run in
-                    # place costs the pass no query. ``outcome is None`` changes
-                    # no result - a row run in place is never left CLAIMED or
-                    # PENDING without saying so - only the query count, which is
-                    # what test_a_row_delivered_in_place_is_never_read_back holds.
-                    set_aside.add(delivery_id)
-            if outcome is not None:
-                counts[outcome] = counts.get(outcome, 0) + 1
-            while deferred:
-                paused.add(deferred[-1])
-                to_give_back, unstarted = partition_by_lane(unstarted, deferred.pop())
-                hand_back(to_give_back, worker_id=worker_id, claimed_at=claimed_at)
-        if limit is not None or not ids:
+            claimed = claimed or bool(ids)
+            unstarted = list(ids)
+            while unstarted:
+                delivery_id = unstarted.pop(0)
+                outcome = dispatch_one(
+                    delivery_id,
+                    worker_id=worker_id,
+                    on_deferral=lambda deferred_lane, _seconds: deferred.append(deferred_lane),
+                )
+                # Only where ``now`` was passed: on the real clock a rescheduled
+                # row's time and a handed-off row's lease are both ahead of the
+                # clock when written, so a later claim takes the row again only
+                # once that time has really come. Nothing to exclude, and skipping the
+                # read-back spares a query per task hand-off and keeps the claim's
+                # NOT IN list empty. Held by
+                # test_a_task_row_on_the_real_clock_is_not_read_back_or_excluded and
+                # test_a_row_rescheduled_in_place_on_the_real_clock_is_not_excluded.
+                if now is not None:
+                    if outcome is DeliveryStatus.PENDING:
+                        set_aside.add(delivery_id)
+                    elif outcome is None and _left_unfinished(delivery_id):
+                        # Read back only where no outcome came back, so a row run in
+                        # place costs the pass no query. ``outcome is None`` changes
+                        # no result - a row run in place is never left CLAIMED or
+                        # PENDING without saying so - only the query count, which is
+                        # what test_a_row_delivered_in_place_is_never_read_back holds.
+                        set_aside.add(delivery_id)
+                if outcome is not None:
+                    counts[outcome] = counts.get(outcome, 0) + 1
+                if deferred:
+                    # One delivery defers at most once. Every row of the batch
+                    # is in the lane that deferred, because it was claimed for
+                    # that lane alone, so the rest goes back with no query to
+                    # sort it (test_a_deferral_asks_nothing_about_the_rows_it_hands_back).
+                    closed.add(deferred.pop())
+                    hand_back(unstarted, worker_id=worker_id, claimed_at=claimed_at)
+                    break
+            if remaining is not None:
+                # Counted as attempted, so a row handed to a task backend
+                # spends the limit as it always did, and a row handed back
+                # does not.
+                remaining -= len(ids) - len(unstarted)
+                if len(ids) < size:
+                    closed.add(this_lane)
+        if not claimed:
             return counts

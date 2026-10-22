@@ -629,7 +629,13 @@ def test_a_coroutine_that_cancels_itself_fails_its_attempt() -> None:
     with transaction.atomic():
         fire(Unheard(value=1))
 
-    assert deliver_pending(worker_id="probe") == {DeliveryStatus.FAILED: 1}
+    # Full jitter can put the retry a few milliseconds out, and deliver_pending
+    # claims again until a claim comes back empty, so an unpinned draw near zero
+    # retries the row in the same call. The top of the range keeps it a whole
+    # backoff away; zero reproduces the flake.
+    with mock.patch("django_domain_events.delivery.deliver.random.random", return_value=1.0):
+        outcome = deliver_pending(worker_id="probe")
+    assert outcome == {DeliveryStatus.FAILED: 1}
     row = DeliveryRecord.objects.get(receiver_key="probe.cancelled")
     assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 1)
     assert row.last_error.startswith("RuntimeError: ")

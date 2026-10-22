@@ -66,7 +66,7 @@ without giving up the crash story.
 ```bash
 python manage.py deliver_events            # forever
 python manage.py deliver_events --once     # one pass, for cron or CI
-python manage.py deliver_events --limit 100 --worker-id box-1
+python manage.py deliver_events --once --limit 100 --worker-id box-1
 ```
 
 The relay claims with `SELECT ... FOR UPDATE SKIP LOCKED` under a **lease**, so
@@ -501,14 +501,38 @@ Nothing is shared between relays: each process pauses a lane when a deferral it
 ran says to, measured on its own clock, and every relay serving the lane learns
 of the throttle from its own first deferral - one call each. That is the price
 of having no shared state to keep consistent, and it is small next to one call
-per row. A relay serving the lane claims nothing while the pause lasts, and
-resumes at its first pass after it ends, so within `POLL_SECONDS`.
+per row. A relay serving the lane claims nothing in it while the pause lasts,
+and takes it up again at the lane's first turn after the pause ends: within
+`POLL_SECONDS` for a relay with nothing else to do, and at the lane's next
+turn in the rotation for one busy with other lanes.
 
-A relay serving every lane - `run_relay(lane=None)`, or `deliver_pending()` and
-`drain_outbox()` from code - pauses only the deferring lane: its unstarted rows
-in the batch go back, the other lanes' rows in the same batch are still
-delivered, and later claims leave the paused lane out. `deliver_pending()`
-has no clock to wait on, so it sets the lane aside for the rest of the call.
+Every batch a relay claims is one lane's, so a deferral hands back the whole
+unstarted rest of it with no query to sort it. A relay serving several lanes -
+`--lane default --lane mail`, or `run_relay(lane=None)` - pauses only the
+deferring lane: it skips that lane's turn, without a query, while the pause
+lasts, and goes on delivering the others. `deliver_pending()` and
+`drain_outbox()` have no clock to wait on, so they set the lane aside for the
+rest of the call instead.
+
+So that operators can see a pause, the relay records it in the
+`LanePauseRecord` table - the lane, its own `worker_id`, when it paused and
+until when - and `outbox_health().lanes` and `events_status` show it
+([introspection](introspection.md#is-the-outbox-keeping-up)). The record is a
+window, not shared state: no relay reads it, so a pause still governs only the
+relay that heard it. A relay deletes its record when the pause ends and when
+it returns, and a relay that never defers never touches the table.
+`deliver_pending()` and `drain_outbox()` write none, since their set-aside
+ends with the call. A write that fails is logged and the relay carries on,
+paused as before.
+
+A relay that dies without returning - killed, or its pod evicted - leaves its
+record showing a pause no running process honours, until the `until` it
+recorded passes. Every pause any relay records also deletes every record whose
+pause has passed, so such leftovers do not accumulate, but one can show for
+as long as the deferral asked: up to `MAX_RECEIVER_RETRY_DELAY_SECONDS`, a day
+by default, for a quota that resets at midnight. Compare the `worker_id` with the relays running before reading it as a lane
+nobody serves.
+
 Neither the pause nor the hand-back reaches a row already given to a
 [task backend](operations.md#handing-delivery-to-a-task-queue), and a receiver
 running in a task defers there, in a process that holds no batch to pause; its

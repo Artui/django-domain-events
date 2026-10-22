@@ -133,7 +133,7 @@ def test_create_writes_the_digest_of_the_target() -> None:
         event=event, receiver_key="probe.fan", target="endpoint-42", available_at=event.recorded_at
     )
     row.refresh_from_db()
-    assert row.target_digest == _digest("endpoint-42")
+    assert bytes(row.target_digest) == _digest("endpoint-42")
 
 
 def test_a_row_without_a_target_carries_the_digest_of_the_empty_string() -> None:
@@ -142,7 +142,7 @@ def test_a_row_without_a_target_carries_the_digest_of_the_empty_string() -> None
         event=event, receiver_key="testapp.durable_receiver", available_at=event.recorded_at
     )
     row.refresh_from_db()
-    assert row.target_digest == _digest("")
+    assert bytes(row.target_digest) == _digest("")
 
 
 def test_saving_a_changed_target_rewrites_the_digest() -> None:
@@ -153,7 +153,7 @@ def test_saving_a_changed_target_rewrites_the_digest() -> None:
     row.target = "after"
     row.save()
     row.refresh_from_db()
-    assert row.target_digest == _digest("after")
+    assert bytes(row.target_digest) == _digest("after")
 
 
 def test_a_digest_set_by_hand_cannot_disagree_with_the_target() -> None:
@@ -169,7 +169,7 @@ def test_a_digest_set_by_hand_cannot_disagree_with_the_target() -> None:
         available_at=event.recorded_at,
     )
     row.refresh_from_db()
-    assert row.target_digest == _digest("endpoint-42")
+    assert bytes(row.target_digest) == _digest("endpoint-42")
 
 
 def test_the_unique_constraint_covers_the_digest_and_no_index_holds_the_text() -> None:
@@ -188,16 +188,17 @@ def test_the_unique_constraint_covers_the_digest_and_no_index_holds_the_text() -
 def test_a_stored_digest_is_found_by_the_one_target_digest_computes() -> None:
     """Replay keys a dict by ``target_digest(target)`` and looks the stored
     values up in it, so a stored value has to hash and compare equal to the
-    computed one. Asserted through a dict rather than ``==`` because that is
-    the operation replay performs; psycopg 2 returns a ``memoryview`` for a
-    binary column, which passes both only because a read-only buffer hashes
-    as its bytes."""
+    computed one once replay has normalised it with ``bytes()``. Asserted
+    through a dict rather than ``==`` because that is the operation replay
+    performs. The ``bytes()`` is load-bearing: psycopg2 returns a
+    ``memoryview`` of format ``c`` for a binary column, which hashes as its
+    bytes and compares unequal to them, so the lookup misses without it."""
     event = _event()
     DeliveryRecord.objects.create(
         event=event, receiver_key="probe.fan", target="endpoint-42", available_at=event.recorded_at
     )
     [stored] = DeliveryRecord.objects.values_list("target_digest", flat=True)
-    assert {_digest("endpoint-42"): "found"}[stored] == "found"
+    assert {_digest("endpoint-42"): "found"}[bytes(stored)] == "found"
 
 
 def test_the_digest_column_is_binary_and_holds_exactly_a_sha256() -> None:

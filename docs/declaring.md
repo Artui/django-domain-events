@@ -26,8 +26,11 @@ class OrderSubmitted: ...
 ```
 
 A name is at most 255 characters, the width of the column event rows store it
-in, whether given as `name=` or derived from the app label and class name; a
-longer one is refused at the decorator.
+in, whether given as `name=` or derived from the app label and class name. A
+longer one is refused with `ValueError` at registration, whatever the route:
+the decorator, or a `RegisteredEvent` handed to `registry.register_event`
+directly. SQLite stores a name of any length, so the check is what keeps one
+that works in tests from failing every `fire()` on Postgres.
 
 An event is kept for `RETENTION_DAYS` unless its declaration says otherwise:
 `retention=timedelta(...)` for a window of its own, or `Retention.SUCCEEDED` or
@@ -58,7 +61,7 @@ def reserve_stock(evt: OrderPlaced) -> None: ...
 | Argument | Default | Means |
 | --- | --- | --- |
 | `mode` | `DURABLE` | Timing and guarantee. See [delivery](delivery.md). |
-| `key` | `<app_label>.<func_name>` | The identity delivery rows address. At most 255 characters, the width of the column delivery rows store it in; a longer one is refused at the decorator, in every mode. |
+| `key` | `<app_label>.<func_name>` | The identity delivery rows address. At most 255 characters, the width of the column delivery rows store it in; a longer one is refused at registration, by the decorator or `registry.register_receiver` alike, in every mode. |
 | `max_attempts` | `5` | Copied onto each row **at fire time**. |
 | `eager` | `False` | Also attempt immediately after commit, relay as fallback. |
 | `site` | `"relay"` | Where the code runs. `"task"` hands it to a task backend. |

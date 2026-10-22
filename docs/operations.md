@@ -9,11 +9,13 @@ real interface; the commands are thin wrappers, so anything cron can do a
 ```bash
 python manage.py deliver_events                          # forever
 python manage.py deliver_events --once                   # one pass
-python manage.py deliver_events --limit 100              # cap one pass
+python manage.py deliver_events --once --limit 100       # cap one pass
 python manage.py deliver_events --worker-id box-1        # defaults to host:pid
 python manage.py deliver_events --passes 5               # stop after five
 python manage.py deliver_events --lane mail              # only receivers in lane "mail"
 python manage.py deliver_events --batch-size 5           # rows per claim, this process
+python manage.py deliver_events --lane default --lane mail   # both lanes, each in turn
+python manage.py deliver_events --lane default --lane mail --lane-batch-size mail=5
 ```
 
 Run as many as you like on Postgres. On SQLite, run exactly one.
@@ -49,16 +51,22 @@ python manage.py deliver_events --lane mail --batch-size 5
 - **`--once` follows the same rule**, so a cron running `deliver_events --once`
   beside a mail relay stays out of the mail lane. Called from code,
   `deliver_pending()` delivers every lane unless given one, and
-  `drain_outbox()` always delivers every lane; `run_relay(lane=None)` serves
-  every lane from a single relay, for development.
+  `drain_outbox()` always delivers every lane. Both visit the lanes in turn, as
+  a relay serving several does ([below](#one-relay-several-lanes)), so the
+  order across lanes is the rotation rather than one `available_at` order; in
+  a project that names no lane there is only the default one, and nothing
+  changes. `run_relay(lane=None)` serves every lane from a single relay, for
+  development.
 - **`--batch-size` sizes this process's claims** in place of `BATCH_SIZE`, which
   also sizes prune batches and requeue chunks. Every row of a batch is claimed
   under one lease, and a row still waiting its turn when the lease lapses is
   taken by another relay, so a slow lane wants a batch it can work through
   inside the lease its claim stamps: see
   [the lease a claim stamps](#the-lease-a-claim-stamps). With `--once` it
-  cannot be combined with `--limit`, which is one claim of exactly that many
-  rows; the pair is refused rather than the batch silently ignored.
+  cannot be combined with `--limit`, which sizes each claim as its lane's share
+  of the limit ([a cron that works](#a-cron-that-works)); the pair is refused
+  rather than the batch silently ignored, and so is `--lane-batch-size` with
+  `--limit`.
 - **An `eager=True` attempt still runs in the firing process**, whatever the
   lane: the lane decides which relay picks up what eager delivery did not
   finish.
@@ -82,7 +90,10 @@ fired behind a newsletter of fifty thousand waits for the newsletter. Nor is
 there fairness between events or receivers sharing a lane - one event fanning
 out to every subscriber holds the lane until its rows are delivered. The
 answer is another lane: give each class of sending that must not wait for
-another its own `lane=`, and run relays for each.
+another its own `lane=`, and run relays for each. Across lanes served by one
+process the order is the rotation, not the age of the rows:
+[one relay, several lanes](#one-relay-several-lanes) says how long a lane can
+wait for the others.
 
 A deployment with a mail lane, as Kubernetes Deployments:
 
@@ -96,6 +107,100 @@ command: ["python", "manage.py", "deliver_events", "--lane", "mail", "--batch-si
 replicas: 4
 ```
 
+### One relay, several lanes
+
+A lane does not need a process of its own. One relay can serve a set of lanes,
+which suits a lane too quiet to justify a Deployment, or a small project that
+wants the isolation without the extra processes:
+
+```bash
+python manage.py deliver_events --lane default --lane mail
+```
+
+```python
+run_relay(worker_id="box-1", lane=["default", "mail"])
+```
+
+The relay visits its lanes in sorted order, one claim each, and claims each
+lane's batch immediately before delivering it, so no batch burns its lease
+while another lane delivers. Each claim is that lane's alone: under its own
+lease ([the lease a claim stamps](#the-lease-a-claim-stamps)) and its own batch
+size. A lane paused after a [deferral](delivery.md#the-pause-is-per-process)
+is skipped without a query while the others go on. One rotation is one pass,
+so `--passes` counts rotations, and a pass is idle - it waits for work, and may
+[prune](retention.md#how-the-prune-runs) - only when every lane in it was empty
+or paused. A stop is read before each lane's turn as well as before each row.
+A failed claim ends the pass, since a database refusing one lane is refusing
+them all. `default` may be one of the lanes, and a lane named twice is served
+once.
+
+**How long one lane waits for the others.** Deliveries are serial within a
+relay, so the lanes take turns, and between two claims of lane L the relay
+delivers at most one batch of each other lane it serves. So L waits at most
+
+> the sum, over every other unpaused lane M the relay serves, of b<sub>M</sub> x d<sub>M</sub>, plus one claim query per lane
+
+where b<sub>M</sub> is M's batch size in this relay and d<sub>M</sub> the
+longest one delivery in M can take. That is the receiver's slowest call,
+including its HTTP client's timeout: the package does not time out a receiver,
+so a hung call holds the relay. The bound is set by the other lanes' batch
+sizes and never by how much they are owed, so a burst of twenty thousand rows
+in one lane delays another by what one of its batches takes. A paused lane adds
+nothing to it. Order inside a lane is unchanged: a row deep in L's own backlog
+still waits for L's older rows.
+
+**`--lane-batch-size LANE=N` is the lever on that bound.** It sizes one served
+lane's claims in place of `--batch-size`, and repeats for each lane to size;
+`run_relay(lane_batch_sizes={"mail": 5})` is the same from code. A noisy lane
+given a small batch in a shared relay delays the others less, and takes a
+smaller share of the relay while they have work. The size belongs to the
+deployment, not the declaration: what a lane costs the others depends on what
+else shares its process, and the same lane on a relay of its own wants a
+different size. The value is split at its last `=`, since a lane name may hold
+one and a number cannot. A lane the relay does not serve, a size below one, a
+lane sized twice and a value with no `=` are all refused at start.
+
+There is no command-line spelling for every lane. `run_relay(lane=None)`
+rotates over every lane the registry declares, re-read at each pass, which is
+a development shape: a production relay names its lanes, so a lane added in
+code next month does not quietly join a relay sized for the others.
+
+The same deployment as above, with the mail lane folded into the default
+relay and kept to small batches:
+
+```yaml
+# deliver-events: the default lane and the mail lane, each in turn
+command: ["python", "manage.py", "deliver_events",
+          "--lane", "default", "--lane", "mail", "--lane-batch-size", "mail=5"]
+replicas: 2
+```
+
+Or as a Procfile line:
+
+```text
+relay: python manage.py deliver_events --lane default --lane mail --lane-batch-size mail=5
+```
+
+**Moving a lane between relays needs no drain.** Membership is read from the
+declarations at every claim and the rows carry only their receiver's key, so
+moving `mail` out to relays of its own, or back in, is a change to the
+manifests and nothing else. While a rollout runs, the shared relays and the
+lane's own both serve it: the skipped locks keep them from taking the same
+row, each claim stamps the lane's own lease, and a relay that stops hands back
+the unstarted rows it held, so the relays that stay take them at once. Each
+relay learns of a throttle from its own first deferral, as relays of one lane
+always have.
+
+What sharing costs: an idle pass sends one claim query per lane it serves, and
+each claim of a quiet lane runs beside a burst in a noisy one. That claim does
+not walk the burst. Measured with `EXPLAIN ANALYZE` on Postgres 17, a claim of
+five rows from a lane with 290 owed took 0.07 ms while another lane had 15,000
+owed, and 0.78 ms with 400,000 settled rows besides; the planner reads the
+receiver-key index rather than the owed rows in order. The noisy lane's own
+claim costs what it would in a relay of its own. That was a single run on
+synthetic data in which every row belonged to one event, so treat it as
+directional.
+
 ### The lease a claim stamps
 
 Each delivery needs its receiver's lease: its `lease_seconds=`, or
@@ -107,9 +212,13 @@ of headroom:
 | --- | --- |
 | A lane whose durable receivers all need the same lease, s, no longer than `LEASE_SECONDS` | s x 1.1 |
 | A lane whose receivers all need the same lease, longer than `LEASE_SECONDS` | `LEASE_SECONDS` x 1.1 |
-| A lane mixing leases, or every lane at once (`lane=None`) | `LEASE_SECONDS` x 1.1 |
+| A lane mixing leases | `LEASE_SECONDS` x 1.1 |
 | The default lane | as above, over the receivers declared in no named lane |
 | The `eager=True` attempt after commit | as above, over every eager receiver |
+
+Every claim is one lane's. A relay serving several lanes, and one serving every
+lane under `lane=None`, claims each in turn under that lane's own lease, so a
+slow lane sharing a process does not lengthen the lease of a fast one.
 
 So a claim never stamps more than `LEASE_SECONDS` x 1.1. A lane of receivers
 declaring a longer lease, `lease_seconds=1800` say, is claimed for
@@ -141,8 +250,8 @@ when `LEASE_SECONDS` is the default 300:
 - **The batch has to start inside 66 seconds, not inside `LEASE_SECONDS`**:
   batch size times seconds per delivery stays under s x 1.1. That binds every
   claim of the lane, not only a relay's: a `deliver_events --once --limit`
-  claim of that many rows, a `deliver_pending()` batch, and the eager attempt,
-  which claims every eager row of one `fire()` at once. Past that, the tail of
+  claim of the lane's share of the limit, a `deliver_pending()` batch, and the
+  eager attempt, which claims every eager row of one `fire()` at once. Past that, the tail of
   the batch lapses while it waits its turn and another worker takes it.
   Relays with worker ids of their own never both run a row: the first finds
   the row gone when it tries to extend the lease, and logs that it lost the row
@@ -206,7 +315,9 @@ before every claim and before every delivery.
 ### When the database goes away
 
 The relay stays up when its database goes away. A failed claim, delivery or
-wait is logged. After a database error the relay also closes its connection, so
+wait is logged, and a wait that failed is followed by a sleep of
+`POLL_SECONDS` in its place, so a wait that fails at once cannot turn an idle
+relay into a loop of claims and tracebacks. After a database error the relay also closes its connection, so
 the next query opens a fresh one. The close matters more than catching the
 error. Django reconnects only a connection that has been closed, and a
 long-running process never reaches the request boundary where Django checks for
@@ -293,6 +404,10 @@ On Postgres the relay waits on a notification rather than polling, so an event
 fired a moment ago is delivered in milliseconds instead of on the next tick.
 `fire()` notifies after commit. The poll interval remains the floor, so a missed
 notification costs latency and never a delivery.
+
+Listening takes psycopg 3, which Django prefers whenever it is installed. Under
+psycopg2 the relay polls and `fire()` sends nothing, as under `WAKE = "poll"`, and
+the system check `W008` says so until you set `WAKE = "poll"` yourself.
 
 `notify_relay()` is public, for the case where you moved rows into `pending`
 yourself. It follows the same settings as `fire()`: under `WAKE = "poll"` it
@@ -705,6 +820,16 @@ python manage.py events_status
 See [introspection](introspection.md#is-the-outbox-keeping-up). The age of
 `oldest_owed_at` is the number to alert on.
 
+Where you run lanes, alert per lane as well: `outbox_health().lanes` carries
+each lane's own `oldest_owed_at`, and `events_status --format json` its
+`oldest_owed_age_seconds`. The total's age is the oldest row anywhere, so it
+can hold only one threshold, while lanes rarely share one: a minute late is an
+incident for a password reset and ordinary for a newsletter. Size each lane's
+threshold to its work. A lane's `pauses` name the relays that recorded a pause
+for it, which helps read a climbing backlog as a destination saying no rather
+than a relay that has died; a record outlives a relay that was killed, so
+check the names against the relays running.
+
 The relay logs at `WARNING` when a worker loses a delivery - either before
 running it, or after finishing work whose lease had already lapsed. The second
 names the receiver and suggests `lease_seconds=`, because that is the fix. It
@@ -717,6 +842,29 @@ also logs every failed attempt it records, at `WARNING`, one line each - see
 */5 * * * *  manage.py deliver_events --once
 0    4 * * *  manage.py prune_events
 ```
+
+A cron serving several lanes names them, as a relay does, and visits them in
+the same rotation:
+
+```cron
+*/5 * * * *  manage.py deliver_events --once --lane default --lane mail --limit 200
+```
+
+`--limit` caps the run's total and is shared between the lanes with work, so
+a burst in one lane cannot spend every run. Each lane's claim takes what is
+left of the limit divided by the lanes still open in the rotation, itself
+included, rounded up. A lane that claims less than its share is drained for
+the rest of the run, and what it did not take falls to the lanes after it; the
+run rotates again while some of the limit is left and some lane still has
+work. So a lane with work gets at least the limit divided by the number of
+lanes, rounded down: with a limit of 10 over two lanes owed 20 each, 5 and 5;
+with one of them owed only 2, it sends those and 8 of the other's. With one
+lane this is one claim of the whole limit. A limit below the number of lanes
+gives one row each to the first lanes in sorted order and nothing to the rest,
+so give a cron a limit at least as large as the number of lanes it serves.
+Rows handed back after a [deferral](delivery.md#a-deferral-that-spends-no-attempt)
+do not count against it. The same holds for `deliver_pending(limit=...)` and
+`drain_outbox(limit=...)`.
 
 With a long-running relay instead, nothing needs a schedule: an idle relay
 runs the prune itself, every minute by default, so an event declared to be

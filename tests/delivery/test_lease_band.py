@@ -163,16 +163,18 @@ def test_a_lane_of_receivers_declaring_no_lease_is_claimed_under_the_setting() -
     assert leases[0] == timedelta(seconds=330)
 
 
-def test_every_lane_at_once_is_claimed_under_the_setting() -> None:
-    """``lane=None`` takes every receiver's rows, and the test app's declare
-    1800 s as well as none at all."""
+def test_every_lane_is_claimed_under_its_own_lease() -> None:
+    """``lane=None`` claims each lane in turn under that lane's lease: the test
+    app's default lane declares 1800 s as well as none at all, so it is claimed
+    under the setting, and ``mail`` under its own 60 s, rather than both under
+    the setting as one claim across every lane would be."""
     _probe("a", lease_seconds=60)
     _fire()
 
     with _claimed_leases(deliver_module) as leases:
         deliver_pending()
 
-    assert leases[0] == timedelta(seconds=330)
+    assert leases == [timedelta(seconds=330), timedelta(seconds=66)] * 2
 
 
 def test_a_relay_claims_a_uniform_lane_under_its_own_lease() -> None:

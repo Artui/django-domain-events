@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import dataclasses
 import logging
 from datetime import datetime, timedelta
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.db import DEFAULT_DB_ALIAS, OperationalError, connection, connections, transaction
+from django.db.backends.postgresql import psycopg_any
 from django.utils import timezone as django_timezone
 
 from django_domain_events.declaration.registry import registry
@@ -139,10 +141,26 @@ def test_a_failure_while_idling_does_not_kill_the_daemon() -> None:
         calls.append(timeout)
         raise RuntimeError("the database went away mid-wait")
 
-    counts = run_relay(worker_id="w1", passes=2, wait=explode, **UNSAFE)
+    counts = run_relay(worker_id="w1", passes=2, sleep=lambda _: None, wait=explode, **UNSAFE)
 
     assert counts == {}
     assert len(calls) == 2, "the relay stopped at the first failed wait"
+
+
+def test_a_wait_that_fails_at_once_still_idles_for_the_poll(settings) -> None:
+    """A wait that raises returns at once, and the next pass claims straight
+    away: an idle relay whose wait always fails would claim and log in a tight
+    loop for as long as it stayed idle. So the relay sleeps the poll after one,
+    whatever raised and whatever the driver."""
+    settings.DJANGO_DOMAIN_EVENTS = {"POLL_SECONDS": 0.25}
+    slept: list[float] = []
+
+    def explode(timeout: float) -> bool:
+        raise TypeError("'list' object is not callable")
+
+    run_relay(worker_id="w1", passes=2, sleep=slept.append, wait=explode, **UNSAFE)
+
+    assert slept == [0.25, 0.25], "a failed wait was followed by an immediate claim"
 
 
 # --- surviving the database ---------------------------------------------------
@@ -208,7 +226,7 @@ def test_a_raw_driver_error_while_idling_closes_the_connection(closes: list[str]
     def drop(timeout: float) -> bool:
         raise conn.Database.OperationalError("the connection is lost")
 
-    run_relay(worker_id="w1", passes=1, wait=drop, **UNSAFE)
+    run_relay(worker_id="w1", passes=1, sleep=lambda _: None, wait=drop, **UNSAFE)
 
     assert closes == [write_alias()]
 
@@ -238,7 +256,7 @@ def test_an_error_that_is_not_the_databases_keeps_the_connection(closes: list[st
     def explode(timeout: float) -> bool:
         raise RuntimeError("not a database problem")
 
-    run_relay(worker_id="w1", passes=1, wait=explode, **UNSAFE)
+    run_relay(worker_id="w1", passes=1, sleep=lambda _: None, wait=explode, **UNSAFE)
 
     assert closes == []
 
@@ -301,6 +319,11 @@ def test_a_connection_killed_while_idling_is_replaced(
     """
     if connection.vendor != "postgresql":
         pytest.skip("needs a server whose backend can be terminated")
+    if not psycopg_any.is_psycopg3:
+        pytest.skip(
+            "psycopg2 cannot listen, so its wait sleeps without touching the "
+            "connection and the claim's transaction finds the death instead"
+        )
     with transaction.atomic():
         fire(order)
     record.clear()
@@ -674,32 +697,41 @@ def test_the_pause_ends_when_the_requested_delay_has_passed_on_the_injected_cloc
     assert len(seen) == attempted
 
 
-def test_a_relay_serving_every_lane_delivers_the_rest_of_a_mixed_batch(
+def _search() -> RegisteredReceiver:
+    """A receiver in a lane that sorts after ``mail``, so a relay serving both
+    reaches it after a deferral in ``mail``."""
+    return dataclasses.replace(
+        _mail(), key="tests.search", func=lambda evt: calls.append("search"), lane="search"
+    )
+
+
+def test_a_deferral_in_one_lane_leaves_the_next_lanes_claim_in_the_same_pass(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Only the deferring lane's unstarted rows go back; the default lane's
-    rows after the deferral are delivered in the same pass."""
+    """Only the deferring lane's batch goes back, and the pass goes on to the
+    next lane: ``search``'s rows are claimed and delivered in the same pass."""
     seen: list[int] = []
-    with receiver_registered(_throttled(seen)):
+    with receiver_registered(_throttled(seen)), receiver_registered(_search()):
         _fire_three(order)
+        record.clear()
         clock = _Clock()
 
         counts = run_relay(
             worker_id="w1", passes=1, lane=None, now=clock, wait=clock.wait, **UNSAFE
         )
 
-        assert counts == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 6}
+        assert counts == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 9}
         assert len(seen) == 1
         assert len(_given_back("tests.throttled")) == 2
+        assert record.count("search") == 3
 
 
 def test_a_relay_serving_every_lane_keeps_claiming_the_other_lanes_while_one_is_paused(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Batches of three put the later events' rows in later claims. Those
-    claims leave the paused lane out and still take the default lane's rows;
-    without the exclusion the second claim would take a throttled row and
-    attempt it."""
+    """Batches of three put the default lane's later rows in a second pass, which
+    claims them while ``mail`` is still paused and leaves ``mail`` alone: its
+    handed-back rows stay given back rather than being taken and attempted."""
     seen: list[int] = []
     with receiver_registered(_throttled(seen)):
         _fire_three(order)
@@ -717,21 +749,17 @@ def test_a_relay_serving_every_lane_keeps_claiming_the_other_lanes_while_one_is_
 
         assert counts == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 6}
         assert len(seen) == 1
-        assert (
-            DeliveryRecord.objects.filter(
-                receiver_key="tests.throttled", status=DeliveryStatus.PENDING
-            ).count()
-            == 2
-        ), "the paused lane's unclaimed rows were touched"
+        assert len(_given_back("tests.throttled")) == 2, "the paused lane was claimed again"
 
 
 def test_a_stop_after_a_deferral_hands_back_only_what_is_still_held(
     order: OrderPlaced, record: list[str], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The deferral already gave the throttled rows back. The stop gives back
-    the three default rows left unstarted, and counts those alone."""
+    """The deferral already gave ``mail``'s rows back. The stop, two rows into
+    ``search``'s batch, gives back the one row of it left unstarted and counts
+    that alone."""
     seen: list[int] = []
-    with receiver_registered(_throttled(seen)):
+    with receiver_registered(_throttled(seen)), receiver_registered(_search()):
         _fire_three(order)
         record.clear()
         clock = _Clock()
@@ -739,22 +767,23 @@ def test_a_stop_after_a_deferral_hands_back_only_what_is_still_held(
         with caplog.at_level(logging.INFO, logger="django_domain_events.delivery.run_relay"):
             run_relay(
                 worker_id="w1",
-                lane=None,
-                stop=lambda: len(record) >= 3,
+                lane=["mail", "search"],
+                stop=lambda: record.count("search") >= 2,
                 now=clock,
                 wait=clock.wait,
                 **UNSAFE,
             )
 
-    assert "handed back 3 unstarted rows" in caplog.text
+    assert "paused lane mail after a deferral; handed back 2 unstarted rows" in caplog.text
+    assert "stopping; handed back 1 unstarted rows" in caplog.text
 
 
 def test_a_relay_whose_lane_is_paused_does_not_query_it(
     order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The claim would come back empty anyway, since the paused lane is also
-    excluded from it. Skipping it spares a query per poll that would walk past
-    every row the lane is owed to find nothing."""
+    """Skipping it spares a query per poll that would walk past every row the
+    lane is owed to find nothing it may take. Counted by the claims made, so
+    the pause record a deferral writes is not mistaken for one."""
     claims: list[dict[str, object]] = []
     real = run_relay_module.claim_batch
 
@@ -779,10 +808,10 @@ def test_a_set_aside_that_fails_abandons_the_batch(
     closes: list[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Which rows were in the paused lane is unknown after the failure, so none
-    of the rest is attempted - each could be another call to a throttled
-    destination - and the rows wait out their lease, as a crashed worker's do.
-    The relay itself goes on, and the lane is still paused."""
+    """The batch is the paused lane's, so none of the rest is attempted after
+    the failure - each could be another call to a throttled destination - and
+    the rows wait out their lease, as a crashed worker's do. The relay itself
+    goes on."""
     seen: list[int] = []
 
     def broken(*args: object, **kwargs: object) -> int:
@@ -794,14 +823,14 @@ def test_a_set_aside_that_fails_abandons_the_batch(
         clock = _Clock()
 
         counts = run_relay(
-            worker_id="w1", passes=3, lane=None, now=clock, wait=clock.wait, **UNSAFE
+            worker_id="w1", passes=3, lane="mail", now=clock, wait=clock.wait, **UNSAFE
         )
 
-        assert counts == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 2}
+        assert counts == {DeliveryStatus.FAILED: 1}
         assert len(seen) == 1
         abandoned = DeliveryRecord.objects.filter(
             status=DeliveryStatus.CLAIMED, lease_expires_at__gt=django_timezone.now()
         )
-        assert abandoned.count() == 6, "the rest of the batch was not left to its lease"
+        assert abandoned.count() == 2, "the rest of the batch was not left to its lease"
     assert "could not hand back the rows of paused lane mail" in caplog.text
     assert closes == [write_alias()]

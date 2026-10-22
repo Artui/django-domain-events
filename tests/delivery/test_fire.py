@@ -422,7 +422,7 @@ def test_every_row_fire_writes_carries_the_digest_of_its_target() -> None:
     assert len(stored) == 3
     assert {"", "a", "b" * 3000} == {target for target, _ in stored}
     for target, digest in stored:
-        assert digest == hashlib.sha256(target.encode()).digest()
+        assert bytes(digest) == hashlib.sha256(target.encode()).digest()
 
 
 def test_a_raising_callable_fails_the_callers_transaction() -> None:
@@ -683,3 +683,60 @@ def test_an_unscheduled_delivery_is_due_from_when_its_event_was_recorded(
     drain_outbox()
 
     assert [c.due_at for c in seen] == [_row("probe.plain_ctx").event.recorded_at]
+
+
+# Read off the column, as fire() reads it, so a column widened by a migration moves
+# the refusal with it.
+_DEDUPE_LIMIT = EventRecord._meta.get_field("dedupe_key").max_length
+
+
+def test_a_dedupe_key_of_exactly_the_column_width_is_recorded(order: OrderPlaced) -> None:
+    """Holds the comparison: ``>=`` instead of ``>`` refuses this key. Passes on a
+    tree without the check, as it must; it is here for the mutant."""
+    assert _DEDUPE_LIMIT == 255
+    with transaction.atomic():
+        event_id = fire(order, dedupe_key="k" * _DEDUPE_LIMIT)
+    assert len(EventRecord.objects.get(pk=event_id).dedupe_key) == _DEDUPE_LIMIT
+
+
+def test_a_dedupe_key_one_over_the_column_width_is_refused_before_writing(
+    order: OrderPlaced,
+) -> None:
+    key = "k" * (_DEDUPE_LIMIT + 1)
+    with transaction.atomic(), pytest.raises(ValueError) as caught:
+        fire(order, dedupe_key=key)
+    message = str(caught.value)
+    assert "dedupe_key" in message
+    assert f"{_DEDUPE_LIMIT + 1} characters" in message
+    assert f"limit is {_DEDUPE_LIMIT}" in message
+    # The key is the caller's, so it is not echoed.
+    assert key[:20] not in message
+    # Sized to the width check, not the refusal for an event deleted on consumption.
+    assert "deleted once consumed" not in message
+    assert not EventRecord.objects.exists()
+    assert not DeliveryRecord.objects.exists()
+
+
+def test_an_over_long_dedupe_key_is_refused_for_a_suppressed_event_that_is_recorded(
+    order: OrderPlaced,
+) -> None:
+    """A recorded suppressed event writes the same row, so it is held to the same
+    width."""
+    with (
+        transaction.atomic(),
+        suppressed(OrderPlaced, reason="backfill"),
+        pytest.raises(ValueError, match="dedupe_key"),
+    ):
+        fire(order, dedupe_key="k" * (_DEDUPE_LIMIT + 1))
+    assert not EventRecord.objects.exists()
+
+
+def test_an_over_long_actor_is_stored_truncated_rather_than_refused(order: OrderPlaced) -> None:
+    """The actor's key and label never reach ``fire()`` longer than their columns:
+    ``Actor`` truncates them at capture, so the length refusals ``fire()`` makes
+    cover the dedupe key alone. Pins that, so a change to the truncation shows up
+    here as the decision it is."""
+    with transaction.atomic(), attributed(actor_key="x" * 300, actor_label="y" * 300):
+        event_id = fire(order)
+    row = EventRecord.objects.get(pk=event_id)
+    assert (len(row.actor_key), len(row.actor_label)) == (255, 255)

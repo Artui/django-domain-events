@@ -20,6 +20,7 @@ from django_domain_events.delivery.fire import fire
 from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.models.target_digest_field import TargetDigestField
 from django_domain_events.operations.cancel_deliveries import cancel_deliveries
 from django_domain_events.operations.replay_events import replay_events
 from django_domain_events.scope.attributed import attributed
@@ -223,6 +224,29 @@ def _fan_rows() -> list[tuple[str, str, int]]:
     )
 
 
+def test_a_digest_read_back_as_a_memoryview_is_still_found(
+    order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """psycopg2 reads ``bytea`` back as a ``memoryview`` of format ``c``, which
+    hashes like the digest replay computes and compares unequal to it. Looked up
+    as read, every row that exists reads as missing: ``added`` counts them all,
+    and a replay that changed nothing wakes the relay. The column's read is
+    stood in here so the shape is asserted on every backend and driver."""
+    module = importlib.import_module("django_domain_events.operations.replay_events")
+    monkeypatch.setattr(
+        TargetDigestField,
+        "from_db_value",
+        lambda self, value, expression, connection: memoryview(value).cast("c"),
+        raising=False,
+    )
+    with transaction.atomic():
+        event_id = fire(order)
+
+    with mock.patch.object(module, "notify_relay") as notify:
+        assert replay_events([event_id]) == {"reopened": 0, "added": 0}
+    assert not notify.called
+
+
 def test_a_fan_out_replay_goes_to_the_targets_that_exist_now(owed_targets: list[str]) -> None:
     """Re-derived rather than re-run: ``b`` is still owed and is reopened, ``c``
     is new and is added, and ``a`` - no longer returned - is left exactly as it
@@ -358,7 +382,7 @@ def test_a_row_replay_adds_carries_the_digest_of_its_target(owed_targets: list[s
 
     assert replay_events([event_id]) == {"reopened": 0, "added": 1}
     added = DeliveryRecord.objects.get(receiver_key="probe.fan", target="c" * 3000)
-    assert added.target_digest == hashlib.sha256(("c" * 3000).encode()).digest()
+    assert bytes(added.target_digest) == hashlib.sha256(("c" * 3000).encode()).digest()
 
 
 def test_a_long_target_already_delivered_is_reopened_not_duplicated(

@@ -21,12 +21,6 @@ on Postgres, about 68 years. SQLite stores more, so a longer window would pass
 every test there and then fail every ``fire()`` on Postgres, inside the
 caller's transaction."""
 
-# The width of ``EventRecord.name``, ``CharField(max_length=255)``. Carried as a
-# number rather than read off the field because a decorator runs while apps are
-# still loading and importing a model there raises ``AppRegistryNotReady``. Held
-# to the column by test_the_limit_is_the_width_of_the_column_that_stores_the_name.
-_MAX_NAME_LENGTH = 255
-
 
 @overload
 def event(cls: E) -> E: ...
@@ -61,20 +55,7 @@ def event(
         require_frozen_dataclass(target)
         require_valid_upgrade(target)
         resolved = name if name is not None else label_for(target.__module__, target.__name__)
-        if len(resolved) > _MAX_NAME_LENGTH:
-            # Checked on the final name so an explicit and a derived one are held
-            # alike, and before anything is registered. SQLite enforces nothing, so
-            # a longer name works there; Postgres raises DataError from the insert
-            # in fire(), inside the caller's transaction. Two things the coverage
-            # gate cannot see: the boundary - test_a_name_of_exactly_the_limit_is_accepted
-            # fails on ``>=``; and the derived path, which
-            # test_a_derived_name_over_the_limit_is_refused fails without.
-            raise ValueError(
-                f"Event name {resolved[:60]!r}... is {len(resolved)} characters; "
-                f"the limit is {_MAX_NAME_LENGTH}, the width of the column event rows "
-                f"store a name in. A longer one is rejected by the database only when "
-                f"an event fires. Set a shorter name=."
-            )
+        # The registry refuses a name longer than its column, whatever the route.
         registry.register_event(
             RegisteredEvent(event_class=target, name=resolved, version=version, retention=retention)
         )

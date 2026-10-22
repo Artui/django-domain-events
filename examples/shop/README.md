@@ -48,6 +48,7 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
 | The partners change, then a replay | `replay_events` asking for the targets again: a partner still subscribed is reopened, a new one added, one that left untouched |
 | A consumed event, then a prune | `Retention.SUCCEEDED` deleting `StockReserved` once delivered while the orders stay for `RETENTION_DAYS`, and `quiet_receivers` still knowing its receiver ran |
 | The receipt is replayed into its lane | `lane="mail"`: the default lane's pass leaves it alone and the mail lane's sends it; and the receipt's own retry curve, checked to last at most three hours and an hour and a half on average |
+| One relay serves both lanes | `deliver_events --once --lane default --lane mail --lane-batch-size mail=5`: one pass visits each lane in turn, under its own lease and batch size, delivers the replayed receipt and audit row in a single run, and `outbox_health().lanes` and `events_status` list both lanes, the mail lane one row lighter after it |
 | Invoice reminders due a fortnight later | `due=timedelta(days=14)` counted from the invoice's `occurred_at`: `drain_outbox()` leaves the reminders alone, `outbox_health()` counts them as `scheduled` rather than owed, and `drain_outbox(now=...)` runs them - the cancelled order's as moot work that succeeds and sends nothing, the open order's answering `NotYet` until three days after the customer's last email, then sending; one that runs after that quiet period has already ended is sent rather than failed on a past `NotYet` |
 | The invoice is paid before the reminder | `cancel_deliveries` withdrawing the reminder in the transaction that records the payment: it settles as `cancelled`, a drain past its due time never runs it, nothing is sent, and `outbox_health()` counts it nowhere |
 | The customer is asked for a review | an `async def` receiver run to completion by the relay: its delivery succeeds and the request its coroutine wrote through the async ORM is on record, once |
@@ -146,6 +147,13 @@ SQLite it refuses to start rather than pretend:
 ```bash
 DDE_EXAMPLE_DATABASE=postgres python manage.py deliver_events              # the default lane
 DDE_EXAMPLE_DATABASE=postgres python manage.py deliver_events --lane mail  # the receipts
+```
+
+Or one relay for both, taking the lanes in turn, with the receipts kept to
+small batches so a burst of them delays the rest by one batch at most:
+
+```bash
+DDE_EXAMPLE_DATABASE=postgres python manage.py deliver_events --lane default --lane mail --lane-batch-size mail=5
 ```
 
 Not shown here, and worth reading about instead:

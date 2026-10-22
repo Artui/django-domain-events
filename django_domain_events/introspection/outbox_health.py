@@ -6,7 +6,10 @@ from django.db import models
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
+from django_domain_events.declaration.registry import registry
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.types.lane_backlog import LaneBacklog
+from django_domain_events.types.lane_pause import LanePause
 from django_domain_events.types.outbox_health import OutboxHealth
 from django_domain_events.types.receiver_backlog import ReceiverBacklog
 from django_domain_events.utils import in_project_time, not_yet_due, owed
@@ -29,8 +32,13 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
     instead, and is never what the backlog age is read from: a receiver
     declared with ``due=`` fourteen days out would otherwise hold a five-minute
     alert open for the fortnight.
+
+    ``lanes`` splits the same backlog by lane, from the per-receiver split
+    rather than a query of its own, and carries each lane's pauses, read from
+    the records relays write when a receiver defers.
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
+    from django_domain_events.models.lane_pause_record import LanePauseRecord
 
     moment = in_project_time(now) if now is not None else timezone.now()
     # Every predicate below is a partial index's own condition, word for word,
@@ -70,8 +78,9 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
 
     # One grouped query for the per-receiver split rather than one per receiver:
     # this is meant to be scraped on a schedule, so its cost is paid forever.
-    # Three in total: this, the aggregate above, and the dead count. The claimed
-    # split is one more aggregate in this query, never a query of its own.
+    # Four in total: this, the aggregate above, the dead count, and the pause
+    # records below. The claimed split is one more aggregate in this query,
+    # never a query of its own, and the lane split is this one rolled up.
     per_receiver = (
         DeliveryRecord.objects.filter(is_dead | is_owed)
         .values("receiver_key")
@@ -98,6 +107,39 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
     # only scheduled rows sorts after every receiver that is behind.
     backlogs.sort(key=lambda b: (-b.owed, -b.dead, b.key))
 
+    # Every lane a relay can serve, empty ones included, so a dashboard has a
+    # series per lane rather than one that vanishes when the lane drains. Each
+    # receiver's backlog rolls up into the lane its rows are claimed in; a key
+    # no receiver holds any more is in the default lane, which is where its
+    # rows drain (test_a_deleted_receivers_rows_are_counted_in_the_default_lane).
+    members: dict[str, list[ReceiverBacklog]] = {lane: [] for lane in registry.lanes()}
+    for backlog in backlogs:
+        members.setdefault(registry.lane_for_key(backlog.key), []).append(backlog)
+
+    # Read last, after the per-receiver split has been evaluated, so the first
+    # three queries stay the delivery table's
+    # (test_the_pause_table_is_read_last_and_the_rollup_costs_no_query). A
+    # pause ends at its ``until`` exactly, as the relay that holds it reads it,
+    # and a record whose ``until`` has passed is one a dead relay left behind.
+    pauses: dict[str, list[LanePause]] = {}
+    for lane, worker_id, paused_at, until in (
+        LanePauseRecord.objects.filter(until__gt=moment)
+        .order_by("worker_id")
+        .values_list("lane", "worker_id", "paused_at", "until")
+    ):
+        pauses.setdefault(lane, []).append(
+            LanePause(worker_id=worker_id, paused_at=paused_at, until=until)
+        )
+    # A lane nobody declares any more, with a relay of that name still holding
+    # it paused: a rename mid-rollout. The pause is real, so the lane is listed.
+    for lane in pauses:
+        members.setdefault(lane, [])
+
+    lanes = [
+        _lane_backlog(lane, entries, pauses.get(lane, [])) for lane, entries in members.items()
+    ]
+    lanes.sort(key=lambda b: (-b.owed, -b.dead, b.lane))
+
     return OutboxHealth(
         owed=totals["owed"],
         claimed=totals["claimed"],
@@ -106,4 +148,23 @@ def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
         lapsed_leases=totals["lapsed"],
         receivers=tuple(backlogs),
         scheduled=totals["scheduled"],
+        lanes=tuple(lanes),
+    )
+
+
+def _lane_backlog(
+    lane: str, receivers: list[ReceiverBacklog], pauses: list[LanePause]
+) -> LaneBacklog:
+    """One lane's receivers added up: counts summed, the earliest age kept."""
+    return LaneBacklog(
+        lane=lane,
+        owed=sum(r.owed for r in receivers),
+        scheduled=sum(r.scheduled for r in receivers),
+        claimed=sum(r.claimed for r in receivers),
+        dead=sum(r.dead for r in receivers),
+        oldest_owed_at=min(
+            (r.oldest_owed_at for r in receivers if r.oldest_owed_at is not None),
+            default=None,
+        ),
+        pauses=tuple(pauses),
     )

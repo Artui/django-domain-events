@@ -173,6 +173,7 @@ climbing, while one wedged receiver has a backlog and everything else fine.
 | `oldest_owed_at` | When the oldest still-owed delivery **became owed**: its due time where it has one, its event's recording otherwise; `None` when nothing is owed |
 | `lapsed_leases` | Claimed rows whose lease has expired |
 | `receivers` | Per-receiver backlog, worst first, omitting the ones with nothing owed, dead or scheduled. Each carries its own `owed`, `scheduled`, `claimed`, `dead` and `oldest_owed_at`; one with only scheduled work sorts after every receiver that is behind |
+| `lanes` | The same backlog split by [lane](operations.md#lanes-a-relay-per-kind-of-work), worst first, ranked as `receivers` is. Every lane a relay can serve is listed, the default and each declared one, zeros included, so a dashboard keeps one series per lane. Each `LaneBacklog` carries its own `owed`, `scheduled`, `claimed`, `dead` and `oldest_owed_at`, and `pauses`: a `LanePause` per relay holding the lane paused after a [deferral](delivery.md#the-pause-is-per-process), with its `worker_id`, `paused_at` and `until` |
 
 A [cancelled](operations.md#cancel-owed-work) delivery is settled, so it appears
 in none of these: not owed, not scheduled and not dead. An outbox holding only
@@ -213,8 +214,26 @@ workers hold. A receiver with every owed row claimed and none finishing is wedge
 or its [task queue](operations.md#handing-delivery-to-a-task-queue) is sitting on
 the messages; the same total spread across receivers is a relay at work.
 
+`lanes` is the per-receiver backlog rolled up by the lane each receiver is
+declared in. A row whose receiver has
+since been deleted is counted in the default lane, which is where it drains.
+Its `oldest_owed_at` is the number to alert on per lane
+([knowing it is working](operations.md#knowing-it-is-working)), against a
+threshold sized to that lane's work rather than one shared by all of them. A
+lane's `pauses` come from the
+records relays write when a receiver defers
+([the pause is per process](delivery.md#the-pause-is-per-process)); a lane no
+receiver declares any more is listed while a relay still holds it paused, as
+happens when a lane is renamed mid-rollout. A pause names its relay because
+one that died leaves its record showing until `until` passes: check the
+`worker_id` and `paused_at` against the relays running and when they started,
+since a relay restarted under the same `worker_id` takes the old record over
+only at its own first deferral.
+
 Every figure here is answered from an index and none of them scans the
-delivery table, so the call is cheap enough to scrape on an interval.
+delivery table, so the call is cheap enough to scrape on an interval. It sends
+four queries: three over the delivery table, and one over the pause records,
+which hold at most one row per lane per relay.
 
 `owed` means "not terminal and due", a superset of what the relay can claim at
 any given moment: a row inside its backoff window is owed and not yet claimable.
@@ -224,23 +243,34 @@ which is why it is `scheduled` instead; at exactly its due time it is owed, as
 the relay can claim it then. The prune settles by "not terminal", so it waits
 for `owed` and `scheduled` rows alike.
 
-`events_status` prints the same figures, `scheduled` among them, and a line per
+`events_status` prints the same figures, `scheduled` among them, then a line per
+lane, with a line under it for each relay holding it paused, and a line per
 receiver:
 
 ```text
-owed          3
-scheduled     120
+owed          5
+scheduled     12
 claimed       1
 dead          0
 lapsed leases 0
-oldest owed   42s ago
+oldest owed   310s ago
 
+lanes
+  default	owed=3	dead=0	scheduled=12	claimed=1	oldest=42s
+  mail	owed=2	dead=0	scheduled=0	claimed=0	oldest=310s
+    paused by relay-2:7 for 3539s more
+
+receivers
   billing.send_invoice	owed=3	dead=0	scheduled=0	claimed=1	oldest=42s
-  waitlist.expire_offer	owed=0	dead=0	scheduled=120	claimed=0	oldest=-
+  mail.send_receipt	owed=2	dead=0	scheduled=0	claimed=0	oldest=310s
+  waitlist.expire_offer	owed=0	dead=0	scheduled=12	claimed=0	oldest=-
 ```
 
 `--format json` carries `scheduled` and `claimed` at the top level and on each
-receiver.
+receiver, and a `"lanes"` list beside `"receivers"`: each lane's `lane`,
+`owed`, `scheduled`, `claimed`, `dead` and `oldest_owed_age_seconds`, and
+`"paused"`, a list of `{"worker_id", "paused_for_seconds"}` where
+`paused_for_seconds` is the time left until the pause ends.
 
 ## System checks
 
@@ -261,6 +291,7 @@ Run with `python manage.py check`.
 | `W002` | Warning | Deliveries are owed for an event name the registry no longer has |
 | `W006` | Warning | A settings dict is named `DOMAIN_EVENTS` rather than `DJANGO_DOMAIN_EVENTS` |
 | `W007` | Warning | `DJANGO_DOMAIN_EVENTS` holds a key this package never reads |
+| `W008` | Warning | `WAKE` is `"notify"` on Postgres, but Django loaded psycopg2, which cannot listen; the relay polls instead |
 
 `E001` matters because nothing else would ever say so: the event cannot be fired,
 so there is no failure to observe, only silence.
@@ -276,6 +307,14 @@ transaction, so the event exists, and only the decode refuses - in the relay,
 in another process, one dead letter per receiver. A codec that does not
 implement `unsupported_fields` is not interrogated, because this package should
 not guess at what a codec it did not write can do.
+
+`W008` is a warning rather than an error because nothing is lost. The relay
+listens for a notification through psycopg 3; under psycopg2 it polls every
+`POLL_SECONDS` and `fire()` sends no `NOTIFY`, which is correct and only slower
+to deliver. `"notify"` is the default, so without the check a project on
+psycopg2 would run a mode it never chose and never be told. Set `WAKE` to
+`"poll"` to say so, or install psycopg 3 to have the relay woken
+([`LISTEN` / `NOTIFY`](operations.md#listen-notify)).
 
 `W006` and `W007` exist because both mistakes are otherwise silent. `setting()`
 reads only the keys this package asks for, so a typo sits in the settings
