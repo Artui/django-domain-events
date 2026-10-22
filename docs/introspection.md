@@ -218,9 +218,9 @@ the messages; the same total spread across receivers is a relay at work.
 declared in. A row whose receiver has
 since been deleted is counted in the default lane, which is where it drains.
 Its `oldest_owed_at` is the number to alert on per lane
-([knowing it is working](operations.md#knowing-it-is-working)): the total's age
-is the oldest row anywhere, and says nothing about a quiet lane falling behind
-while a busier one is further behind still. A lane's `pauses` come from the
+([knowing it is working](operations.md#knowing-it-is-working)), against a
+threshold sized to that lane's work rather than one shared by all of them. A
+lane's `pauses` come from the
 records relays write when a receiver defers
 ([the pause is per process](delivery.md#the-pause-is-per-process)); a lane no
 receiver declares any more is listed while a relay still holds it paused, as

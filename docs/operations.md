@@ -822,13 +822,13 @@ See [introspection](introspection.md#is-the-outbox-keeping-up). The age of
 
 Where you run lanes, alert per lane as well: `outbox_health().lanes` carries
 each lane's own `oldest_owed_at`, and `events_status --format json` its
-`oldest_owed_age_seconds`. The total's age is the oldest row anywhere, so a
-mail lane an hour behind hides under it only while the default lane is further
-behind still, and a lane whose relays are all down shows nowhere else. Size
-each lane's threshold to its work: a minute late is an incident for a password
-reset and ordinary for a newsletter. A lane held by a deferral lists the relays
-pausing it, so a backlog climbing while every relay of the lane is paused is a
-destination saying no, not a relay that has died.
+`oldest_owed_age_seconds`. The total's age is the oldest row anywhere, so it
+can hold only one threshold, while lanes rarely share one: a minute late is an
+incident for a password reset and ordinary for a newsletter. Size each lane's
+threshold to its work. A lane's `pauses` name the relays that recorded a pause
+for it, which helps read a climbing backlog as a destination saying no rather
+than a relay that has died; a record outlives a relay that was killed, so
+check the names against the relays running.
 
 The relay logs at `WARNING` when a worker loses a delivery - either before
 running it, or after finishing work whose lease had already lapsed. The second

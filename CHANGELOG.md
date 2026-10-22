@@ -55,7 +55,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `until`. No relay reads the table: a pause still governs only the relay that
   heard the deferral. A relay that never defers never touches it, and a write
   that fails is logged and survived. `deliver_pending()` and `drain_outbox()`
-  write none. Run `migrate`.
+  write none. Run `migrate` before deploying: `outbox_health()` and
+  `events_status` read the table, and raise until it exists, where the relay's
+  own writes to it are logged and survived.
 - psycopg2 is supported. Under it the relay polls rather than listening, and
   `fire()` sends no `NOTIFY`, as under `WAKE = "poll"`: the wait blocks in
   psycopg 3's `notifies()`, which psycopg2 does not have. System check `W008`

@@ -529,8 +529,8 @@ A relay that dies without returning - killed, or its pod evicted - leaves its
 record showing a pause no running process honours, until the `until` it
 recorded passes. Every pause any relay records also deletes every record whose
 pause has passed, so such leftovers do not accumulate, but one can show for
-as long as the deferral asked: a day, for a quota that resets at midnight.
-Compare the `worker_id` with the relays running before reading it as a lane
+as long as the deferral asked: up to `MAX_RECEIVER_RETRY_DELAY_SECONDS`, a day
+by default, for a quota that resets at midnight. Compare the `worker_id` with the relays running before reading it as a lane
 nobody serves.
 
 Neither the pause nor the hand-back reaches a row already given to a
