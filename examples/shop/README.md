@@ -54,6 +54,8 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
 | The customer is asked for a review | an `async def` receiver run to completion by the relay: its delivery succeeds and the request its coroutine wrote through the async ORM is on record, once |
 | Every delivery's lines name it | `AROUND_DELIVERY`: a hook entered around each durable attempt sets a log context, so the receiver's own line carries its delivery and receiver ids, as does the relay's warning for the marketplace's dead letter, and the context is gone once the attempt ends |
 | The tracer is down | a hook that raises on entering fails the attempt as the receiver raising would: the row is `failed` after one attempt with the hook's error, and the receiver never ran |
+| Strings too long for their columns | a 256-character `dedupe_key` refused by `fire()` with no event row written, the same reason refused by `suppressed()` on entry, and a receiver `key=` and an event `name=` over 255 characters refused by their decorators with nothing registered; SQLite would have stored all four, so these are what keep them from failing only on Postgres |
+| A delivery started inside its claim's lease | a claim stamping the lease a lane's receivers share plus a tenth, so `reserve_stock` starts with no second lease write, while `shop.audit`, leased for 900 seconds against the claim's 33, is extended to its own lease when it starts; checked by watching the statements, since a write that did not happen leaves nothing else to see |
 
 ## The declarations
 
