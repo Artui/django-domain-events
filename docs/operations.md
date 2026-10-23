@@ -18,6 +18,10 @@ python manage.py deliver_events --lane default --lane mail   # both lanes, each 
 python manage.py deliver_events --lane default --lane mail --lane-batch-size mail=5
 ```
 
+`--limit` caps a single pass, so it needs `--once`: a relay delivers until it is
+stopped and has no total to cap, and the command refuses `--limit` beside it
+rather than accepting a cap nothing reads. Bound a relay with `--passes`.
+
 Run as many as you like on Postgres. On SQLite, run exactly one.
 
 ### Lanes: a relay per kind of work
