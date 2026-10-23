@@ -39,10 +39,11 @@ TARGETS = ["", "endpoint-42", "x" * 3000, "café-☃"]
 
 @pytest.fixture
 def at_the_previous_schema() -> Iterator[MigrationExecutor]:
-    """Rewind to the schema before this migration, and always come back."""
+    """Rewind to the schema before this migration, and always come back - from
+    a rewind that failed part way as well, which MySQL does not roll back."""
     executor = MigrationExecutor(connection)
-    executor.migrate(BEFORE)
     try:
+        executor.migrate(BEFORE)
         yield executor
     finally:
         latest = MigrationExecutor(connection)
@@ -246,3 +247,43 @@ def test_postgres_rewrites_the_table_once_instead_of_swapping_columns(
         assert any("TYPE bytea" in s or "TYPE varchar(64)" in s for s in sql if using in s), sql
         assert not any(s.startswith("UPDATE") or "target_digest_raw" in s for s in sql), sql
     assert _stored(BEFORE) == before
+
+
+def _event_only_indexes() -> set[str]:
+    with connection.cursor() as cursor:
+        constraints = connection.introspection.get_constraints(
+            cursor, "django_domain_events_deliveryrecord"
+        )
+    return {
+        name
+        for name, info in constraints.items()
+        if info["columns"] == ["event_id"] and info["index"] and not info["unique"]
+    }
+
+
+def test_the_reversal_drops_the_event_index_mysql_leaves_behind(
+    at_the_previous_schema: MigrationExecutor,
+) -> None:
+    """MySQL's schema editor keeps an index under every foreign key, so the
+    swap dropping the unique constraint that leads with ``event`` creates one
+    on ``event`` alone, under the name Django gives a ``db_index`` field, and
+    forward never drops it. Undoing the AlterField before the conversion then
+    creates that same name and fails on it, so the conversion's reversal
+    drops it first. The round trips above hold that on MySQL; elsewhere this
+    plants the index by hand and calls the step directly, because on SQLite
+    the swap rebuilds the table and takes a planted index with it before the
+    step runs. At this migration's own schema, where nothing else indexes
+    ``event`` alone: a later migration adds an index that does."""
+    MigrationExecutor(connection).migrate(AFTER)
+    state = MigrationExecutor(connection).loader.project_state(AFTER)
+    model = state.apps.get_model(APP, "DeliveryRecord")
+    if not _event_only_indexes():
+        with connection.schema_editor() as editor:
+            event = model._meta.get_field("event")
+            editor.execute(editor._create_index_sql(model, fields=[event]))
+    assert _event_only_indexes()
+
+    with connection.schema_editor() as editor:
+        migration.ConvertDigest._drop_event_only_indexes(editor, state)
+
+    assert _event_only_indexes() == set()

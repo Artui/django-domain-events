@@ -799,11 +799,12 @@ insert was `VALUES`. Timing `bulk_create` of delivery rows alone, on Postgres
     The hook the digest column no longer has is also what put MySQL's
     `_binary` prefix on it, so every insert or update of a digest raises
     warning 1300, as every lookup on the column always has. The stored bytes
-    are unchanged. This was checked by hand against MySQL 9.6 with mysqlclient
-    2.3.0 under the default strict `sql_mode`, not in CI, and not on MariaDB,
-    PyMySQL, MySQL 8.x or a `utf8mb4` connection charset. A project that runs
-    warnings as errors will see these, and can filter MySQLdb's warning 1300
-    where it writes the `target_digest` column.
+    are unchanged. The test suite runs on MySQL 8.4 with mysqlclient in CI,
+    under the default strict `sql_mode` and a `utf8mb4` connection charset,
+    and the warning and the unchanged bytes were checked by hand on 8.4 and
+    9.6 under both `utf8mb4` and `utf8`; MariaDB and PyMySQL are untried. A
+    project that runs warnings as errors will see these, and can filter
+    MySQLdb's warning 1300 where it writes the `target_digest` column.
 
 The rest of the cost is the `targets=` callable, which runs once per fired event
 for every fan-out receiver owed it. Make it **one `SELECT`** returning the

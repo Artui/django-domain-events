@@ -377,7 +377,7 @@ def _sweep(
 
 
 _NEEDS_A_LOCKING_SERVER = pytest.mark.skipif(
-    connection.vendor != "postgresql",
+    connection.vendor == "sqlite",
     reason="two sweeps contending for the same rows needs a server that locks them",
 )
 

@@ -209,11 +209,16 @@ def test_the_digest_column_is_binary_and_holds_exactly_a_sha256() -> None:
 
 def test_mysql_gets_a_bounded_binary_column_it_can_index() -> None:
     """MySQL maps a ``BinaryField`` to ``longblob``, which it refuses in a
-    unique index without a prefix length. Unverified against a real MySQL
-    server: the suite runs on SQLite and Postgres only."""
+    unique index without a prefix length. A stub connection reaches the branch
+    on every backend; on the MySQL job the real connection asks the same
+    question, and the test database built through the migrations is the
+    unique index it lets MySQL create."""
     field = DeliveryRecord._meta.get_field("target_digest")
     assert field.db_type(SimpleNamespace(vendor="mysql")) == "varbinary(32)"
-    assert field.db_type(connection) == connection.data_types["BinaryField"]
+    expected = (
+        "varbinary(32)" if connection.vendor == "mysql" else connection.data_types["BinaryField"]
+    )
+    assert field.db_type(connection) == expected
 
 
 def test_a_new_row_has_no_due_time_of_its_own() -> None:

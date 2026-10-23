@@ -4,7 +4,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from django.db import connection, connections, transaction
+from django.db import connections, transaction
 
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.fire import fire
@@ -14,10 +14,7 @@ from tests.testapp.events import OrderPlaced
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
-    pytest.mark.skipif(
-        not connection.features.has_select_for_update_skip_locked,
-        reason="skipped locks are what this asserts, so it needs a backend with them",
-    ),
+    pytest.mark.usefixtures("skip_locked_backend"),
 ]
 
 LEASE = timedelta(seconds=300)

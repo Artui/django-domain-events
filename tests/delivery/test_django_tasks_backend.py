@@ -556,7 +556,7 @@ def test_a_stale_copy_turned_away_is_logged_at_info(
 
 
 @pytest.mark.skipif(
-    connection.vendor != "postgresql",
+    connection.vendor == "sqlite",
     reason=(
         "two connections racing for one row; in-memory SQLite gives each "
         "connection its own database, so there is no shared row to race for"

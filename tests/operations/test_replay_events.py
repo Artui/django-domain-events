@@ -419,8 +419,8 @@ def test_replay_finds_existing_rows_by_the_indexed_digest_not_the_text(
     assert lookups, "replay read the existing rows"
     for sql in lookups:
         where = sql.split(" WHERE ", 1)[1]
-        assert '"target_digest" IN' in where
-        assert '"target" IN' not in where
+        assert f"{connection.ops.quote_name('target_digest')} IN" in where
+        assert f"{connection.ops.quote_name('target')} IN" not in where
 
 
 class _Runaway(BaseException):

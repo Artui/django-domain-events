@@ -44,6 +44,15 @@ SQLite refuses under the setting; read its failures for a package frame.
 under a zone with a different offset, such as `Asia/Kolkata`, finds a test that
 wrote Chicago's wall time into a constant.
 
+`DDE_TEST_DATABASE=mysql` runs it against MySQL, with `MYSQL_HOST`, `MYSQL_PORT`,
+`MYSQL_USER`, `MYSQL_PASSWORD` and `MYSQL_DATABASE` (defaults: root with no
+password on `127.0.0.1:3306`). The driver is in no dependency group, because
+mysqlclient builds against MySQL's client headers: `uv pip install mysqlclient`
+into the venv, again after every `uv sync` or `uv run` that re-syncs it away, or
+drive `.venv/bin/python -m pytest` directly. Under `DDE_TEST_USE_TZ=false` MySQL
+refuses the suite's aware fixtures exactly as SQLite does, so that run is for
+Postgres.
+
 ## Structural rules
 
 Non-negotiable. They keep the package navigable.
@@ -160,12 +169,16 @@ Two rules specific to this package:
   either way is documentation, not a gate.
 - **Concurrency is tested with real connections.** A `SKIP LOCKED` test that
   runs on a single connection proves nothing. Those tests need two threads and
-  `transaction=True`, and they only mean something on Postgres.
-- **The SQLite matrix is the coverage gate; the Postgres job is a correctness
-  gate.** Every line is reachable on SQLite, which is why the relay's
+  `transaction=True`, and they only mean something on a server: Postgres and
+  MySQL both run them. Skip them with `connection.vendor == "sqlite"` or the
+  `skip_locked_backend` fixture, never a module-level read of
+  `connection.features`: on MySQL that queries the server, and at collection
+  time pytest-django refuses it and takes the whole module down.
+- **The SQLite matrix is the coverage gate; the Postgres and MySQL jobs are
+  correctness gates.** Every line is reachable on SQLite, which is why the relay's
   concurrency guard is a separate function from its loop. Two of those lines
-  only run where locks cannot be skipped, so they are unreachable on Postgres by
-  definition, and that job runs with `--cov-fail-under=0`.
+  only run where locks cannot be skipped, so they are unreachable on Postgres and
+  MySQL by definition, and those jobs run with `--cov-fail-under=0`.
 - **A test whose outcome depends on the backend must say so.** One that passes
   only because SQLite refuses something is passing for the wrong reason: the
   relay command test hung the entire Postgres suite until it was guarded,
@@ -223,6 +236,7 @@ exemptions are re-export `__init__.py` files and Django's generated migrations.
 | Python | 3.10 | 3.10 through 3.14 |
 | Django | 4.2 | 4.2, 5.0, 5.1, 5.2, 6.0, 6.1 |
 | Postgres | 12 | 17 (the relay half only) |
+| MySQL | 8.0 | 8.4 (the whole suite, under `USE_TZ = True`) |
 
 `django.contrib.auth` must be installed: the event row's `actor` foreign key
 targets `AUTH_USER_MODEL` and the migration declares a swappable dependency on
@@ -240,13 +254,15 @@ says why.
 
 ## CI and pre-commit
 
-Ten jobs in `tests.yml`: `lint`, `docs`, `example` (runs the shop's checks,
+Eleven jobs in `tests.yml`: `lint`, `docs`, `example` (runs the shop's checks,
 migrations and asserting demo), `floor` (resolves every declared dependency at
 the bottom of its window and runs the suite there), `test` (the Python x Django
 matrix on SQLite), `test-postgres` (a real server, for the half SQLite cannot
 exercise, run once under each `USE_TZ`), `test-psycopg2` (the same server under
 psycopg2 with psycopg 3 uninstalled, since Django prefers psycopg 3 whenever it
-can import it), `coverage-badge`, `secrets`, and the `tests-passed` gate that
+can import it), `test-mysql` (the whole suite on a MySQL 8.4 server, where
+inserts return no ids, a DELETE cannot read its own table and DDL does not roll
+back), `coverage-badge`, `secrets`, and the `tests-passed` gate that
 branch protection points at.
 
 Releases are **main-triggered**: `make release-bump`, edit the changelog, open a
