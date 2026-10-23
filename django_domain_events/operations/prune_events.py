@@ -324,24 +324,28 @@ def _delete_chunk(due: models.QuerySet[Any], event_id: int, size: int) -> int:
     list of ids, so the statement binds a handful of parameters however large
     ``size`` is. Finding that row reads the event's delivery rows once, which
     for the largest fan-out is tens of thousands of index entries per chunk.
-    The event's due-ness is part of the same statement, so a chunk is deleted
-    only while the event is still due
-    (test_a_stale_selection_is_rechecked_before_a_chunk_too).
+
+    The event is locked and its due-ness re-checked as a read of its own, as
+    _delete_batch does, so a chunk is deleted only while the event is still
+    due (test_a_stale_selection_is_rechecked_before_a_chunk_too). Not as a
+    subquery inside the DELETE: ``due`` reads the delivery table, and MySQL
+    refuses a DELETE whose own subquery reads the table it deletes from
+    (error 1093), so every prune of a fan-out larger than a batch failed
+    there.
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
 
     with transaction.atomic(using=write_alias()):
         # Locked before the due check, for the reason _delete_batch gives.
         _lock_events([event_id])
+        if not due.filter(pk=event_id).exists():
+            return 0
         boundary = list(
             DeliveryRecord.objects.filter(event=event_id)
             .order_by("pk")
             .values_list("pk", flat=True)[size - 1 : size]
         )
-        chunk = DeliveryRecord.objects.filter(
-            event__in=due.filter(pk=event_id).values("pk"),
-            pk__lte=max(boundary, default=0),
-        )
+        chunk = DeliveryRecord.objects.filter(event=event_id, pk__lte=max(boundary, default=0))
         _record_last_successes(chunk)
         return chunk.delete()[0]
 

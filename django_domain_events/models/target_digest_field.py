@@ -42,9 +42,9 @@ class TargetDigestField(models.BinaryField):
     def db_type(self, connection: Any) -> str | None:
         # MySQL maps a BinaryField to ``longblob``, and refuses a blob in a
         # unique index without a prefix length; a digest is a fixed width, so
-        # it gets the bounded type instead. Only a stub connection tests this
-        # (test_mysql_gets_a_bounded_binary_column_it_can_index): the suite
-        # runs on SQLite and Postgres, and no real MySQL server has seen it.
+        # it gets the bounded type instead. A stub connection reaches this on
+        # every backend (test_mysql_gets_a_bounded_binary_column_it_can_index),
+        # and the MySQL CI job builds the unique index on it for real.
         if connection.vendor == "mysql":
             return "varbinary(32)"
         return super().db_type(connection)
@@ -68,10 +68,11 @@ class TargetDigestField(models.BinaryField):
     # a digest now carries no prefix and each such write raises warning 1300,
     # as every lookup on this column always did, since lookups never went
     # through the hook. The stored bytes are unchanged. Accepted for the
-    # Postgres insert, and checked by hand against MySQL 9.6 with mysqlclient
-    # 2.3.0 under the default strict sql_mode, not in CI; not tried on MariaDB,
-    # PyMySQL, MySQL 8.x or a utf8mb4 connection charset. The missing prefix is
-    # pinned by test_a_digest_write_on_mysql_carries_no_binary_prefix.
+    # Postgres insert. The MySQL CI job runs the suite, every digest it writes
+    # and reads included, on MySQL 8.4 with mysqlclient under the default
+    # strict sql_mode and a utf8mb4 connection charset; not tried on MariaDB or
+    # PyMySQL. The missing prefix is pinned by
+    # test_a_digest_write_on_mysql_carries_no_binary_prefix.
     #
     # Held by test_the_field_has_no_placeholder_hook_so_postgres_can_unnest_a_bulk_insert,
     # one case per name, and by the UNNEST tests beside it.

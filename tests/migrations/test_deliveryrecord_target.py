@@ -34,11 +34,13 @@ def at_the_previous_schema() -> Iterator[MigrationExecutor]:
 
     The finally matters more than the rewind: a test that failed here and left
     the schema behind would fail every test that runs after it, and point at
-    none of them.
+    none of them. The rewind is inside it too, because a rewind that fails
+    part way leaves the schema behind as surely as a failing test, and on
+    MySQL, where DDL is not transactional, nothing rolls the part back.
     """
     executor = MigrationExecutor(connection)
-    executor.migrate(BEFORE)
     try:
+        executor.migrate(BEFORE)
         yield executor
     finally:
         latest = MigrationExecutor(connection)

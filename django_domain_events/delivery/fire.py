@@ -214,7 +214,7 @@ def fire(
         if r.due is not None
     }
     if owed:
-        rows = DeliveryRecord.objects.bulk_create(
+        DeliveryRecord.objects.bulk_create(
             [
                 DeliveryRecord(
                     event=record,
@@ -230,9 +230,16 @@ def fire(
                 for r, target in owed
             ]
         )
-        eager_ids = [row.pk for row, (r, _) in zip(rows, owed, strict=True) if r.eager]
-        if eager_ids:
-            transaction.on_commit(_deliver_eagerly(eager_ids), using=alias, robust=True)
+        # Keys rather than the ids bulk_create hands back: MySQL returns none
+        # from a multi-row insert, so a list of ids there was a list of None
+        # and the eager attempt claimed nothing, leaving every row to the
+        # relay (test_an_eager_receiver_delivers_at_commit_without_a_relay,
+        # on MySQL). A key covers each of a fan-out's targets too.
+        eager_keys = sorted({r.key for r, _ in owed if r.eager})
+        if eager_keys:
+            transaction.on_commit(
+                _deliver_eagerly(record.pk, eager_keys, alias), using=alias, robust=True
+            )
         # After commit, because a notification sent before it would wake a relay
         # that cannot yet see the rows it was told about.
         transaction.on_commit(notify_relay, using=alias, robust=True)
@@ -263,18 +270,34 @@ def fire(
     return record.pk
 
 
-def _deliver_eagerly(delivery_ids: list[int]) -> Callable[[], None]:
-    """Attempt these deliveries in the firing process, once, after commit.
+def _deliver_eagerly(event_id: int, receiver_keys: list[str], alias: str) -> Callable[[], None]:
+    """Attempt this event's deliveries to these receivers in the firing
+    process, once, after commit.
 
     Best effort by construction: whatever this loses to a crash is still owed,
     because the delivery row is the record and the relay reclaims it when the
     lease lapses.
+
+    The rows are found by event and receiver once the transaction has
+    committed, one read filtering on the two columns the unique index leads
+    with, so every backend takes the same path whether or not its inserts
+    report the ids they assigned. Each half is held by a test: without the
+    receiver, a non-eager receiver of the same event is attempted too
+    (test_the_eager_attempt_leaves_a_non_eager_receiver_of_the_same_event_to_the_relay);
+    without the event, an earlier event still owed the receiver is
+    (test_the_eager_attempt_leaves_an_earlier_event_owed_the_same_receiver_alone).
     """
 
     def run() -> None:
         from django_domain_events.delivery.claim_batch import claim_batch
         from django_domain_events.delivery.deliver import dispatch_one
+        from django_domain_events.models.delivery_record import DeliveryRecord
 
+        delivery_ids = list(
+            DeliveryRecord.objects.using(alias)
+            .filter(event=event_id, receiver_key__in=receiver_keys)
+            .values_list("pk", flat=True)
+        )
         now = timezone.now()
         claimed = claim_batch(
             worker_id="eager",

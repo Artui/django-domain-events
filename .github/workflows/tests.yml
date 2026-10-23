@@ -338,6 +338,72 @@ jobs:
       - name: pytest against Postgres under psycopg2
         run: uv run --no-sync pytest --cov-fail-under=0
 
+  test-mysql:
+    # The package is meant to run on MySQL too, and SQLite and Postgres agree
+    # on things MySQL does not: a multi-row insert there hands back no primary
+    # keys, a DELETE may not read its own table in a subquery, its DDL cannot
+    # be rolled back, and its schema editor keeps an index under every foreign
+    # key. Each of those was a defect or a broken reversal that no other job
+    # could see, and the next one will be found the same way. MySQL 8 skips
+    # locked rows, so the relay, the concurrent claims and the row-lock tests
+    # run here for real rather than skipping.
+    #
+    # 8.4 because it is the floor Django 6.1 accepts and MySQL's long-term
+    # support line; the minor is left to float within it, as postgres:17 does.
+    # Once, under USE_TZ = True: under False MySQL refuses the aware values the
+    # suite's own fixtures write, exactly as SQLite does, so that run tests
+    # the fixtures. test-postgres covers the package under False. Coverage is
+    # gated on SQLite, as it is there.
+    name: mysql / 3.13 / Django 6.1
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: mysql
+          MYSQL_DATABASE: django_domain_events
+        ports:
+          - 3306:3306
+        # Over TCP, not the socket: the image's first start runs a temporary
+        # server on the socket alone while it initialises, and a ping that
+        # reached it would report healthy before the real server listens.
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pmysql"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DDE_TEST_DATABASE: mysql
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: "3306"
+      # root, because Django creates and drops test_django_domain_events.
+      MYSQL_USER: root
+      MYSQL_PASSWORD: mysql
+      MYSQL_DATABASE: django_domain_events
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+      - name: Install Python 3.13
+        run: uv python install 3.13
+      - name: Sync dev deps
+        run: uv sync --all-groups --all-extras --python 3.13
+      - name: Pin Django 6.1
+        run: uv pip install --reinstall-package django "django~=6.1.0"
+      # mysqlclient builds from source against the client headers, so it is
+      # installed here and not in the dev group, where it would break `uv sync`
+      # for anyone without them. The runner image carries both packages today;
+      # apt runs only if an image without them takes over ubuntu-latest.
+      - name: Install mysqlclient
+        run: |
+          dpkg -s libmysqlclient-dev pkg-config >/dev/null 2>&1 || {
+            sudo apt-get update && sudo apt-get install -y libmysqlclient-dev pkg-config
+          }
+          uv pip install mysqlclient
+      - name: pytest against MySQL
+        run: uv run --no-sync pytest --cov-fail-under=0
+
   coverage-badge:
     # Publishes a shields.io-compatible coverage.json to gh-pages so the README
     # badge reflects reality. Runs only on push to main, after the matrix has
@@ -486,7 +552,7 @@ jobs:
     # always(), never !cancelled(): a skipped job reports a skipped check, and
     # branch protection counts a skipped required check as passing.
     if: always()
-    needs: [lint, docs, example, floor, test, test-postgres, test-psycopg2]
+    needs: [lint, docs, example, floor, test, test-postgres, test-psycopg2, test-mysql]
     runs-on: ubuntu-latest
     steps:
       # Pass on an exact `success` from every job above, rather than failing on

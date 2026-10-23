@@ -178,3 +178,16 @@ def plans_without_seqscan() -> Plans:
         return explained
 
     return run
+
+
+@pytest.fixture
+def skip_locked_backend(transactional_db: None) -> None:
+    """Skip the test unless the backend can skip locked rows.
+
+    A fixture rather than a module-level ``skipif``: on Postgres the feature is
+    a constant, but on MySQL it depends on the server version, so reading it
+    queries the server, and at collection time pytest-django refuses that with
+    a ``RuntimeError`` that takes the whole module down instead of skipping it.
+    """
+    if not connection.features.has_select_for_update_skip_locked:
+        pytest.skip("skipped locks are what this asserts, so it needs a backend with them")
