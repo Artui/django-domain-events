@@ -315,6 +315,99 @@ def test_notify_on_psycopg3_is_clean(driver: Callable[[str, bool], None]) -> Non
     assert checks.check_wake_driver_can_listen() == []
 
 
+class _EncodingCursor:
+    """Answers ``SHOW server_encoding`` as a Postgres server would, and keeps
+    every statement it was sent. The spelling it answers with is checked
+    against a real server by
+    test_the_server_spells_its_encoding_as_the_check_reads_it."""
+
+    def __init__(self, encoding: str, sent: list[str]) -> None:
+        self.encoding = encoding
+        self.sent = sent
+
+    def __enter__(self) -> _EncodingCursor:
+        return self
+
+    def __exit__(self, *exc: object) -> None: ...
+
+    def execute(self, sql: str) -> None:
+        self.sent.append(sql)
+
+    def fetchone(self) -> tuple[str]:
+        return (self.encoding,)
+
+
+@pytest.fixture
+def server(monkeypatch: pytest.MonkeyPatch) -> Callable[[str, str], list[str]]:
+    """Stand in a backend for the write connection, and the encoding its server
+    reports, on any backend. Returns the statements the check sends."""
+
+    def stand_in(vendor: str, encoding: str) -> list[str]:
+        sent: list[str] = []
+        write = connections[write_alias()]
+        monkeypatch.setattr(write, "vendor", vendor)
+        monkeypatch.setattr(write, "cursor", lambda: _EncodingCursor(encoding, sent))
+        return sent
+
+    return stand_in
+
+
+def test_a_sql_ascii_database_is_a_warning(server: Callable[[str, str], list[str]]) -> None:
+    """Its ``varchar`` counts bytes, so the package's character limits do not
+    hold a non-ASCII value to the column."""
+    sent = server("postgresql", "SQL_ASCII")
+    problems = checks.check_database_measures_characters(databases=[write_alias()])
+    assert [p.id for p in problems] == ["django_domain_events.W009"]
+    assert repr(write_alias()) in problems[0].msg
+    assert "measures a varchar in bytes" in problems[0].msg
+    assert "UTF8" in problems[0].hint
+    assert sent == ["SHOW server_encoding"]
+
+
+@pytest.mark.parametrize("encoding", ["UTF8", "LATIN1", "EUC_JP"])
+def test_a_database_with_an_encoding_is_clean(
+    server: Callable[[str, str], list[str]], encoding: str
+) -> None:
+    """Every real encoding counts characters, whether it spends one byte on each
+    or several, so only ``SQL_ASCII`` is warned about, not every encoding but UTF8."""
+    server("postgresql", encoding)
+    assert checks.check_database_measures_characters(databases=[write_alias()]) == []
+
+
+@pytest.mark.parametrize("databases", [None, [], ["some_other_alias"]])
+def test_an_encoding_check_not_asked_about_the_database_reads_nothing(
+    server: Callable[[str, str], list[str]], databases: list[str] | None
+) -> None:
+    """``check`` without ``--database`` passes none, and asking about another
+    alias is not asking about the one the rows are written to."""
+    sent = server("postgresql", "SQL_ASCII")
+    assert checks.check_database_measures_characters(databases=databases) == []
+    assert sent == []
+
+
+@pytest.mark.parametrize("vendor", ["sqlite", "mysql"])
+def test_a_backend_other_than_postgres_is_not_asked_its_encoding(
+    server: Callable[[str, str], list[str]], vendor: str
+) -> None:
+    """``SHOW server_encoding`` is Postgres's own statement; another backend
+    would raise on it, inside ``migrate``."""
+    sent = server(vendor, "SQL_ASCII")
+    assert checks.check_database_measures_characters(databases=[write_alias()]) == []
+    assert sent == []
+
+
+@pytest.mark.django_db
+def test_the_server_spells_its_encoding_as_the_check_reads_it() -> None:
+    """The stand-in above answers as this does. Only a real server can say how
+    it spells an encoding, so this runs on Postgres alone, whose test database
+    is UTF8 in CI; ``SQL_ASCII`` is spelled as the server reports it, checked by
+    hand against a database created with that encoding."""
+    if connection.vendor != "postgresql":
+        pytest.skip("SHOW server_encoding is a Postgres statement")
+    assert checks._server_encoding(write_alias()) == "UTF8"
+    assert checks.check_database_measures_characters(databases=[write_alias()]) == []
+
+
 @pytest.mark.parametrize("interval", [0, 0.0, 0.5, 2])
 def test_a_coalesce_interval_of_zero_or_more_is_clean(settings, interval: float) -> None:
     settings.DJANGO_DOMAIN_EVENTS = {"NOTIFY_COALESCE_SECONDS": interval}

@@ -32,6 +32,12 @@ the decorator, or a `RegisteredEvent` handed to `registry.register_event`
 directly. SQLite stores a name of any length, so the check is what keeps one
 that works in tests from failing every `fire()` on Postgres.
 
+Every length limit in this package counts characters, as a Postgres `varchar`
+does. A `SQL_ASCII` database is the exception: it counts bytes, so a non-ASCII
+name, key or reason inside the limit can still be refused by the insert, and
+the system check [`W009`](introspection.md#system-checks) says so when the
+event tables are on one.
+
 An event is kept for `RETENTION_DAYS` unless its declaration says otherwise:
 `retention=timedelta(...)` for a window of its own, or `Retention.SUCCEEDED` or
 `Retention.SETTLED` to delete it, with its delivery rows, as soon as it has been

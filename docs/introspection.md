@@ -292,6 +292,7 @@ Run with `python manage.py check`.
 | `W006` | Warning | A settings dict is named `DOMAIN_EVENTS` rather than `DJANGO_DOMAIN_EVENTS` |
 | `W007` | Warning | `DJANGO_DOMAIN_EVENTS` holds a key this package never reads |
 | `W008` | Warning | `WAKE` is `"notify"` on Postgres, but Django loaded psycopg2, which cannot listen; the relay polls instead |
+| `W009` | Warning | The database the event rows are written to is a Postgres `SQL_ASCII` database, which measures a `varchar` in bytes |
 
 `E001` matters because nothing else would ever say so: the event cannot be fired,
 so there is no failure to observe, only silence.
@@ -315,6 +316,16 @@ to deliver. `"notify"` is the default, so without the check a project on
 psycopg2 would run a mode it never chose and never be told. Set `WAKE` to
 `"poll"` to say so, or install psycopg 3 to have the relay woken
 ([`LISTEN` / `NOTIFY`](operations.md#listen-notify)).
+
+`W009` is about the one Postgres encoding that has none. Every limit this package
+holds a string to counts characters - the refusals of a long receiver key, event
+name, `dedupe_key` or suppression reason, and the truncation of the actor's two
+strings - because a `varchar(255)` counts characters. A `SQL_ASCII` database
+counts bytes, so a value of 255 characters that are not all ASCII passes those
+checks and is refused by the insert with `DataError`, inside the caller's
+transaction. Counting bytes everywhere would refuse keys a UTF8 database stores,
+so the check names the database instead. It queries the server, so it runs under
+the database tag: `migrate` runs it, and `check --database default` does.
 
 `W006` and `W007` exist because both mistakes are otherwise silent. `setting()`
 reads only the keys this package asks for, so a typo sits in the settings
