@@ -73,6 +73,10 @@ dev = [
     "pytest-django>=4.9.0",
     "pytest-cov>=6.0.0",
     "pytest-asyncio>=0.24.0",
+    # Bounds every test's time (``timeout`` below), so a loop that no longer
+    # ends fails the test it hangs in, named, rather than stalling the job
+    # until the runner kills it with nothing said about where.
+    "pytest-timeout>=2.3.0",
     # Backs the ``TID`` rule selection below; ruff reads its settings from the
     # flake8-tidy-imports namespace and the plugin is what defines them.
     "flake8-tidy-imports>=4.12.0",
@@ -117,6 +121,12 @@ DJANGO_SETTINGS_MODULE = "tests.conftest_settings"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "--cov=django_domain_events --cov-report=term-missing --cov-fail-under=100"
+# Seconds per test. The slowest test takes about three on Postgres under
+# coverage, so this is generous on a slow runner, and a pass loop that stops
+# ending fails its own test here rather than hanging the run: breaking the
+# deferral set-aside in deliver_pending used to stall the suite at
+# test_a_deferral_and_its_give_up_are_logged_too with nothing reported.
+timeout = 60
 
 [tool.coverage.run]
 source = ["django_domain_events"]
