@@ -182,6 +182,16 @@ def test_sqlmigrate_prints_the_conversion_without_running_it(
         assert "-- THIS OPERATION CANNOT BE WRITTEN AS SQL" in sql
         # The swap's schema steps around the copy still print.
         assert "target_digest_raw" in sql
+    # Nor does the reversal's drop of an index on ``event`` alone print: it
+    # would be read off the live database, which here holds the very index
+    # the reversed AlterField prints the creation of. Backwards only, because
+    # forwards that AlterField drops the index itself.
+    if backwards:
+        assert not [
+            line
+            for line in sql.splitlines()
+            if "DROP INDEX" in line and "deliveryrecord_event_id" in line
+        ]
     assert _stored(BEFORE) == before
 
 

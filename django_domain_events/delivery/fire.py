@@ -279,9 +279,13 @@ def _deliver_eagerly(event_id: int, receiver_keys: list[str], alias: str) -> Cal
     lease lapses.
 
     The rows are found by event and receiver once the transaction has
-    committed, one read through the unique index that leads with both, so
-    every backend takes the same path whether or not its inserts report the
-    ids they assigned.
+    committed, one read filtering on the two columns the unique index leads
+    with, so every backend takes the same path whether or not its inserts
+    report the ids they assigned. Each half is held by a test: without the
+    receiver, a non-eager receiver of the same event is attempted too
+    (test_the_eager_attempt_leaves_a_non_eager_receiver_of_the_same_event_to_the_relay);
+    without the event, an earlier event still owed the receiver is
+    (test_the_eager_attempt_leaves_an_earlier_event_owed_the_same_receiver_alone).
     """
 
     def run() -> None:

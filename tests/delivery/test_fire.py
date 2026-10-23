@@ -173,6 +173,40 @@ def test_an_eager_receiver_delivers_at_commit_without_a_relay(record: list[str])
     assert row.status == DeliveryStatus.SUCCEEDED
 
 
+def test_the_eager_attempt_leaves_a_non_eager_receiver_of_the_same_event_to_the_relay(
+    record: list[str],
+) -> None:
+    """The attempt at commit finds its rows by event and receiver, so the
+    receiver half of that is what keeps a non-eager receiver of the same event
+    off it."""
+    with transaction.atomic():
+        fire(Eagerly(value=4))
+
+    assert "eager:4" in record
+    assert "not_eager:4" not in record
+    row = DeliveryRecord.objects.get(receiver_key="testapp.not_eager")
+    assert (row.status, row.attempts) == (DeliveryStatus.PENDING, 0)
+
+
+def test_the_eager_attempt_leaves_an_earlier_event_owed_the_same_receiver_alone(
+    record: list[str],
+) -> None:
+    """The event half of the same lookup: an earlier event's row still owed to
+    the eager receiver - its own attempt lost, say - is the relay's, and a
+    later fire does not pick it up."""
+    with transaction.atomic():
+        earlier = fire(Eagerly(value=5))
+    DeliveryRecord.objects.filter(event=earlier).update(status=DeliveryStatus.PENDING)
+    record.clear()
+
+    with transaction.atomic():
+        fire(Eagerly(value=6))
+
+    assert record == ["eager:6"]
+    row = DeliveryRecord.objects.get(event=earlier, receiver_key="testapp.eager")
+    assert row.status == DeliveryStatus.PENDING
+
+
 def test_a_non_eager_receiver_waits_for_the_relay(order: OrderPlaced, record: list[str]) -> None:
     with transaction.atomic():
         fire(order)

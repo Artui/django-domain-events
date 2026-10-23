@@ -158,13 +158,15 @@ class ConvertDigest(Operation):
             # sqlmigrate prints without running: what introspection finds is
             # whatever the live database holds, not what this reversal would
             # meet, so the drop is left out of the printed SQL rather than
-            # guessed at.
+            # guessed at (test_sqlmigrate_prints_the_conversion_without_running_it).
             return
         model = state.apps.get_model(APP, "DeliveryRecord")
         column = model._meta.get_field("event").column
-        for name in schema_editor._constraint_names(
-            model, [column], index=True, unique=False, primary_key=False
-        ):
+        # index=True leaves out the foreign key, which introspection lists on
+        # the same column and which DROP INDEX cannot drop
+        # (test_the_reversal_drops_the_event_index_mysql_leaves_behind). No
+        # unique or primary key can have the event column alone in this state.
+        for name in schema_editor._constraint_names(model, [column], index=True):
             schema_editor.execute(schema_editor._delete_index_sql(model, name))
 
     @staticmethod
