@@ -101,6 +101,18 @@ for why a call made there can happen twice.
     `drain_outbox()` all work on every backend, so **a SQLite test suite is
     fully supported** - but running more than one relay is not.
 
+!!! note "On MySQL, the partial indexes do not exist"
+    Six of the indexes on the two tables are partial: each holds only the
+    rows one query reads, such as the owed rows the relay claims from or the
+    dead letters an operator works down, so each stays as small as that set
+    however much history the table carries. MySQL has no partial indexes, so
+    Django creates none of them there and says so with `models.W037`, once per
+    table, on every `check`. Everything still works and the suite runs on
+    MySQL in CI, but the relay's claim, `outbox_health` and the prune read
+    without those indexes, so their cost grows with the history the tables
+    keep. Pruning that history (see
+    [Pruning](operations.md#pruning)) is what keeps it bounded there.
+
 ## Failure
 
 A `DURABLE` receiver that raises is retried with **exponential backoff and full

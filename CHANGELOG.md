@@ -27,6 +27,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   passing `--limit` to a relay must drop it, or add `--once` if a single
   capped pass was what it meant; `--passes` bounds a relay and `--batch-size`
   sizes its claims.
+- The test suite runs on MySQL 8.4 in CI, as a correctness gate beside the
+  Postgres jobs. The fixes below are what it found on its first run.
+- The docs say what MySQL's missing partial indexes cost: Django creates none
+  of the six there, and warns `models.W037` once per table.
+
+### Fixed
+- An `eager=True` receiver was never attempted at commit on MySQL, whose
+  multi-row insert reports no ids: the attempt claimed a list of `None` and
+  every eager row waited for the relay. The attempt now finds its rows by
+  event and receiver after commit, the same way on every backend.
+- `prune_events` failed with MySQL error 1093 on any event with more delivery
+  rows than a batch, because the chunked delete re-checked the event's
+  due-ness in a subquery reading the table it deleted from. The event is now
+  locked and re-checked as a read of its own before the chunk is deleted, as
+  a whole-event batch already was.
+- Reversing migration `0006` failed on MySQL with a duplicate index name: its
+  schema editor leaves an index on `event` alone when the swap drops the
+  unique constraint that led with it, and the reversed `AlterField` then
+  created the same name. The reversal now drops that index first. Forward is
+  unchanged, so an install that already ran `0006` on MySQL keeps that
+  index, which nothing reads.
 
 ## [0.13.0] — 2026-10-22
 
