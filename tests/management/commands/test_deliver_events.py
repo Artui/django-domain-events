@@ -231,6 +231,15 @@ def test_a_single_pass_refuses_a_limit_with_a_batch_size() -> None:
         call_command("deliver_events", "--once", "--limit", "3", "--batch-size", "2")
 
 
+def test_the_relay_refuses_a_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Before the relay starts, so the refusal holds on every backend: the relay
+    is a stand-in here, and one that ran would record its call."""
+    seen = _captured(monkeypatch, "run_relay")
+    with pytest.raises(CommandError, match="--limit caps a single pass and needs --once"):
+        call_command("deliver_events", "--limit", "5", "--passes", "1")
+    assert seen == []
+
+
 def test_the_relay_refuses_where_locks_cannot_be_skipped() -> None:
     """SQLite cannot express a skipped lock, so two relays on it would hand the
     same row to two receivers on every pass.

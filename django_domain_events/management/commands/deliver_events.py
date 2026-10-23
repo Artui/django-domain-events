@@ -69,6 +69,16 @@ class Command(BaseCommand):
         # the one a single lane always took.
         lane: str | list[str] = lanes[0] if len(lanes) == 1 else lanes
         lane_batch_sizes = _lane_batch_sizes(options["lane_batch_size"])
+        # The relay has no total to cap: it claims batches until it is stopped
+        # or runs out of passes, so a --limit beside it would be accepted and
+        # read by nothing. Refused rather than ignored, as --limit beside a
+        # batch size is (test_the_relay_refuses_a_limit).
+        if options["limit"] is not None and not options["once"]:
+            raise CommandError(
+                "--limit caps a single pass and needs --once; the relay delivers until "
+                "it is stopped. Bound a relay with --passes, or size its claims with "
+                "--batch-size."
+            )
         if options["once"]:
             counts = deliver_pending(
                 limit=options["limit"],
