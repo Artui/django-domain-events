@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- System check `W009`: a warning when the database the event rows are written
+  to is a Postgres `SQL_ASCII` database. Such a database measures a `varchar`
+  in bytes, while every length limit here counts characters - the refusals of
+  a long receiver key, event name, `dedupe_key` and suppression reason, and the
+  truncation of the actor's two strings - so a non-ASCII value inside a limit
+  could still be refused by the insert with `DataError`, inside the caller's
+  transaction. Under the database tag: `migrate` runs it, and
+  `check --database` does. The limits themselves are unchanged, since counting
+  bytes everywhere would refuse values a UTF8 database stores.
+- The shop example shows the length refusals and the lease a claim stamps, and
+  checks both.
+
+### Changed
+- `deliver_events --limit` without `--once` is refused with `CommandError`.
+  The relay never read it, so a command line passing it to a relay was told
+  nothing while the cap it asked for did not exist. A cron or process manager
+  passing `--limit` to a relay must drop it, or add `--once` if a single
+  capped pass was what it meant; `--passes` bounds a relay and `--batch-size`
+  sizes its claims.
+
 ## [0.13.0] — 2026-10-22
 
 ### Added
