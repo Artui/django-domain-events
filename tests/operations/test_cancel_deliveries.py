@@ -314,7 +314,7 @@ def test_a_cancelled_scheduled_event_is_pruned_once_consumed(
 
 
 postgres_only = pytest.mark.skipif(
-    connection.vendor != "postgresql",
+    connection.vendor == "sqlite",
     reason="row locks are what is under test; SQLite serialises every writer already",
 )
 

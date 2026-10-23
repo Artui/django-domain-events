@@ -117,6 +117,59 @@ def check_wake_driver_can_listen(**kwargs: Any) -> list[Any]:
     ]
 
 
+def check_database_measures_characters(
+    *, databases: Sequence[str] | None = None, **kwargs: Any
+) -> list[Any]:
+    """The write database counts a ``varchar``'s length in characters.
+
+    Every length this package holds a string to - the refusals of a long
+    receiver key, event name, ``dedupe_key`` and suppression reason, and the
+    truncation of the actor's two strings at capture - counts characters,
+    because that is what a Postgres ``varchar(n)`` counts. A ``SQL_ASCII``
+    database is the exception: it has no encoding to decode with, so it counts
+    bytes, and a value of 255 characters that are not all ASCII passes every
+    one of those checks and is then refused by the insert with ``DataError``,
+    inside the caller's transaction. Counting bytes everywhere instead would
+    refuse keys a UTF8 database stores, and the declaration-time refusals run
+    before any connection exists, so the database is named here rather than
+    measured in each of them.
+
+    A warning, because an ASCII-only project on such a database loses nothing.
+    Under the database tag, as the query needs a connection: ``migrate`` runs
+    it, and ``check --database`` does. Two guards, each held by a test that
+    fails without it: the databases asked about
+    (``test_an_encoding_check_not_asked_about_the_database_reads_nothing``) and
+    the vendor (``test_a_backend_other_than_postgres_is_not_asked_its_encoding``).
+    """
+    alias = write_alias()
+    if not databases or alias not in databases:
+        return []
+    if connections[alias].vendor != "postgresql" or _server_encoding(alias) != "SQL_ASCII":
+        return []
+    return [
+        Warning(
+            f"The database behind {alias!r} is SQL_ASCII, which measures a varchar in "
+            "bytes. This package's 255-character limits count characters, so a "
+            "non-ASCII receiver key, event name, dedupe_key, suppression reason or "
+            "actor label within them can still be refused by the insert with "
+            "DataError.",
+            hint=(
+                "Move the event tables to a UTF8 database, or keep those strings "
+                "ASCII. PostgreSQL itself advises against SQL_ASCII for non-ASCII data."
+            ),
+            id="django_domain_events.W009",
+        )
+    ]
+
+
+def _server_encoding(alias: str) -> str:
+    """The encoding Postgres stores this database's text in, as it spells it."""
+    with connections[alias].cursor() as cursor:
+        cursor.execute("SHOW server_encoding")
+        (encoding,) = cursor.fetchone()
+    return encoding
+
+
 def check_declared_events_are_decodable(**kwargs: Any) -> list[Any]:
     """Every declared event can be rebuilt by the configured codec.
 

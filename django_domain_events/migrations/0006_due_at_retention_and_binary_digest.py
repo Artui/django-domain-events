@@ -137,6 +137,37 @@ class ConvertDigest(Operation):
         for operation, before, after in reversed(self._steps(app_label, to_state)):
             if not self._printing_only(operation, schema_editor):
                 operation.database_backwards(app_label, schema_editor, after, before)
+        self._drop_event_only_indexes(schema_editor, to_state)
+
+    @staticmethod
+    def _drop_event_only_indexes(schema_editor, state):
+        """Drop any index on the event column alone, which ``state`` has none of.
+
+        MySQL's schema editor keeps an index under every foreign key, so when
+        the swap drops the unique constraint leading with ``event`` it creates
+        one on ``event`` alone, under the name Django gives a ``db_index``
+        field - in both directions, and nothing ever drops it. Undoing the
+        AlterField before this operation then creates that same index and
+        fails on the name, half way through a reversal MySQL cannot roll back.
+        Forward is left as it was, so an install that already ran this
+        migration reverses the same way as a fresh one. Held on MySQL by
+        test_reversing_restores_the_hex_digests_exactly; on every other
+        backend the swap leaves no such index and this finds nothing.
+        """
+        if schema_editor.collect_sql:
+            # sqlmigrate prints without running: what introspection finds is
+            # whatever the live database holds, not what this reversal would
+            # meet, so the drop is left out of the printed SQL rather than
+            # guessed at (test_sqlmigrate_prints_the_conversion_without_running_it).
+            return
+        model = state.apps.get_model(APP, "DeliveryRecord")
+        column = model._meta.get_field("event").column
+        # index=True leaves out the foreign key, which introspection lists on
+        # the same column and which DROP INDEX cannot drop
+        # (test_the_reversal_drops_the_event_index_mysql_leaves_behind). No
+        # unique or primary key can have the event column alone in this state.
+        for name in schema_editor._constraint_names(model, [column], index=True):
+            schema_editor.execute(schema_editor._delete_index_sql(model, name))
 
     @staticmethod
     def _printing_only(operation, schema_editor):

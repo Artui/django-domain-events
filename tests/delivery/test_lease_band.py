@@ -46,7 +46,13 @@ from tests.testapp.events import Unheard
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
-_LEASE_ONLY = re.compile(r'^UPDATE "[^"]*deliveryrecord" SET "lease_expires_at" = [^,]+? WHERE')
+# Built with the backend's own quoting: MySQL quotes identifiers with
+# backticks, so a pattern spelling Postgres's double quotes matched nothing
+# there and every count of lease-only updates read zero.
+_LEASE_ONLY = re.compile(
+    rf"^UPDATE {re.escape(connection.ops.quote_name(DeliveryRecord._meta.db_table))} "
+    rf"SET {re.escape(connection.ops.quote_name('lease_expires_at'))} = [^,]+? WHERE"
+)
 
 RAN: list[str] = []
 MESSAGES: list[Any] = []

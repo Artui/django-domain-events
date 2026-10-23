@@ -1,12 +1,23 @@
 """Minimal Django settings for the test suite.
 
 The database is chosen by ``DDE_TEST_DATABASE`` so one suite can run against
-both backends. SQLite is the default because that is what most Django projects
-run their own tests on, and the declaration, timing and introspection halves of
-this package work there. Postgres is selected in CI for the half that cannot be
-tested anywhere else: ``SELECT ... FOR UPDATE SKIP LOCKED``, leased claims and
-concurrent relays have neither the statement nor the concurrency model on SQLite,
-so a green SQLite run is compatible with those claims being untested.
+all three backends. SQLite is the default because that is what most Django
+projects run their own tests on, and the declaration, timing and introspection
+halves of this package work there. Postgres is selected in CI for the half that
+cannot be tested anywhere else: ``SELECT ... FOR UPDATE SKIP LOCKED``, leased
+claims and concurrent relays have neither the statement nor the concurrency
+model on SQLite, so a green SQLite run is compatible with those claims being
+untested.
+
+``mysql`` runs the same suite on MySQL, which has the statement and the row
+locks too and differs from both elsewhere: a multi-row insert returns no primary
+keys, a DELETE may not read its own table in a subquery, and DDL is not
+transactional, so a migration that fails part way stays part way. Each ``MYSQL_*``
+variable names one connection setting; the defaults are a local server's root
+user with no password. The user has to be able to create a database, because
+Django creates ``test_<NAME>``. The driver, mysqlclient, is not in any
+dependency group, since it builds against MySQL's client headers: install it
+into the environment by hand.
 """
 
 from __future__ import annotations
@@ -78,6 +89,18 @@ if os.environ.get("DDE_TEST_DATABASE") == "postgres":
             "PASSWORD": os.environ.get("PGPASSWORD", "postgres"),
             "HOST": os.environ.get("PGHOST", "localhost"),
             "PORT": os.environ.get("PGPORT", "5432"),
+        }
+    }
+elif os.environ.get("DDE_TEST_DATABASE") == "mysql":
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.mysql",
+            "NAME": os.environ.get("MYSQL_DATABASE", "django_domain_events"),
+            "USER": os.environ.get("MYSQL_USER", "root"),
+            "PASSWORD": os.environ.get("MYSQL_PASSWORD", ""),
+            "HOST": os.environ.get("MYSQL_HOST", "127.0.0.1"),
+            "PORT": os.environ.get("MYSQL_PORT", "3306"),
+            "OPTIONS": {"charset": "utf8mb4"},
         }
     }
 else:

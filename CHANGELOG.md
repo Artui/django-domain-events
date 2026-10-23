@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-10-23
+
+### Added
+- System check `W009`: a warning when the database the event rows are written
+  to is a Postgres `SQL_ASCII` database. Such a database measures a `varchar`
+  in bytes, while every length limit here counts characters - the refusals of
+  a long receiver key, event name, `dedupe_key` and suppression reason, and the
+  truncation of the actor's two strings - so a non-ASCII value inside a limit
+  could still be refused by the insert with `DataError`, inside the caller's
+  transaction. Under the database tag: `migrate` runs it, and
+  `check --database` does. The limits themselves are unchanged, since counting
+  bytes everywhere would refuse values a UTF8 database stores.
+- The shop example shows the length refusals and the lease a claim stamps, and
+  checks both.
+
+### Changed
+- `deliver_events --limit` without `--once` is refused with `CommandError`.
+  The relay never read it, so a command line passing it to a relay was told
+  nothing while the cap it asked for did not exist. A cron or process manager
+  passing `--limit` to a relay must drop it, or add `--once` if a single
+  capped pass was what it meant; `--passes` bounds a relay and `--batch-size`
+  sizes its claims.
+- The test suite runs on MySQL 8.4 in CI, as a correctness gate beside the
+  Postgres jobs. The fixes below are what it found on its first run.
+- The docs say what MySQL's lack of partial indexes costs: Django builds the
+  six partial indexes there without their conditions, so each covers every
+  row, and warns `models.W037` once per table on `migrate` and
+  `check --database`.
+
+### Fixed
+- An `eager=True` receiver was never attempted at commit on MySQL, whose
+  multi-row insert reports no ids: the attempt claimed a list of `None` and
+  every eager row waited for the relay. The attempt now finds its rows by
+  event and receiver after commit, the same way on every backend.
+- `prune_events` failed with MySQL error 1093 on any event with more delivery
+  rows than a batch, because the chunked delete re-checked the event's
+  due-ness in a subquery reading the table it deleted from. The event is now
+  locked and re-checked as a read of its own before the chunk is deleted, as
+  a whole-event batch already was.
+- Reversing migration `0006` failed on MySQL with a duplicate index name: its
+  schema editor leaves an index on `event` alone when the swap drops the
+  unique constraint that led with it, and the reversed `AlterField` then
+  created the same name. The reversal now drops that index first. Forward is
+  unchanged, so an install that already ran `0006` on MySQL keeps that
+  index, beside the one on `event` that `0007` builds there.
+
 ## [0.13.0] — 2026-10-22
 
 ### Added
@@ -1029,7 +1075,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/Artui/django-domain-events/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/Artui/django-domain-events/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/Artui/django-domain-events/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/Artui/django-domain-events/compare/v0.11.1...v0.11.2

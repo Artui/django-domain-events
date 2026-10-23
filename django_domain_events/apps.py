@@ -27,5 +27,6 @@ class DjangoDomainEventsConfig(AppConfig):
         register(checks.check_wake_driver_can_listen)
         register(checks.check_no_orphaned_deliveries, Tags.database)
         register(checks.check_recorded_events_are_declared, Tags.database)
+        register(checks.check_database_measures_characters, Tags.database)
 
         autodiscover_modules("events")

@@ -609,13 +609,13 @@ def test_a_stop_ends_the_prune_between_batches() -> None:
     assert EventRecord.objects.count() == 4
 
 
-postgres_only = pytest.mark.skipif(
-    connection.vendor != "postgresql",
+needs_row_locks = pytest.mark.skipif(
+    connection.vendor == "sqlite",
     reason="row locks are what is under test; SQLite serialises every writer already",
 )
 
 
-@postgres_only
+@needs_row_locks
 @pytest.mark.parametrize("batch_size", [None, 1], ids=["whole-events", "chunked"])
 def test_a_replay_in_flight_is_not_deleted_under(
     order: OrderPlaced, record: list[str], batch_size: int | None
@@ -691,7 +691,7 @@ def test_a_replay_of_an_event_pruned_in_the_meantime_skips_it(
     assert seen["selects"] >= 2
 
 
-@postgres_only
+@needs_row_locks
 def test_requeue_dead_locks_the_events_before_it_reopens_their_rows(
     order: OrderPlaced, record: list[str]
 ) -> None:
@@ -709,10 +709,12 @@ def test_requeue_dead_locks_the_events_before_it_reopens_their_rows(
     statements = [q["sql"] for q in queries.captured_queries]
     locked = next(i for i, sql in enumerate(statements) if "FOR UPDATE" in sql)
     updated = next(
-        i for i, sql in enumerate(statements) if sql.startswith(f'UPDATE "{DELIVERY_TABLE}"')
+        i
+        for i, sql in enumerate(statements)
+        if sql.startswith(f"UPDATE {connection.ops.quote_name(DELIVERY_TABLE)}")
     )
     assert locked < updated, statements
-    assert f'"{EVENT_TABLE}"' in statements[locked]
+    assert connection.ops.quote_name(EVENT_TABLE) in statements[locked]
     assert EventRecord.objects.filter(pk=event.pk).exists()
 
 

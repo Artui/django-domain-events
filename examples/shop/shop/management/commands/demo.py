@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import timedelta
 from io import StringIO
 from typing import Any
@@ -12,11 +13,12 @@ from django.conf import settings as django_settings
 from django.contrib.auth.models import User
 from django.core.management import call_command
 from django.core.management.base import BaseCommand
-from django.db import transaction
+from django.db import connection, transaction
 from django.test import override_settings
 from django.utils.timezone import now
 
 from django_domain_events import (
+    DURABLE,
     assert_fired,
     attributed,
     backoff,
@@ -25,9 +27,12 @@ from django_domain_events import (
     claim_batch,
     deliver_pending,
     drain_outbox,
+    event,
     outbox_health,
     prune_events,
     quiet_receivers,
+    receiver,
+    registry,
     replay_events,
     requeue_dead,
     suppressed,
@@ -716,5 +721,108 @@ class Command(BaseCommand):
             "and the receiver never ran",
             Reservation.objects.filter(order=fourth).exists(),
             False,
+        )
+
+        head("21. A string longer than its column is refused before it is written")
+        # SQLite stores a string of any length, so without these refusals each
+        # of the four below would work here and fail on Postgres. Two are
+        # refused when a declaration runs, which is at import in a real
+        # project, so a too-long one stops it starting; the demo applies the
+        # decorators itself to show that nothing is registered.
+        too_long = "x" * 256
+        events_before = EventRecord.objects.count()
+        refusals: list[str] = []
+        try:
+            with transaction.atomic():
+                from django_domain_events import fire
+
+                fire(
+                    OrderPlaced(
+                        order_id=fourth.pk,
+                        sku="WIDGET",
+                        quantity=1,
+                        total_cents=999,
+                        currency="EUR",
+                    ),
+                    dedupe_key=too_long,
+                )
+        except ValueError as error:
+            refusals.append("fire(dedupe_key=)")
+            print(f"   {str(error).split(';')[0]}")
+        try:
+            with suppressed(OrderPlaced, reason=too_long):
+                ...
+        except ValueError as error:
+            refusals.append("suppressed(reason=)")
+            print(f"   {str(error).split(';')[0]}")
+        long_key = "shop." + too_long
+        try:
+
+            @receiver(OrderPlaced, mode=DURABLE, key=long_key)
+            def never_registered(order: OrderPlaced) -> None: ...
+
+        except ValueError as error:
+            refusals.append("@receiver(key=)")
+            print(f"   {str(error).split(';')[0]}")
+        long_name = "shop." + too_long
+        try:
+
+            @event(name=long_name)
+            @dataclass(frozen=True)
+            class NeverDeclared:
+                value: int
+
+        except ValueError as error:
+            refusals.append("@event(name=)")
+            print(f"   {str(error).split(';')[0]}")
+        check(
+            "each of the four is refused with ValueError",
+            refusals,
+            ["fire(dedupe_key=)", "suppressed(reason=)", "@receiver(key=)", "@event(name=)"],
+        )
+        check("the refused fire wrote no event row", EventRecord.objects.count(), events_before)
+        check(
+            "and neither declaration was registered",
+            (registry.receiver_for_key(long_key), registry.event_for_name(long_name)),
+            (None, None),
+        )
+
+        head("22. A delivery started inside its claim's lease writes no second one")
+        # Every claim stamps a tenth more than the lease its lane's receivers
+        # share, so a row started soon after it is already leased for as long
+        # as its receiver needs, and the extension write before the receiver
+        # runs is skipped. This lane's receivers do not share one - the audit
+        # receiver declares lease_seconds=900 - so the claim stamps
+        # LEASE_SECONDS (30) plus a tenth: reserve_stock starts inside it, and
+        # the audit row is extended to its own 900 seconds when it starts.
+        # Seen in the statements, because nothing else can see a write that
+        # did not happen.
+        fifth = place_order(user, "WIDGET", 1, 999)
+        rows = {
+            row.receiver_key: row.pk
+            for row in DeliveryRecord.objects.filter(
+                event__dedupe_key=f"order-placed:{fifth.pk}", status="pending"
+            )
+        }
+        table = connection.ops.quote_name(DeliveryRecord._meta.db_table)
+        column = connection.ops.quote_name("lease_expires_at")
+        # The values each lease write was bound with: the new lease, then the
+        # row's own fence, whose one integer is the row's primary key.
+        bound: list[object] = []
+
+        def watch(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
+            if sql.startswith(f"UPDATE {table} SET {column} = "):
+                bound.extend(params[1:])
+            return execute(sql, params, many, context)
+
+        with connection.execute_wrapper(watch):
+            print(f"   {deliver_pending(worker_id='demo', lane='default')}")
+        extended = sorted(key for key, pk in rows.items() if pk in bound)
+        print(f"   default-lane rows owed: {sorted(rows)}")
+        print(f"   extended before running: {extended}   <- leased longer than the claim")
+        check(
+            "only the receiver leased longer than the claim is extended",
+            extended,
+            ["shop.audit"],
         )
         print("\nEvery claim above was checked.")

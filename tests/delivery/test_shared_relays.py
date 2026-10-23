@@ -19,7 +19,7 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
-from django.db import connection, connections, transaction
+from django.db import connections, transaction
 
 from django_domain_events.delivery import run_relay as run_relay_module
 from django_domain_events.delivery.fire import fire
@@ -33,10 +33,7 @@ from tests.conftest import event_registered, receiver_registered
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
-    pytest.mark.skipif(
-        not connection.features.has_select_for_update_skip_locked,
-        reason="skipped locks are what this asserts, so it needs a backend with them",
-    ),
+    pytest.mark.usefixtures("skip_locked_backend"),
 ]
 
 DELIVERED: list[tuple[str, str, int]] = []

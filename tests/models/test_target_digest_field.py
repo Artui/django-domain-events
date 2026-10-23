@@ -134,9 +134,11 @@ def test_a_digest_write_on_mysql_carries_no_binary_prefix() -> None:
     """What hiding the hook costs MySQL, pinned so it is a decision rather than
     a drift: its hook answered ``_binary %s``, and an insert or update now
     binds a bare ``%s``, as every lookup on the column always did. Compiled
-    through MySQL's operations on a connection that is never opened, since the
-    suite runs no MySQL server and the backend itself needs mysqlclient; the
-    warning that follows on a server is documented, not tested here."""
+    through MySQL's operations on a connection that is never opened, so it
+    holds on every backend, the SQLite runs without mysqlclient included. The
+    MySQL job writes and reads digests on a real server throughout the suite,
+    which is what shows the bytes survive the bare placeholder; the warning
+    that follows there is documented, not asserted."""
     mysql = ConnectionHandler(
         {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
     )["default"]
