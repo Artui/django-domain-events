@@ -805,8 +805,8 @@ insert was `VALUES`. Timing `bulk_create` of delivery rows alone, on Postgres
     warning 1300, as every lookup on the column always has. The stored bytes
     are unchanged. The test suite runs on MySQL 8.4 with mysqlclient in CI,
     under the default strict `sql_mode` and a `utf8mb4` connection charset,
-    and the warning and the unchanged bytes were checked by hand on 8.4 and
-    9.6 under both `utf8mb4` and `utf8`; MariaDB and PyMySQL are untried. A
+    and the warning and the unchanged bytes were checked by hand on 9.6;
+    MariaDB and PyMySQL are untried. A
     project that runs warnings as errors will see these, and can filter
     MySQLdb's warning 1300 where it writes the `target_digest` column.
 

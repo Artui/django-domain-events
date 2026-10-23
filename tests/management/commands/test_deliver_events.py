@@ -231,12 +231,14 @@ def test_a_single_pass_refuses_a_limit_with_a_batch_size() -> None:
         call_command("deliver_events", "--once", "--limit", "3", "--batch-size", "2")
 
 
-def test_the_relay_refuses_a_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("limit", ["5", "0"])
+def test_the_relay_refuses_a_limit(monkeypatch: pytest.MonkeyPatch, limit: str) -> None:
     """Before the relay starts, so the refusal holds on every backend: the relay
-    is a stand-in here, and one that ran would record its call."""
+    is a stand-in here, and one that ran would record its call. A limit of zero
+    too, which a truthiness test would let through."""
     seen = _captured(monkeypatch, "run_relay")
     with pytest.raises(CommandError, match="--limit caps a single pass and needs --once"):
-        call_command("deliver_events", "--limit", "5", "--passes", "1")
+        call_command("deliver_events", "--limit", limit, "--passes", "1")
     assert seen == []
 
 

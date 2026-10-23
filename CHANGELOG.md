@@ -31,8 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sizes its claims.
 - The test suite runs on MySQL 8.4 in CI, as a correctness gate beside the
   Postgres jobs. The fixes below are what it found on its first run.
-- The docs say what MySQL's missing partial indexes cost: Django creates none
-  of the six there, and warns `models.W037` once per table.
+- The docs say what MySQL's lack of partial indexes costs: Django builds the
+  six partial indexes there without their conditions, so each covers every
+  row, and warns `models.W037` once per table on `migrate` and
+  `check --database`.
 
 ### Fixed
 - An `eager=True` receiver was never attempted at commit on MySQL, whose
@@ -49,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unique constraint that led with it, and the reversed `AlterField` then
   created the same name. The reversal now drops that index first. Forward is
   unchanged, so an install that already ran `0006` on MySQL keeps that
-  index, which nothing reads.
+  index, beside the one on `event` that `0007` builds there.
 
 ## [0.13.0] — 2026-10-22
 
