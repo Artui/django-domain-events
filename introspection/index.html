@@ -1094,6 +1094,11 @@ receiver, and a <code>"lanes"</code> list beside <code>"receivers"</code>: each 
 <td>Warning</td>
 <td><code>WAKE</code> is <code>"notify"</code> on Postgres, but Django loaded psycopg2, which cannot listen; the relay polls instead</td>
 </tr>
+<tr>
+<td><code>W009</code></td>
+<td>Warning</td>
+<td>The database the event rows are written to is a Postgres <code>SQL_ASCII</code> database, which measures a <code>varchar</code> in bytes</td>
+</tr>
 </tbody>
 </table>
 <p><code>E001</code> matters because nothing else would ever say so: the event cannot be fired,
@@ -1115,6 +1120,15 @@ to deliver. <code>"notify"</code> is the default, so without the check a project
 psycopg2 would run a mode it never chose and never be told. Set <code>WAKE</code> to
 <code>"poll"</code> to say so, or install psycopg 3 to have the relay woken
 (<a href="../operations/#listen-notify"><code>LISTEN</code> / <code>NOTIFY</code></a>).</p>
+<p><code>W009</code> is about the one Postgres encoding that has none. Every limit this package
+holds a string to counts characters - the refusals of a long receiver key, event
+name, <code>dedupe_key</code> or suppression reason, and the truncation of the actor's two
+strings - because a <code>varchar(255)</code> counts characters. A <code>SQL_ASCII</code> database
+counts bytes, so a value of 255 characters that are not all ASCII passes those
+checks and is refused by the insert with <code>DataError</code>, inside the caller's
+transaction. Counting bytes everywhere would refuse keys a UTF8 database stores,
+so the check names the database instead. It queries the server, so it runs under
+the database tag: <code>migrate</code> runs it, and <code>check --database default</code> does.</p>
 <p><code>W006</code> and <code>W007</code> exist because both mistakes are otherwise silent. <code>setting()</code>
 reads only the keys this package asks for, so a typo sits in the settings
 looking effective; and the dict is <code>DJANGO_DOMAIN_EVENTS</code> while the app label

@@ -1136,6 +1136,21 @@ it meaningful. Declaration, <code>INLINE</code>, <code>ON_COMMIT</code>, <code>f
 <code>drain_outbox()</code> all work on every backend, so <strong>a SQLite test suite is
 fully supported</strong> - but running more than one relay is not.</p>
 </div>
+<div class="admonition note">
+<p class="admonition-title">On MySQL, the partial indexes cover every row</p>
+<p>Six of the indexes on the two tables are partial: each holds only the
+rows one query reads, such as the owed rows the relay claims from or the
+dead letters an operator works down, so each stays as small as that set
+however much history the table carries. MySQL has no partial indexes, so
+Django builds each of them there without its condition, and says so with
+<code>models.W037</code>, once per table, wherever it checks that database: <code>migrate</code>
+and <code>check --database</code>. Everything still works and the suite runs on
+MySQL in CI, but each of the six covers every row, settled history
+included, so it is larger, is written on every status change, and the
+relay's claim walks past settled rows in it. Their cost grows with the
+history the tables keep, and pruning that history (see
+<a href="../operations/#pruning">Pruning</a>) is what keeps it bounded there.</p>
+</div>
 <h2 id="failure">Failure<a class="headerlink" href="#failure" title="Permanent link">&para;</a></h2>
 <p>A <code>DURABLE</code> receiver that raises is retried with <strong>exponential backoff and full
 jitter</strong>, up to <code>max_attempts</code>, then dead-lettered - unless it says otherwise,

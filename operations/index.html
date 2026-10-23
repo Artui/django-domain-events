@@ -1194,6 +1194,9 @@ real interface; the commands are thin wrappers, so anything cron can do a
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>python<span class="w"> </span>manage.py<span class="w"> </span>deliver_events<span class="w"> </span>--lane<span class="w"> </span>default<span class="w"> </span>--lane<span class="w"> </span>mail<span class="w">   </span><span class="c1"># both lanes, each in turn</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>python<span class="w"> </span>manage.py<span class="w"> </span>deliver_events<span class="w"> </span>--lane<span class="w"> </span>default<span class="w"> </span>--lane<span class="w"> </span>mail<span class="w"> </span>--lane-batch-size<span class="w"> </span><span class="nv">mail</span><span class="o">=</span><span class="m">5</span>
 </span></code></pre></div>
+<p><code>--limit</code> caps a single pass, so it needs <code>--once</code>: a relay delivers until it is
+stopped and has no total to cap, and the command refuses <code>--limit</code> beside it
+rather than accepting a cap nothing reads. Bound a relay with <code>--passes</code>.</p>
 <p>Run as many as you like on Postgres. On SQLite, run exactly one.</p>
 <h3 id="lanes-a-relay-per-kind-of-work">Lanes: a relay per kind of work<a class="headerlink" href="#lanes-a-relay-per-kind-of-work" title="Permanent link">&para;</a></h3>
 <p>One relay delivers one row at a time. A receiver that takes a second per
@@ -1876,11 +1879,12 @@ insert was <code>VALUES</code>. Timing <code>bulk_create</code> of delivery rows
 <p>The hook the digest column no longer has is also what put MySQL's
 <code>_binary</code> prefix on it, so every insert or update of a digest raises
 warning 1300, as every lookup on the column always has. The stored bytes
-are unchanged. This was checked by hand against MySQL 9.6 with mysqlclient
-2.3.0 under the default strict <code>sql_mode</code>, not in CI, and not on MariaDB,
-PyMySQL, MySQL 8.x or a <code>utf8mb4</code> connection charset. A project that runs
-warnings as errors will see these, and can filter MySQLdb's warning 1300
-where it writes the <code>target_digest</code> column.</p>
+are unchanged. The test suite runs on MySQL 8.4 with mysqlclient in CI,
+under the default strict <code>sql_mode</code> and a <code>utf8mb4</code> connection charset,
+and the warning and the unchanged bytes were checked by hand on 9.6;
+MariaDB and PyMySQL are untried. A
+project that runs warnings as errors will see these, and can filter
+MySQLdb's warning 1300 where it writes the <code>target_digest</code> column.</p>
 </div>
 <p>The rest of the cost is the <code>targets=</code> callable, which runs once per fired event
 for every fan-out receiver owed it. Make it <strong>one <code>SELECT</code></strong> returning the
