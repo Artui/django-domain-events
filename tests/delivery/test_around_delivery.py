@@ -494,6 +494,29 @@ def test_a_row_lost_mid_flight_still_exits_the_hook(settings: Any) -> None:
     assert _exits() == [(None, None, None)]
 
 
+def _broker_down() -> None:
+    raise RuntimeError("broker down")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_the_hook_is_not_handed_an_on_commit_callbacks_exception(settings: Any) -> None:
+    """A callback the receiver registered raises once the acknowledgement has
+    committed, and that is not the delivery failing: a tracing hook handed it
+    would mark a committed success as an error. A real transaction, so the
+    delivery's ``atomic()`` is the outermost one and its callbacks run."""
+
+    def enqueues(event: Unheard) -> None:
+        transaction.on_commit(_broker_down)
+
+    receiver(Unheard, key="probe.enqueues")(enqueues)
+    _hook(settings, "recording")
+    row = _owed("probe.enqueues")
+
+    assert deliver_one(row.pk) == DeliveryStatus.SUCCEEDED
+
+    _assert_wrapped_once(row, "probe.enqueues")
+
+
 def test_the_hook_is_exited_even_when_recording_the_failure_raises(
     settings: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:

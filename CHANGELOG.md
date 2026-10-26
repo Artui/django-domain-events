@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] — 2026-10-26
+
+### Fixed
+- An on-commit callback raising after a durable receiver's work committed no
+  longer turns the success into a failure. The receiver and its
+  acknowledgement share one transaction, and where the delivery's transaction
+  is the outermost one - the relay, a task, `deliver_pending()` or
+  `deliver_one()` outside any `atomic()`, and the eager attempt - a callback
+  the receiver registered with `transaction.on_commit()` runs when it commits. One that raised left the transaction like the receiver's own
+  exception and was recorded over the committed `succeeded` row: the attempt
+  counted, `on_failure` was told, the failure log and `AROUND_DELIVERY` saw a
+  failed delivery, and the receiver ran again on the next claim, repeating its
+  committed side effects until the row went dead. A `NotYet` or `RetryAfter`
+  raised there rescheduled or deferred it the same way. The delivery now
+  stands, and the callback's exception is logged at ERROR. A write the
+  database refuses at COMMIT, such as a deferred foreign key, still fails the
+  attempt. Present since the first release. Django still skips the callbacks
+  registered after the one that raised, so the delivery docs now say to
+  register a receiver's callbacks with `robust=True`.
+
 ## [0.14.0] — 2026-10-23
 
 ### Added
@@ -1075,7 +1095,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/Artui/django-domain-events/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/Artui/django-domain-events/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/Artui/django-domain-events/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/Artui/django-domain-events/compare/v0.11.2...v0.12.0

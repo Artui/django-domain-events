@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -1239,3 +1240,111 @@ def test_a_row_delivered_in_place_is_never_read_back(
     deliver_pending(worker_id="w1", now=django_timezone.now())
 
     assert read_back == []
+
+
+@contextmanager
+def _on_failure_recorded(key: str) -> Iterator[list[object]]:
+    """Give one receiver an ``on_failure`` that keeps what it is told."""
+    entry = registry.receiver_for_key(key)
+    seen: list[object] = []
+    object.__setattr__(entry, "on_failure", seen.append)
+    try:
+        yield seen
+    finally:
+        object.__setattr__(entry, "on_failure", None)
+
+
+def _raise_broker_down() -> None:
+    raise RuntimeError("broker down")
+
+
+def test_an_on_commit_callback_raising_after_the_acknowledgement_leaves_the_success(
+    order: OrderPlaced, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A receiver's on-commit callback runs when the delivery's transaction
+    commits, so one that raises (Django's default, ``robust=False``) leaves
+    ``atomic()`` after the acknowledgement is durable. Read as the receiver
+    failing, it was written over the committed success, ``on_failure`` was told
+    of a failure, and the receiver ran again on the next claim."""
+    _fire(order)
+    runs: list[int] = []
+
+    def enqueue_on_commit(evt: OrderPlaced) -> None:
+        runs.append(evt.order_id)
+        transaction.on_commit(_raise_broker_down)
+
+    with (
+        receiver_replaced("testapp.durable_receiver", enqueue_on_commit),
+        _on_failure_recorded("testapp.durable_receiver") as failures,
+    ):
+        deliver_pending()
+        row = _delivery("testapp.durable_receiver")
+        assert (row.status, row.attempts, row.last_error) == (DeliveryStatus.SUCCEEDED, 1, "")
+        assert row.succeeded_at is not None
+        deliver_pending(ignore_backoff=True)
+
+    assert runs == [7]
+    assert failures == []
+    logged = [r for r in caplog.records if "an on-commit callback raised" in r.getMessage()]
+    assert [r.levelno for r in logged] == [logging.ERROR]
+    assert "broker down" in caplog.text, "with the callback's traceback"
+
+
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        pytest.param(lambda: NotYet(django_timezone.now() + timedelta(hours=1)), id="not-yet"),
+        pytest.param(lambda: RetryAfter(30, counts=False), id="retry-after-not-counting"),
+    ],
+)
+def test_a_verdict_raised_by_an_on_commit_callback_is_not_read_as_one(
+    order: OrderPlaced, verdict: Any
+) -> None:
+    """Separate from the failure above because a verdict is read before a
+    failure is: a check placed below those branches passes that test and lets
+    a callback reschedule or defer a committed success."""
+    _fire(order)
+
+    def raise_verdict() -> None:
+        raise verdict()
+
+    def defer_on_commit(evt: OrderPlaced) -> None:
+        transaction.on_commit(raise_verdict)
+
+    with receiver_replaced("testapp.durable_receiver", defer_on_commit):
+        assert deliver_one(_delivery_id("testapp.durable_receiver")) is DeliveryStatus.SUCCEEDED
+
+    row = _delivery("testapp.durable_receiver")
+    assert (row.status, row.attempts, row.last_error) == (DeliveryStatus.SUCCEEDED, 1, "")
+
+
+def test_a_write_refused_at_commit_is_still_a_failure(order: OrderPlaced) -> None:
+    """What the success is told apart by must be the commit, not the write of
+    the acknowledgement: a foreign key checked at COMMIT refuses the
+    receiver's work after the acknowledgement was written, and the attempt
+    failed. Postgres and SQLite defer the check to COMMIT; MySQL checks it at
+    the insert, inside the receiver, which would pass this for the wrong
+    reason."""
+    if connection.vendor == "mysql":
+        pytest.skip("MySQL has no deferred constraints, so nothing is refused at COMMIT")
+    _fire(order)
+    finished: list[bool] = []
+
+    def write_a_dangling_reference(evt: OrderPlaced) -> None:
+        EventRecord.objects.create(
+            name="probe.Dangling",
+            version=1,
+            payload={},
+            occurred_at=django_timezone.now(),
+            actor_id=987654,
+        )
+        finished.append(True)
+
+    with receiver_replaced("testapp.durable_receiver", write_a_dangling_reference):
+        assert deliver_one(_delivery_id("testapp.durable_receiver")) is DeliveryStatus.FAILED
+
+    assert finished == [True], "the receiver returned, so the refusal came at COMMIT"
+    row = _delivery("testapp.durable_receiver")
+    assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 1)
+    assert "IntegrityError" in row.last_error
+    assert not EventRecord.objects.filter(name="probe.Dangling").exists()
