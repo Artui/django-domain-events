@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -1284,8 +1285,9 @@ def test_an_on_commit_callback_raising_after_the_acknowledgement_leaves_the_succ
 
     assert runs == [7]
     assert failures == []
-    assert "an on-commit callback raised after delivery" in caplog.text
-    assert "broker down" in caplog.text
+    logged = [r for r in caplog.records if "an on-commit callback raised" in r.getMessage()]
+    assert [r.levelno for r in logged] == [logging.ERROR]
+    assert "broker down" in caplog.text, "with the callback's traceback"
 
 
 @pytest.mark.parametrize(

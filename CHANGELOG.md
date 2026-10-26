@@ -11,9 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An on-commit callback raising after a durable receiver's work committed no
   longer turns the success into a failure. The receiver and its
   acknowledgement share one transaction, and where the delivery's transaction
-  is the outermost one - the relay, `deliver_pending()` and the task site - a
-  callback the receiver registered with `transaction.on_commit()` runs when it
-  commits. One that raised left the transaction like the receiver's own
+  is the outermost one - the relay, a task, `deliver_pending()` or
+  `deliver_one()` outside any `atomic()`, and the eager attempt - a callback
+  the receiver registered with `transaction.on_commit()` runs when it commits. One that raised left the transaction like the receiver's own
   exception and was recorded over the committed `succeeded` row: the attempt
   counted, `on_failure` was told, the failure log and `AROUND_DELIVERY` saw a
   failed delivery, and the receiver ran again on the next claim, repeating its
