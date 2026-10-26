@@ -1129,6 +1129,25 @@ for what that means behind pgbouncer and under
 <code>idle_in_transaction_session_timeout</code>, and
 <a href="../operations/#side-effects-inside-the-acknowledging-transaction">Side effects inside the acknowledging transaction</a>
 for why a call made there can happen twice.</p>
+<p>That same transaction is the one a receiver's <code>transaction.on_commit()</code>
+callbacks wait for, whether the receiver registers them itself or a model's
+<code>save()</code>, a signal or a helper it calls does - provided they are registered on
+the database the event log is written to. With a router sending the log
+elsewhere, a plain <code>on_commit()</code> registers on <code>default</code>, which is in
+autocommit, so Django runs the callback at once, inside the receiver; pass
+<code>using=</code> the log's alias for it to wait.</p>
+<p>When the delivery's transaction is the outermost one - the relay, a task,
+<code>deliver_pending()</code> or <code>deliver_one()</code> called outside any <code>atomic()</code>, and the
+eager attempt - the callbacks run once the acknowledgement has committed, so a
+callback that raises is not the receiver failing: the delivery stays
+<code>succeeded</code>, the receiver is not run again, and the exception is logged at
+ERROR. Inside a caller's <code>atomic()</code> they run when the caller commits, and a
+callback that raises there raises from the caller's block, as Django's do
+anywhere. Either way, Django stops at a callback registered with
+<code>robust=False</code>, its default, and skips every callback registered after it in
+that transaction, including ones this package registers for events the
+receiver fired. Register a receiver's callbacks with <code>robust=True</code> - a Celery
+<code>.delay()</code> meeting a broker that is down is the usual one.</p>
 <div class="admonition warning">
 <p class="admonition-title">SKIP LOCKED is Postgres and MySQL 8</p>
 <p>SQLite has neither the statement nor the concurrency model that would make
