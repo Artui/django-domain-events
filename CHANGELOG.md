@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] — 2026-10-26
+
 ### Fixed
 - An on-commit callback raising after a durable receiver's work committed no
   longer turns the success into a failure. The receiver and its
@@ -1093,7 +1095,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/Artui/django-domain-events/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/Artui/django-domain-events/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/Artui/django-domain-events/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/Artui/django-domain-events/compare/v0.11.2...v0.12.0
