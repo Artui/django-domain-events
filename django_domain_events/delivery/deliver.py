@@ -240,6 +240,12 @@ def _deliver_one(
     # (test_the_outcome_is_committed_before_exit_runs,
     # test_inside_a_callers_transaction_the_outcome_is_recorded_not_committed).
     around = _Around(context)
+    committed = False
+
+    def mark_committed() -> None:
+        nonlocal committed
+        committed = True
+
     try:
         # Entering is inside the try: a hook that cannot be entered fails the
         # attempt exactly as the receiver raising would, without running it
@@ -250,6 +256,16 @@ def _deliver_one(
             transaction.atomic(using=write_alias()),
             caused_by(delivery.event.pk, delivery.event.correlation_id),
         ):
+            # Registered before the receiver runs, so it is the first callback
+            # Django runs when this block commits, and it runs only once COMMIT
+            # has succeeded. A callback the receiver registers runs after it,
+            # and one that raises leaves this ``with`` like the receiver's own
+            # exception would; this is what tells the two apart. Not a flag set
+            # after the acknowledgement is written: a write the database refuses
+            # at COMMIT, a deferred constraint, is a failure of the attempt
+            # (test_an_on_commit_callback_raising_after_the_acknowledgement_leaves_the_success,
+            # test_a_write_refused_at_commit_is_still_a_failure).
+            transaction.on_commit(mark_committed, using=write_alias())
             call_receiver(receiver.func, receiver.takes_context, event, context)
             acknowledged = timezone.now()
             outcome = fence.write(
@@ -272,6 +288,27 @@ def _deliver_one(
                 )
                 transaction.set_rollback(True, using=write_alias())
     except Exception as exc:
+        if committed:
+            # Raised by an on-commit callback after the acknowledgement
+            # committed, so not the receiver's verdict, and checked before any
+            # verdict is read: a NotYet or RetryAfter from a callback is no
+            # more a deferral than a RuntimeError is a failure. Written over
+            # the success, it would count an attempt for committed work, tell
+            # ``on_failure`` of it and run the receiver again on the next
+            # claim. Logged and swallowed, as an exception from the hook's exit
+            # is, and the hook is not handed it
+            # (test_an_on_commit_callback_raising_after_the_acknowledgement_leaves_the_success,
+            # test_a_verdict_raised_by_an_on_commit_callback_is_not_read_as_one).
+            logger.exception(
+                "an on-commit callback raised after delivery %s of receiver %s "
+                "committed; the delivery succeeded and stands. Django skipped the "
+                "callbacks registered after it in that transaction, including "
+                "robust ones; register the receiver's own callbacks with "
+                "robust=True",
+                delivery_id,
+                receiver.key,
+            )
+            return outcome
         # The receiver's verdict is read here, at the one boundary every
         # execution site shares, and nowhere else. Both are ordinary failures
         # in every other respect: the attempt counts and the message is kept.

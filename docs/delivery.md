@@ -95,6 +95,18 @@ for what that means behind pgbouncer and under
 [Side effects inside the acknowledging transaction](operations.md#side-effects-inside-the-acknowledging-transaction)
 for why a call made there can happen twice.
 
+That same transaction is the one a receiver's `transaction.on_commit()`
+callbacks wait for, whether the receiver registers them itself or a model's
+`save()`, a signal or a helper it calls does. Where the relay, `deliver_pending()`
+or a task runs the delivery, they run once the acknowledgement has committed,
+so a callback that raises is not the receiver failing: the delivery stays
+`succeeded`, the receiver is not run again, and the exception is logged at
+ERROR. Django still stops at a callback registered with `robust=False`, its
+default, and skips every callback registered after it in that transaction,
+including ones this package registers for events the receiver fired. Register
+a receiver's callbacks with `robust=True` - a Celery `.delay()` meeting a
+broker that is down is the usual one.
+
 !!! warning "SKIP LOCKED is Postgres and MySQL 8"
     SQLite has neither the statement nor the concurrency model that would make
     it meaningful. Declaration, `INLINE`, `ON_COMMIT`, `fire()`, the tables and
