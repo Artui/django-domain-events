@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/codecs/dataclass_codec.py``."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -34,9 +32,7 @@ class Lines:
 
 
 def test_every_documented_scalar_round_trips(order: OrderPlaced) -> None:
-    """The claim the codec makes, tested as one round trip rather than field by
-    field: encode writes through DjangoJSONEncoder and decode rebuilds from the
-    declared types, so the two halves have to agree on the same table."""
+    """The codec claim as one round trip: encode and decode must agree on the table."""
     payload = codec.encode(order)
     assert payload["total"] == "19.99"
     assert payload["currency"] == "EUR"
@@ -61,8 +57,7 @@ def test_dates_and_times_rebuild_from_their_string_forms() -> None:
 def test_a_field_added_with_a_default_decodes_from_an_older_row(
     order: OrderPlaced,
 ) -> None:
-    """The tolerant half of the schema rule: the constructor supplies the
-    default, so an old row is not a dead letter."""
+    """The tolerant half of the schema rule: the constructor supplies the default."""
     payload = codec.encode(order)
     del payload["note"]
     assert codec.decode(OrderPlaced, payload, 1).note is None
@@ -75,8 +70,7 @@ def test_a_field_removed_from_the_class_is_ignored(order: OrderPlaced) -> None:
 
 
 def test_a_required_field_missing_names_itself(order: OrderPlaced) -> None:
-    """The breaking change fails loudly, and the message is what lands in
-    last_error for an operator to read."""
+    """The breaking change fails loudly, and its message lands in last_error."""
     payload = codec.encode(order)
     del payload["order_id"]
     with pytest.raises(TypeError, match="order_id"):
@@ -84,8 +78,7 @@ def test_a_required_field_missing_names_itself(order: OrderPlaced) -> None:
 
 
 def test_a_literal_outside_its_options_refuses(order: OrderPlaced) -> None:
-    """A hand-edited row must not produce an instance its own annotation
-    forbids."""
+    """A hand-edited row must not produce an instance its own annotation forbids."""
     payload = {**codec.encode(order), "kind": "wholesale-ish"}
     with pytest.raises(UnsupportedPayloadType, match="is not one of"):
         codec.decode(OrderPlaced, payload, 1)
@@ -116,9 +109,7 @@ def test_a_uuid_rebuilds_as_a_uuid() -> None:
 
 
 def test_a_nested_dataclass_refuses_and_names_the_codec_that_handles_it() -> None:
-    """Refuse rather than approximate. A best-effort decode would put a dict
-    where the annotation promised a dataclass, and the failure would surface
-    somewhere unrelated."""
+    """Refuse rather than approximate."""
 
     with pytest.raises(UnsupportedPayloadType, match="DaciteCodec"):
         codec.decode(Basket, {"line": {"sku": "abc"}}, 1)
@@ -130,8 +121,7 @@ def test_a_list_of_an_unsupported_type_refuses() -> None:
 
 
 def test_a_union_of_two_real_types_refuses() -> None:
-    """Optional is a union with None and is supported; a genuine either-or is
-    not, because choosing a member is what dacite exists to do."""
+    """Optional is a union with None and is supported; a genuine either-or is not."""
 
     @dataclass(frozen=True)
     class Either:
@@ -142,8 +132,7 @@ def test_a_union_of_two_real_types_refuses() -> None:
 
 
 def test_the_refusal_names_the_version_it_choked_on() -> None:
-    """An operator reading last_error needs to know which vintage of the payload
-    failed, not only which field."""
+    """An operator reading last_error needs the payload vintage that failed."""
 
     @dataclass(frozen=True)
     class Odd:
@@ -154,11 +143,7 @@ def test_the_refusal_names_the_version_it_choked_on() -> None:
 
 
 def test_annotations_that_cannot_be_resolved_say_why() -> None:
-    """A field whose type is also function-local cannot be resolved: the
-    annotation is a string and only module globals are searched. The bare
-    NameError names the missing type and never the declaration site, which is
-    the actual fault. Module-level names resolve fine, which is why events
-    declared the normal way never meet this."""
+    """A function-local field type cannot resolve: only module globals are searched."""
 
     @dataclass(frozen=True)
     class LocalPart:
@@ -173,14 +158,7 @@ def test_annotations_that_cannot_be_resolved_say_why() -> None:
 
 
 def test_an_annotation_with_no_class_to_rebuild_refuses() -> None:
-    """A parameterised generic is not a class, so there is nothing to rebuild the
-    value as. Passing the raw JSON through would put whatever the row happened to
-    hold behind an annotation promising a shape, which is the silent
-    approximation this codec exists to avoid.
-
-    ``dict`` specifically, rather than ``Any``: ``typing.Any`` became a class in
-    3.11, so it takes the other path and would not exercise this one.
-    """
+    """A parameterised generic is not a class, so there is nothing to rebuild the value as."""
 
     @dataclass(frozen=True)
     class Mapping:
@@ -191,8 +169,7 @@ def test_an_annotation_with_no_class_to_rebuild_refuses() -> None:
 
 
 def test_any_refuses_too() -> None:
-    """``Any`` reaches the refusal by the other route, and must still refuse: an
-    annotation that promises nothing is not a licence to store anything."""
+    """Any reaches the refusal by the other route, and must still refuse."""
 
     @dataclass(frozen=True)
     class Loose:
@@ -220,18 +197,14 @@ class Stamped:
 
 
 def test_a_plain_enum_round_trips() -> None:
-    """The decode side always claimed enums; the encode side had no Enum branch,
-    so only a str-mixin enum survived - which is what the fixtures use, so the
-    suite agreed with the gap."""
+    """The encode side had no Enum branch, so only str-mixin enums survived."""
     value = Painted(colour=Colour.RED)
     assert codec.encode(value) == {"colour": "red"}
     assert codec.decode(Painted, codec.encode(value), 1) == value
 
 
 def test_microseconds_survive_the_round_trip() -> None:
-    """DjangoJSONEncoder truncates to milliseconds, so an event came back with
-    different data and nothing failed - assert_fired least of all, which is the
-    helper most likely to be pointed at exactly this."""
+    """DjangoJSONEncoder truncates to milliseconds, silently changing the event's data."""
     value = Stamped(
         at=datetime(2026, 8, 31, 12, 0, 0, 123456, tzinfo=timezone.utc),
         clock=time(12, 0, 0, 123456),
@@ -240,8 +213,7 @@ def test_microseconds_survive_the_round_trip() -> None:
 
 
 def test_a_value_that_cannot_be_written_names_its_field() -> None:
-    """The raw error from json names a type and no field, and it surfaces inside
-    the caller's transaction - taking the business change with it."""
+    """The raw json error names no field, and it aborts the caller's transaction."""
 
     @dataclass(frozen=True)
     class Bad:
@@ -253,10 +225,7 @@ def test_a_value_that_cannot_be_written_names_its_field() -> None:
 
 
 def test_the_refusal_falls_back_when_no_single_field_is_at_fault() -> None:
-    """The per-field search is a best effort at naming the culprit. Tested
-    directly because a payload that fails as a whole while every field passes
-    alone is not something JSON can actually produce - and a fallback that
-    cannot be reached should not be written on faith."""
+    """The per-field search is a best effort at naming the culprit."""
     from django_domain_events.codecs.dataclass_codec import _unencodable
 
     problem = _unencodable(Painted(colour=Colour.RED), {}, TypeError("nope"))
