@@ -223,6 +223,7 @@ that is not running.
 - Exempt: directives (`# noqa`, `# ty:`, `# vX.Y.Z` pins), migrations, and a docstring
   the code or a test reads through `__doc__`, which is data.
 
+A docstring mkdocstrings renders into the API reference is not exempt.
 Condense rather than move: a reason that does not fit is cut, not relocated to prose
 elsewhere. A body left empty by a removed docstring takes `...`. The workbench's
 `bin/comment-budget.py` lists the violations.
