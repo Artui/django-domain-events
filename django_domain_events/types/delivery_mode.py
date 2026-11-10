@@ -4,11 +4,7 @@ from enum import Enum
 
 
 class DeliveryMode(Enum):
-    """Timing and guarantee, declared per receiver.
-
-    Timing is separate from where a receiver's code runs; a queue is only ever an
-    answer to the second question.
-    """
+    """Timing and guarantee, declared per receiver."""
 
     INLINE = "inline"
     """Inside the firing transaction, and free to abort it by raising.

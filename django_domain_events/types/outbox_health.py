@@ -9,12 +9,7 @@ from django_domain_events.types.receiver_backlog import ReceiverBacklog
 
 @dataclass(frozen=True, slots=True)
 class OutboxHealth:
-    """Whether the outbox is keeping up, in one value.
-
-    Counts and one timestamp rather than rates: a rate needs two samples and a
-    place to keep the first, which is a metrics system's job. This is what that
-    system scrapes.
-    """
+    """Whether the outbox is keeping up, in one value."""
 
     owed: int
     """Deliveries due and not yet settled: pending, failed or claimed, with

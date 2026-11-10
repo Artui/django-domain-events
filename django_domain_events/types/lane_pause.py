@@ -6,17 +6,7 @@ from datetime import datetime
 
 @dataclass(frozen=True, slots=True)
 class LanePause:
-    """One relay holding one lane paused after a deferral, as it recorded it.
-
-    A pause governs only the relay that heard the deferral, and that relay
-    writes it and clears it when the pause ends or it stops. A relay that died
-    without returning leaves its record behind: it stops showing once ``until``
-    passes and is deleted at the next deferral any relay records. A successor
-    started under the same ``worker_id`` takes it over only at its own first
-    deferral, so before reading this as a lane nobody serves, compare
-    ``worker_id`` and ``paused_at`` against the processes running and when they
-    started.
-    """
+    """One relay holding one lane paused after a deferral, as it recorded it."""
 
     worker_id: str
     """The ``worker_id`` of the relay holding the pause: ``host:pid`` under
