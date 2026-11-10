@@ -28,14 +28,7 @@ _NEAR_MISS_SETTINGS_NAMES = ("DOMAIN_EVENTS", "DJANGO_DOMAIN_EVENT", "DOMAIN_EVE
 
 
 def check_receivers_have_events(**kwargs: Any) -> list[Any]:
-    """Every receiver listens for something that was declared.
-
-    Nothing else would say so: the event cannot be fired, so there is no failure
-    to observe, only silence.
-
-    A wildcard is exempt: ``AnyEvent`` is a marker, never declared as an event,
-    and a receiver for it listens to everything that is.
-    """
+    """Every receiver listens for something that was declared."""
     problems = []
     for receiver in registry.receivers():
         if (
@@ -54,11 +47,7 @@ def check_receivers_have_events(**kwargs: Any) -> list[Any]:
 
 
 def check_codec_dependency_is_installed(**kwargs: Any) -> list[Any]:
-    """The configured codec can be imported.
-
-    At startup rather than when an event fires: a codec is imported lazily, so
-    the first symptom of a missing extra would otherwise be a failed delivery.
-    """
+    """The configured codec can be imported."""
     path = setting("CODEC")
     try:
         import_string(path)
@@ -77,26 +66,7 @@ def check_codec_dependency_is_installed(**kwargs: Any) -> list[Any]:
 
 
 def check_wake_driver_can_listen(**kwargs: Any) -> list[Any]:
-    """``WAKE = "notify"`` on Postgres has a driver that can listen.
-
-    The wake listens through psycopg 3, so under psycopg2 the relay polls and
-    ``fire()`` sends no NOTIFY. That is correct, only slower to deliver, and
-    ``notify`` is the default, so a psycopg2 project would otherwise be running
-    a mode it never chose and never be told. A warning rather than an error for
-    the same reason: nothing is lost.
-
-    Of the write connection, because that is the one the relay listens on.
-    Reading its ``vendor`` opens no connection, so this needs no database tag.
-    The same predicate as the wake's own (``wake._resolve``), restated here
-    rather than shared through it: the wake's answer folds in the ``supported``
-    override, which a check has no use for.
-
-    One branch arc of three conjuncts, each held by a test that fails without
-    it: the vendor by
-    ``test_a_backend_without_notify_is_not_warned_about_its_driver``, ``WAKE`` by
-    ``test_poll_on_a_driver_that_cannot_listen_is_clean`` and the driver by
-    ``test_notify_on_psycopg3_is_clean``.
-    """
+    """``WAKE = "notify"`` on Postgres has a driver that can listen."""
     if (
         connections[write_alias()].vendor != "postgresql"
         or setting("WAKE") != "notify"
@@ -120,27 +90,7 @@ def check_wake_driver_can_listen(**kwargs: Any) -> list[Any]:
 def check_database_measures_characters(
     *, databases: Sequence[str] | None = None, **kwargs: Any
 ) -> list[Any]:
-    """The write database counts a ``varchar``'s length in characters.
-
-    Every length this package holds a string to - the refusals of a long
-    receiver key, event name, ``dedupe_key`` and suppression reason, and the
-    truncation of the actor's two strings at capture - counts characters,
-    because that is what a Postgres ``varchar(n)`` counts. A ``SQL_ASCII``
-    database is the exception: it has no encoding to decode with, so it counts
-    bytes, and a value of 255 characters that are not all ASCII passes every
-    one of those checks and is then refused by the insert with ``DataError``,
-    inside the caller's transaction. Counting bytes everywhere instead would
-    refuse keys a UTF8 database stores, and the declaration-time refusals run
-    before any connection exists, so the database is named here rather than
-    measured in each of them.
-
-    A warning, because an ASCII-only project on such a database loses nothing.
-    Under the database tag, as the query needs a connection: ``migrate`` runs
-    it, and ``check --database`` does. Two guards, each held by a test that
-    fails without it: the databases asked about
-    (``test_an_encoding_check_not_asked_about_the_database_reads_nothing``) and
-    the vendor (``test_a_backend_other_than_postgres_is_not_asked_its_encoding``).
-    """
+    """The write database counts a ``varchar``'s length in characters."""
     alias = write_alias()
     if not databases or alias not in databases:
         return []
@@ -171,24 +121,7 @@ def _server_encoding(alias: str) -> str:
 
 
 def check_declared_events_are_decodable(**kwargs: Any) -> list[Any]:
-    """Every declared event can be rebuilt by the configured codec.
-
-    The companion to
-    :func:`check_codec_dependency_is_installed`, and the one that catches the
-    failure that actually happens. That check asks whether the codec can be
-    *imported*; this one asks whether it can decode the events this project
-    declares -- which is a different question, and the one whose answer is
-    silent when it is no.
-
-    The asymmetry is what makes it worth a check. ``fire()`` encodes and commits
-    inside the caller's transaction whatever the annotation says, so an event
-    the codec cannot rebuild is recorded successfully and then dead-letters on
-    every durable delivery, in the relay, in another process, possibly hours
-    later. Nothing before that point fails.
-
-    A codec that does not implement ``unsupported_fields`` is not interrogated:
-    this package should not guess at what a codec it did not write can do.
-    """
+    """Every declared event can be rebuilt by the configured codec."""
     codec = get_codec()
     inspect = getattr(codec, "unsupported_fields", None)
     if inspect is None:
@@ -217,19 +150,7 @@ def check_declared_events_are_decodable(**kwargs: Any) -> list[Any]:
 
 
 def check_settings_keys_are_known(**kwargs: Any) -> list[Any]:
-    """The settings dict is named correctly, holds no unrecognised keys, and the
-    wake settings hold values the relay can act on.
-
-    Both halves are silent by default. ``setting()`` reads only the keys this
-    package asks for, so a typo sits in the settings looking effective; and the
-    dict is ``DJANGO_DOMAIN_EVENTS`` while the app label, the import path and
-    most prose say ``domain events``, so ``DOMAIN_EVENTS`` returns ``{}`` and
-    every value falls back to its default with nothing said.
-
-    That second case is not hypothetical: it is how a consumer configured
-    ``CODEC`` correctly, saw no effect, and spent a round debugging a decode
-    failure with the fix visibly in place.
-    """
+    """The settings dict holds no unknown keys, and its wake values are usable by the relay."""
     problems: list[Any] = []
 
     for name in _NEAR_MISS_SETTINGS_NAMES:
@@ -254,8 +175,6 @@ def check_settings_keys_are_known(**kwargs: Any) -> list[Any]:
             )
         )
 
-    # Folded in here rather than registered on its own: it is the same silent
-    # ineffective configuration, and the check is already wired.
     problems.extend(_wake_setting_problems())
     problems.extend(_around_delivery_problems())
     problems.extend(_relay_prune_setting_problems())
@@ -264,19 +183,7 @@ def check_settings_keys_are_known(**kwargs: Any) -> list[Any]:
 
 
 def _wake_setting_problems() -> list[Any]:
-    """``WAKE`` and ``NOTIFY_COALESCE_SECONDS`` hold values the relay can use.
-
-    A misspelt ``WAKE`` would otherwise read as "not notify" and quietly turn
-    NOTIFY off, and a negative or NaN interval compares false against every
-    elapsed time, so it would silence every notification after the first.
-    ``bool`` is refused because ``True`` is an ``int`` and would read as a
-    one-second interval.
-
-    The interval guard is one branch arc of three disjuncts, each held by one case
-    of ``test_a_coalesce_interval_that_is_not_a_duration_is_an_error``: the bool
-    test by ``True``, the type test by ``"0.5"`` and ``None``, and the sign test
-    by ``nan`` (a ``-1`` passes under either form of it).
-    """
+    """``WAKE`` and ``NOTIFY_COALESCE_SECONDS`` hold values the relay can use."""
     problems: list[Any] = []
     wake = setting("WAKE")
     if wake not in WAKE_MODES:
@@ -288,8 +195,6 @@ def _wake_setting_problems() -> list[Any]:
             )
         )
     interval = setting("NOTIFY_COALESCE_SECONDS")
-    # ``not interval >= 0`` rather than ``interval < 0``: NaN fails the first
-    # comparison and passes the second.
     if isinstance(interval, bool) or not isinstance(interval, (int, float)) or not interval >= 0:
         problems.append(
             Error(
@@ -303,19 +208,7 @@ def _wake_setting_problems() -> list[Any]:
 
 
 def _around_delivery_problems() -> list[Any]:
-    """``AROUND_DELIVERY`` is None, or a dotted path to something callable.
-
-    Checked here because the path is resolved on every delivery and nowhere
-    else: a typo would otherwise surface as the first durable delivery failing,
-    and every one after it, in the relay, possibly hours after the deploy.
-
-    The value is refused for three reasons, each held by one case of
-    ``test_a_hook_that_cannot_be_used_is_an_error``: not a string at all, by
-    the callable itself (the likeliest slip, since collaborators elsewhere are
-    objects, and ``import_string`` would raise out of the check rather than
-    report); not importable, by a missing attribute and a missing module; and
-    not callable, by a module constant.
-    """
+    """``AROUND_DELIVERY`` is None, or a dotted path to something callable."""
     path = setting("AROUND_DELIVERY")
     if path is None:
         return []
@@ -343,21 +236,7 @@ def _around_delivery_problems() -> list[Any]:
 
 
 def _relay_prune_setting_problems() -> list[Any]:
-    """``RELAY_PRUNE`` is a switch and ``RELAY_PRUNE_SECONDS`` a positive interval.
-
-    Both fail the relay quietly if misread. A ``RELAY_PRUNE`` of ``"false"`` is
-    a truthy string and would leave the sweep on for the operator who meant it
-    off, and an interval of zero, a negative or NaN compares true or false
-    against every elapsed time and turns the throttle into a sweep on every idle
-    pass, or into none. Infinity is refused too: it is the off switch spelt
-    badly, and ``RELAY_PRUNE`` is the spelling.
-
-    The interval guard is one branch arc of several conditions, each held by a
-    case of ``test_a_prune_interval_that_is_not_a_positive_duration_is_an_error``:
-    the bool test by ``True``, the type test by ``"60"`` and ``None``, the sign
-    test by ``0`` and ``-1``, and the finiteness test by ``inf`` and ``nan``
-    (which is false against ``> 0`` too, so either conjunct refuses it).
-    """
+    """``RELAY_PRUNE`` is a switch and ``RELAY_PRUNE_SECONDS`` a positive interval."""
     problems: list[Any] = []
     switch = setting("RELAY_PRUNE")
     if not isinstance(switch, bool):
@@ -378,7 +257,10 @@ def _relay_prune_setting_problems() -> list[Any]:
             Error(
                 f"RELAY_PRUNE_SECONDS is {interval!r}, which is not a finite number of "
                 "seconds above zero.",
-                hint="Set RELAY_PRUNE to False to stop the relay pruning rather than a long interval.",
+                hint=(
+                    "Set RELAY_PRUNE to False to stop the relay pruning rather than a long "
+                    "interval."
+                ),
                 id="django_domain_events.E009",
             )
         )
@@ -386,19 +268,15 @@ def _relay_prune_setting_problems() -> list[Any]:
 
 
 def _prune_batch_problems() -> list[Any]:
-    """``PRUNE_BATCH_ROWS`` is a positive whole number of rows.
-
-    ``prune_events`` refuses anything else with a ``ValueError``, which an idle
-    relay's sweep logs and swallows once an interval: the setting would be
-    wrong everywhere and the only sign a line in a log. The same bool-first
-    test as the prune's own, since ``True`` is an ``int``.
-    """
+    """``PRUNE_BATCH_ROWS`` is a positive whole number of rows."""
     size = setting("PRUNE_BATCH_ROWS")
     if isinstance(size, bool) or not isinstance(size, int) or size < 1:
         return [
             Error(
                 f"PRUNE_BATCH_ROWS is {size!r}, which is not a positive whole number of rows.",
-                hint="Use the number of rows one prune transaction may delete; the default is 5000.",
+                hint=(
+                    "Use the number of rows one prune transaction may delete; the default is 5000."
+                ),
                 id="django_domain_events.E010",
             )
         ]
@@ -408,24 +286,7 @@ def _prune_batch_problems() -> list[Any]:
 def check_no_orphaned_deliveries(
     *, databases: Sequence[str] | None = None, **kwargs: Any
 ) -> list[Any]:
-    """No delivery still owed names a receiver the registry no longer has.
-
-    Owed means "not terminal", the same definition the relay claims by and the
-    prune settles by, phrased as the owed partial indexes' own conditions
-    (``owed``) so this reads the owed rows rather than every delivery ever
-    made - it runs on every ``migrate`` and ``check``. A hand-written list of
-    owed statuses is how this check once came to omit CLAIMED: a worker that
-    died between claiming a row and the deploy that deleted its receiver leaves
-    the row claimed with a lapsed lease, and it read as settled until a relay
-    happened to reclaim it. That is now held by a test with a row in every
-    status (test_the_orphan_warning_counts_every_owed_status_and_no_other).
-
-    Two guards, and both are load-bearing. Without the first this runs under
-    ``check``, ``showmigrations`` and ``makemigrations``, which pass no
-    databases. Without the second it runs under ``migrate`` - which does pass
-    one - and queries a table migrate has not created yet, so the first command
-    a new project runs dies and no tables are created at all.
-    """
+    """No delivery still owed names a receiver the registry no longer has."""
     from django_domain_events.models.delivery_record import DeliveryRecord
 
     if not databases:
@@ -460,17 +321,7 @@ def check_no_orphaned_deliveries(
 def check_recorded_events_are_declared(
     *, databases: Sequence[str] | None = None, **kwargs: Any
 ) -> list[Any]:
-    """No event still owed names something the registry cannot decode.
-
-    Renaming an event is the case this catches and the orphan warning cannot:
-    the receivers keep their keys, so nothing looks orphaned, while every row
-    written under the old name now decodes to nothing and dead-letters one
-    attempt budget at a time.
-
-    Limited to rows still owed. A settled row naming a retired event is
-    history, and warning about history every time ``check`` runs teaches the
-    reader to skip the output.
-    """
+    """No event still owed names something the registry cannot decode."""
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.models.event_record import EventRecord
 
@@ -478,14 +329,9 @@ def check_recorded_events_are_declared(
         return []
 
     table = EventRecord._meta.db_table
-    # Phrased as the owed partial indexes' conditions, like the orphan check,
-    # so Postgres can find the owed rows through those indexes and join out to
-    # their events rather than probe every event's deliveries.
     owed_deliveries = DeliveryRecord.objects.filter(owed(), event=models.OuterRef("pk"))
     names: set[str] = set()
     for alias in databases:
-        # One table answers for both: they are created by the same
-        # migration, so neither exists without the other.
         if not has_table(alias, table):
             continue
         names |= set(

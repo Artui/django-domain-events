@@ -10,16 +10,7 @@ from django_domain_events.declaration.registry import registry
 
 
 class EventNameFilter(admin.SimpleListFilter):
-    """Filter the log by event name, using the registry rather than the table.
-
-    Django's field filter builds its options with ``SELECT DISTINCT name`` over
-    the whole log on every changelist load, which is a full scan of the table
-    this package tells operators will be the largest in their database.
-
-    The registry knows the same answer for free, and knows it better: an event
-    declared but never fired appears in the list, and selecting it shows the
-    empty result that is itself the finding.
-    """
+    """Filter the log by event name, from the registry rather than a SELECT DISTINCT scan."""
 
     title = "event"
     parameter_name = "event_name"

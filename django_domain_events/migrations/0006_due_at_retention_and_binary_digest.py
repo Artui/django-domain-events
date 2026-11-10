@@ -87,7 +87,9 @@ _SWAP = [
 ]
 
 _POSTGRES = {
-    "forwards": "ALTER TABLE {table} ALTER COLUMN {column} TYPE bytea USING decode({column}, 'hex')",
+    "forwards": (
+        "ALTER TABLE {table} ALTER COLUMN {column} TYPE bytea USING decode({column}, 'hex')"
+    ),
     "backwards": (
         "ALTER TABLE {table} ALTER COLUMN {column} TYPE varchar(64) USING encode({column}, 'hex')"
     ),

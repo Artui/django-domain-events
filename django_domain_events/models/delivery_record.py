@@ -8,23 +8,12 @@ from django_domain_events.utils import RETRYABLE
 
 
 class DeliveryRecord(models.Model):
-    """What is owed to one receiver for one event - or to one of its targets.
-
-    Separate from the event because a single outbox row cannot express
-    per-receiver retries: one failing receiver must not replay or block the
-    other four. Only ``DURABLE`` receivers get a row, and a receiver declared
-    with ``targets=`` gets one per target, for the same reason one step down:
-    one failing target must not drag the others through its retries.
-    """
+    """What is owed to one receiver for one event - or to one of its targets."""
 
     event = models.ForeignKey(
         "django_domain_events.EventRecord",
         on_delete=models.CASCADE,
         related_name="deliveries",
-        # No index of its own: the unique constraint below leads with this
-        # column, so it already serves the cascade from an event and every
-        # per-event lookup. A second one was written on every insert and read
-        # by nothing.
         db_index=False,
     )
     receiver_key = models.CharField(max_length=255)
@@ -122,27 +111,12 @@ class DeliveryRecord(models.Model):
 
     class Meta:
         constraints = [
-            # The target is part of the identity, which is what lets one
-            # receiver owe one event to many targets - through its digest, so
-            # the index entry is fixed-width however long the target is. A
-            # receiver without targets= writes the blank target, one digest
-            # for every row, so for it this is exactly the (event,
-            # receiver_key) constraint it replaced.
+            # The target is part of the identity: one receiver may owe one event to many targets.
             models.UniqueConstraint(
                 fields=["event", "receiver_key", "target_digest"],
                 name="unique_delivery_per_event_receiver_and_target",
             )
         ]
-        # One index per arm of the claim query. The predicates have to match the
-        # arms exactly: an index conditioned on `status = pending` cannot serve a
-        # query on `status IN (pending, failed)`, so the planner falls back to a
-        # full scan of the whole delivered history - which grows without bound,
-        # because that is what an event log does.
-        #
-        # The same holds for the introspection queries, which are scraped on a
-        # schedule: outbox_health phrases "owed" as the first two conditions
-        # and "dead" as the third, word for word, so each of its queries reads
-        # only the rows these hold however much history the table carries.
         indexes = [
             models.Index(
                 fields=["available_at"],
@@ -154,33 +128,15 @@ class DeliveryRecord(models.Model):
                 condition=models.Q(status=DeliveryStatus.CLAIMED),
                 name="dde_claimed_by_lease",
             ),
-            # Dead letters are a backlog an operator works down, not history,
-            # so this stays as small as the dead-letter queue. Keyed by
-            # receiver because every reader asks per receiver: the per-receiver
-            # dead count, and requeue_dead(receiver_key=...).
             models.Index(
                 fields=["receiver_key"],
                 condition=models.Q(status=DeliveryStatus.DEAD),
                 name="dde_dead_by_receiver",
             ),
-            # Not partial: succeeded_at is never cleared, so the newest success
-            # can sit on a row in any status. With the key leading, the
-            # newest success of one receiver is a single descent from the end
-            # of its range, which is how quiet_receivers asks.
             models.Index(
                 fields=["receiver_key", "succeeded_at"],
                 name="dde_last_success",
             ),
-            # What the prune asks of each candidate event: has it a delivery
-            # neither succeeded nor cancelled (Retention.SUCCEEDED), or one not
-            # terminal (everything else)? Both are "a row of this event among
-            # the unfinished ones", and each condition implies this index's own,
-            # so one index answers both. It holds the owed rows plus the dead
-            # letters, orphans and cancelled rows, never the succeeded history,
-            # so a probe costs the same however much history the table carries
-            # - where through the unique index it walked every row of the
-            # event, and the planner, pricing that, chose to read the whole
-            # table instead.
             models.Index(
                 fields=["event"],
                 condition=~models.Q(status=DeliveryStatus.SUCCEEDED),
@@ -191,26 +147,5 @@ class DeliveryRecord(models.Model):
         verbose_name_plural = "delivery records"
 
     def __str__(self) -> str:
-        # Traverses the relation rather than reading ``event_id``, and gains
-        # rather than costs: ``EventRecord.__str__`` is ``name#pk``, so this
-        # reads "receiver <- shop.OrderPlaced#42" where the id alone read
-        # "receiver <- event 42". An operator gets the join key *and* what the
-        # event was.
-        #
-        # The traversal costs one query on an instance that did not fetch the
-        # event, so it is worth knowing where this actually renders: **not** the
-        # changelist, whose first ``list_display`` column is ``receiver_key``,
-        # so ``__str__`` is never its link text. It renders on the delete
-        # confirmation page, in object history, and in related-field widgets.
-        # Bounded, and the same trade every other model in the family makes.
-        #
-        # A growth test over the changelist was written to guard this and then
-        # deleted: it passed with ``list_select_related`` removed, because
-        # ``list_display`` names ``event`` and Django select_relates on its own
-        # whenever a related field appears there. A test that cannot fail is
-        # worse than no test, and this one was also aimed at the wrong page.
-        #
-        # It also removes the ``event_id: int`` annotation this file used to
-        # carry for ty's benefit. That was the smaller reason and it is a
-        # welcome side effect, not the argument.
+        # Traverses the event so the row reads with its name, not only the id.
         return f"{self.receiver_key} <- {self.event} ({self.status})"

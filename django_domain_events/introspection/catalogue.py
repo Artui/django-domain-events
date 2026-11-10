@@ -17,18 +17,7 @@ from django_domain_events.types.registered_receiver import RegisteredReceiver
 
 
 def catalogue() -> Catalogue:
-    """Describe every declared event, its payload shape and its receivers.
-
-    The artefact a team wants and signals cannot produce: what exists, what
-    listens, and under which guarantee - generated from the declarations rather
-    than maintained beside them, so it cannot drift.
-
-    Sorted by name throughout. A catalogue is written to a file and diffed
-    against the last one, and import order is not a difference.
-
-    Wildcard receivers are listed once, in their own section, and not under
-    each event they receive - which is every event.
-    """
+    """Describe every declared event, its payload shape and its receivers, sorted by name."""
     events = []
     for entry in sorted(registry.events(), key=lambda e: e.name):
         cls = entry.event_class
@@ -71,7 +60,6 @@ def _described(receivers: Iterable[RegisteredReceiver]) -> tuple[CatalogueReceiv
             give_up_after_seconds=(
                 None if r.give_up_after is None else r.give_up_after.total_seconds()
             ),
-            # A timedelta is not callable, so at most one of the two is set.
             due_seconds=r.due.total_seconds() if isinstance(r.due, timedelta) else None,
             due_callable=_callable_path(r.due) if callable(r.due) else None,
         )
@@ -80,14 +68,7 @@ def _described(receivers: Iterable[RegisteredReceiver]) -> tuple[CatalogueReceiv
 
 
 def _doc(cls: type) -> str:
-    """The class docstring, or empty when the dataclass machinery wrote it.
-
-    ``@dataclass`` fills ``__doc__`` with the signature whenever the class has
-    none of its own - a subclass of a documented base included, because a class
-    always carries its own ``__doc__`` and never inherits one. Reading it
-    naively puts ``OrderPlaced(order_id: int)`` in the catalogue where a
-    description belongs.
-    """
+    """The class docstring, or empty when @dataclass wrote it: it fills in the signature."""
     doc = cls.__doc__
     if not doc or doc.startswith(f"{cls.__name__}("):
         return ""
@@ -95,13 +76,7 @@ def _doc(cls: type) -> str:
 
 
 def _fields(cls: type) -> tuple[CatalogueField, ...]:
-    """Payload fields with their annotations resolved where possible.
-
-    ``get_type_hints`` needs every name in the annotations to be importable at
-    runtime, which a consumer with ``if TYPE_CHECKING:`` imports has already
-    made false. Falling back to the unresolved annotation keeps the catalogue
-    generating for that consumer rather than failing on their behalf.
-    """
+    """Payload fields with their annotations resolved where possible, else left unresolved."""
     try:
         hints = typing.get_type_hints(cls)
     except (NameError, TypeError):
@@ -114,38 +89,20 @@ def _fields(cls: type) -> tuple[CatalogueField, ...]:
             and field.default_factory is dataclasses.MISSING,
             default=_default(field),
         )
-        # cast because @event has already established that cls is a
-        # dataclass, which the checker cannot see through a bare `type`.
         for field in dataclasses.fields(cast(Any, cls))
     )
 
 
 def _callable_path(func: Callable[..., Any]) -> str:
-    """Where a receiver's code lives, for a reader who has to go find it.
-
-    Built with getattr rather than attribute access because a receiver is only
-    required to be callable: a functools.partial or an instance with __call__
-    has neither name.
-    """
+    """Where a receiver's code lives: getattr, since a partial has no __name__ to read."""
     module = getattr(func, "__module__", None)
     name = getattr(func, "__qualname__", None) or type(func).__name__
     return f"{module}.{name}" if module else name
 
 
 def _type_name(annotation: object) -> str:
-    """Render an annotation the way a reader of the catalogue needs it.
-
-    A parameterised generic is rendered with str() and a plain class by name,
-    because the reverse loses exactly the information worth publishing:
-    ``list[str]`` reports its ``__name__`` as ``list`` and
-    ``Literal["retail", "wholesale"]`` reports ``Literal``, so a catalogue built
-    on ``__name__`` alone says a field is a list without saying of what.
-    """
+    """Render an annotation as str() for a generic, by name for a class: __name__ loses args."""
     if isinstance(annotation, str):
-        # An unresolved annotation reaches here as source text, so a consumer
-        # who quoted the forward reference would otherwise be published with
-        # the quotes. Both spellings mean the same thing and must render the
-        # same way.
         return annotation.strip("'\"")
     if typing.get_origin(annotation) is not None:
         return str(annotation)
@@ -156,7 +113,6 @@ def _default(field: dataclasses.Field[Any]) -> str | None:
     if field.default is not dataclasses.MISSING:
         return repr(field.default)
     if field.default_factory is not dataclasses.MISSING:
-        # Named, not called: a factory is arbitrary consumer code, and building
-        # a catalogue must not run it.
+        # Named, not called: a factory is arbitrary consumer code.
         return f"{getattr(field.default_factory, '__name__', 'factory')}()"
     return None

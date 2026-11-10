@@ -41,12 +41,7 @@ def setting(key: str) -> Any:
 
 
 def get_task_backend() -> Any | None:
-    """The configured task backend, or None when receivers run in the relay.
-
-    Accepts a dotted path, or a mapping with ``BACKEND`` and the rest passed to
-    the constructor - otherwise a backend with any options at all is
-    unreachable through the documented setting and only a subclass can use it.
-    """
+    """The configured task backend, or None when receivers run in the relay."""
     configured = setting("TASK_BACKEND")
     if configured is None:
         return None
@@ -57,24 +52,11 @@ def get_task_backend() -> Any | None:
 
 
 def get_codec() -> PayloadCodec:
-    """Build the configured codec.
-
-    Not cached: caching would freeze whatever was configured when the first
-    event fired, so a test overriding the setting would pass or fail on what ran
-    before it. Named in settings rather than sniffed from what is installed,
-    because a codec that picks itself decodes on one machine and raises on
-    another, silently.
-    """
+    """Build the configured codec."""
     return import_string(setting("CODEC"))()
 
 
 def get_around_delivery() -> Callable[[DeliveryContext], AbstractContextManager[Any]] | None:
-    """The configured ``AROUND_DELIVERY`` factory, or None when there is none.
-
-    Resolved on every delivery and not cached, for the reason ``get_codec``
-    gives (``test_the_path_is_read_on_every_delivery``). A path that does not
-    import raises here, inside the attempt, which fails it: the system check
-    ``E011`` is what catches the typo before a delivery does.
-    """
+    """The configured ``AROUND_DELIVERY`` factory, or None when there is none."""
     path = setting("AROUND_DELIVERY")
     return None if path is None else import_string(path)

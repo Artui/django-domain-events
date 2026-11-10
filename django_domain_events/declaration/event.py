@@ -35,20 +35,7 @@ def event(
     version: int = 1,
     retention: timedelta | Retention | None = None,
 ) -> type | Callable[[type], type]:
-    """Register a frozen dataclass as an event, bare or called.
-
-    The default name is ``<app_label>.<ClassName>``. Pin it with ``name=`` when
-    renaming the class would otherwise strand rows written under the old one.
-    A name may not be longer than the column that holds it, 255 characters,
-    whether given or derived: a longer one is refused here with ``ValueError``,
-    because Postgres raises at ``fire()`` time while SQLite enforces nothing.
-
-    ``retention`` says how long ``prune_events`` keeps this event's rows: a
-    ``timedelta`` for a window of its own, ``Retention.SUCCEEDED`` or
-    ``Retention.SETTLED`` to delete it once consumed, or None for
-    ``RETENTION_DAYS``. ``fire()`` copies it onto every row it records, so a
-    later change here does not reach events already recorded.
-    """
+    """Register a frozen dataclass as an event, bare or called; ``name=`` pins the stored name."""
     _require_valid_retention(retention)
 
     def decorate(target: type) -> type:
@@ -67,19 +54,7 @@ def event(
 
 
 def _require_valid_retention(retention: object) -> None:
-    """Refuse a retention the prune could not honour, at declaration.
-
-    Here rather than at ``fire()``, because a declaration is imported at
-    startup and a ``fire()`` runs inside somebody's request. A bare number is
-    refused rather than read as seconds or days, since it means either.
-
-    The window guard is one branch arc of three conditions, each held by cases
-    of ``test_a_window_the_column_cannot_hold_is_refused``: zero, a negative
-    window and half a second by the lower bound (half a second would be stored
-    as zero, which deletes at once), a second and a half by the whole-seconds
-    test (stored as one, so not what was declared), and 2**31 seconds by the
-    upper bound.
-    """
+    """Refuse a retention the prune could not honour, at declaration rather than at fire()."""
     if retention is None or isinstance(retention, Retention):
         return
     if not isinstance(retention, timedelta):

@@ -20,8 +20,7 @@ class Command(BaseCommand):
         document = render_catalogue(catalogue(), format=options["format"])
         destination = options["output"]
         if destination is None:
-            # No trailing newline of our own: the renderer already ends with
-            # one, and `write` adds a second only when it does not.
+            # No trailing newline of our own: the renderer already ends with one.
             self.stdout.write(document, ending="")
             return
         Path(destination).write_text(document, encoding="utf-8")

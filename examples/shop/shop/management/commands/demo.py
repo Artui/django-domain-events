@@ -300,7 +300,8 @@ class Command(BaseCommand):
         limited = DeliveryRecord.objects.get(receiver_key="shop.register_tracking")
         wait = limited.available_at - before
         print(
-            f"   {limited.receiver_key}: {limited.status}, next attempt in {wait.total_seconds():.0f}s"
+            f"   {limited.receiver_key}: {limited.status}, "
+            f"next attempt in {wait.total_seconds():.0f}s"
         )
         print(f"         {limited.last_error}")
         check("RetryAfter counts the attempt", (limited.status, limited.attempts), ("failed", 1))
@@ -540,7 +541,8 @@ class Command(BaseCommand):
         health = outbox_health()
         [backlog] = [entry for entry in health.receivers if entry.key == chase]
         print(
-            f"   scheduled={health.scheduled}; {chase}: owed={backlog.owed} scheduled={backlog.scheduled}"
+            f"   scheduled={health.scheduled}; {chase}: "
+            f"owed={backlog.owed} scheduled={backlog.scheduled}"
         )
         check("health counts them as scheduled", (health.scheduled, backlog.scheduled), (2, 2))
         check("and not as owed, so no backlog alert fires", backlog.owed, 0)
@@ -551,7 +553,8 @@ class Command(BaseCommand):
         print("   drained as of tomorrow, when both reminders are due:")
         cancelled, open_order = reminders()
         print(
-            f"   cancelled order: {cancelled.status}, emails sent: {SentEmail.objects.count() - emails}"
+            f"   cancelled order: {cancelled.status}, "
+            f"emails sent: {SentEmail.objects.count() - emails}"
         )
         print(
             f"   open order:      {open_order.status}, due again at {open_order.due_at.isoformat()}"

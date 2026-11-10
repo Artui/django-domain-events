@@ -10,12 +10,7 @@ from django_domain_events.declaration.registry import registry
 
 
 class ReceiverKeyFilter(admin.SimpleListFilter):
-    """Filter deliveries by receiver key, from the registry.
-
-    Same reasoning as EventNameFilter, and the same bonus: a receiver that has
-    never been delivered anything is listed, which is the one an operator is
-    looking for.
-    """
+    """Filter deliveries by receiver key, from the registry: idle receivers are listed too."""
 
     title = "receiver"
     parameter_name = "receiver"

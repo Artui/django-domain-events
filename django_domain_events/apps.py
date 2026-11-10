@@ -6,12 +6,7 @@ from django.utils.module_loading import autodiscover_modules
 
 
 class DjangoDomainEventsConfig(AppConfig):
-    """Wires the registry up at startup.
-
-    Autodiscovery runs in ``ready()`` because default names derive from the app
-    label, and ``get_containing_app_config`` only answers once the app registry
-    is populated.
-    """
+    """Wires the registry up at startup."""
 
     name = "django_domain_events"
     verbose_name = "Domain events"
