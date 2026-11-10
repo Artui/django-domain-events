@@ -17,22 +17,13 @@ from django_domain_events.utils import TERMINAL
 
 @admin.register(EventRecord)
 class EventRecordAdmin(admin.ModelAdmin):
-    """Read-only browsing of the log, plus replay and cancel.
-
-    Every field is read-only and nothing can be added by hand. An event log
-    whose rows can be edited in a form is not evidence of anything, and the one
-    guarantee this package sells is that a row exists if and only if the change
-    committed.
-    """
+    """Read-only browsing of the log, plus replay and cancel."""
 
     list_display = ("name", "version", "actor_label", "owed", "suppressed_reason", "age")
     list_filter = (EventNameFilter,)
     search_fields = ("name", "actor_key", "actor_label", "dedupe_key")
     ordering = ("-pk",)
-    # Both off because both scan the whole log on every page load: the
-    # second COUNT(*) that show_full_result_count adds, and the MIN/MAX plus
-    # SELECT DISTINCT date_trunc(...) that a date hierarchy needs. This is
-    # the page an operator opens during an incident.
+    # Both off: each would scan the whole log on every page load.
     show_full_result_count = False
     actions = ("replay", "cancel")
 
@@ -41,10 +32,7 @@ class EventRecordAdmin(admin.ModelAdmin):
 
     @admin.display(description="deliveries owed")
     def owed(self, obj: EventRecord) -> int:
-        # Counted in Python over the prefetch rather than with a second query
-        # per row: the changelist renders a hundred of these. Settled is the
-        # package's one list, so a cancelled row is not counted as owed
-        # (test_a_cancelled_delivery_is_not_owed).
+        # Counted over the prefetch, so the changelist does not query once per row.
         return sum(1 for d in obj.deliveries.all() if d.status not in TERMINAL)
 
     @admin.display(description="age")
@@ -61,18 +49,12 @@ class EventRecordAdmin(admin.ModelAdmin):
         )
 
     def has_replay_permission(self, request: HttpRequest) -> bool:
-        """Who may replay, checked separately from who may open the changelist.
-
-        See ``may_change`` for why an action needs its own predicate.
-        """
+        """Who may replay; see ``may_change`` for why an action needs its own predicate."""
         return may_change(request, self.opts)
 
     @admin.action(description="Cancel owed deliveries of selected events", permissions=["cancel"])
     def cancel(self, request: HttpRequest, queryset: QuerySet[EventRecord]) -> None:
-        # Every receiver's owed rows of these events, through cancel_deliveries:
-        # the event is what the work became moot for, and the delivery admin
-        # is where one receiver's rows are picked out. Both counts always, as
-        # replay reports both of its own.
+        # Every receiver's owed rows of these events, through cancel_deliveries.
         counts = cancel_deliveries(queryset.values_list("pk", flat=True))
         self.message_user(
             request,
@@ -82,10 +64,7 @@ class EventRecordAdmin(admin.ModelAdmin):
         )
 
     def has_cancel_permission(self, request: HttpRequest) -> bool:
-        """Who may cancel, checked separately from who may open the changelist.
-
-        See ``may_change`` for why an action needs its own predicate.
-        """
+        """Who may cancel; see ``may_change`` for why an action needs its own predicate."""
         return may_change(request, self.opts)
 
     def has_add_permission(self, request: HttpRequest) -> bool:
@@ -95,9 +74,7 @@ class EventRecordAdmin(admin.ModelAdmin):
         return False
 
     def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:
-        # Deleting here would cascade owed deliveries away with no record
-        # that anything was lost. prune_events is the supported route: it
-        # re-checks settledness at the delete, which a form cannot.
+        # Would cascade owed deliveries away silently: prune_events re-checks settledness.
         return False
 
     def get_readonly_fields(self, request: HttpRequest, obj: Any = None) -> tuple[str, ...]:
