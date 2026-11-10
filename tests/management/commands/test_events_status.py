@@ -1,5 +1,3 @@
-"""Tests mirroring ``management/commands/events_status.py``."""
-
 from __future__ import annotations
 
 import json
@@ -46,8 +44,7 @@ def test_it_names_the_receivers_that_are_behind(order: OrderPlaced, record: list
 
 
 def test_the_oldest_owed_is_reported_as_an_age(order: OrderPlaced, record: list[str]) -> None:
-    """The age is what an alert threshold is written against, not the
-    timestamp."""
+    """The age is what an alert threshold is written against, not the timestamp."""
     with transaction.atomic():
         fire(order)
     EventRecord.objects.update(recorded_at=datetime.now(timezone.utc) - timedelta(hours=2))
@@ -61,8 +58,7 @@ def test_an_empty_outbox_has_no_age_to_report() -> None:
 def test_json_is_parseable_and_carries_the_same_numbers(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The shape a metrics agent scrapes, so it has to be machine-readable
-    without parsing the human output."""
+    """The shape a metrics agent scrapes, so it needs no human-output parsing."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.filter(receiver_key="testapp.with_context").update(
@@ -75,8 +71,6 @@ def test_json_is_parseable_and_carries_the_same_numbers(
     by_key = {r["key"]: r for r in parsed["receivers"]}
     assert by_key["testapp.with_context"]["dead"] == 1
     assert by_key["testapp.with_context"]["owed"] == 0
-    # The per-receiver age reaches the output a metrics agent scrapes, or the
-    # field is documented as the alerting number and unreachable.
     assert by_key["testapp.durable_receiver"]["oldest_owed_age_seconds"] is not None
     assert by_key["testapp.with_context"]["oldest_owed_age_seconds"] is None
 
@@ -93,8 +87,7 @@ def _schedule_one(key: str) -> None:
 def test_scheduled_work_is_reported_apart_from_what_is_owed(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The command is what CI and an operator read, so the split ``outbox_health``
-    makes has to reach it: a row due in a fortnight is neither owed nor aging."""
+    """CI and operators read this, so the split outbox_health makes must reach it."""
     with transaction.atomic():
         fire(order)
     _schedule_one("testapp.durable_receiver")
@@ -118,8 +111,7 @@ def test_json_carries_the_scheduled_counts(order: OrderPlaced, record: list[str]
 def test_each_receiver_says_how_many_of_its_rows_are_claimed(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The per-receiver claimed count reaches both outputs, so the operator and
-    the scraper can each tell a wedged receiver from a relay at work."""
+    """The per-receiver claimed count reaches both outputs, telling wedged from busy."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.filter(receiver_key="testapp.with_context").update(
@@ -134,9 +126,7 @@ def test_each_receiver_says_how_many_of_its_rows_are_claimed(
 
 
 def test_cancelled_work_is_neither_owed_nor_dead(order: OrderPlaced, record: list[str]) -> None:
-    """Withdrawn work is done, so an outbox holding only cancelled rows reads
-    as drained, in the text an operator reads and the JSON a scraper does, and
-    no receiver is listed as behind."""
+    """Withdrawn work is done, so a cancelled-only outbox reads as drained."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(status=DeliveryStatus.CANCELLED)
@@ -157,9 +147,7 @@ def _pause(lane: str, worker_id: str, left: timedelta) -> None:
 def test_json_carries_each_lane_and_how_long_its_pauses_have_left(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """A lane renamed while a relay of the old name still runs is listed with
-    its pause and nothing owed. ``paused_for_seconds`` is the time left, which
-    is what an operator deciding whether to wait it out needs."""
+    """A renamed lane still held by a relay is listed with its pause and nothing owed."""
     with transaction.atomic():
         fire(order)
     EventRecord.objects.update(recorded_at=datetime.now(timezone.utc) - timedelta(hours=2))

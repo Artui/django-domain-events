@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/assert_fired.py``."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,8 +13,7 @@ pytestmark = pytest.mark.django_db(transaction=True)
 
 
 def test_it_returns_the_events_decoded_from_the_log(order: OrderPlaced, record: list[str]) -> None:
-    """Decoding on the way out means a payload that cannot round-trip fails here
-    too, which a mock would not catch."""
+    """Decoding on the way out catches a payload that cannot round-trip."""
     with transaction.atomic():
         fire(order)
     fired = assert_fired(OrderPlaced)

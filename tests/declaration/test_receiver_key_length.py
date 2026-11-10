@@ -1,12 +1,3 @@
-"""A receiver key longer than the column that stores it is refused where it is declared.
-
-``DeliveryRecord.receiver_key`` and ``ReceiverLastSuccess.receiver_key`` are
-``CharField(max_length=255)``. SQLite does not enforce the length, so a longer
-key works there; Postgres either truncates it in the bulk insert, orphaning the
-delivery as "renamed, moved or deleted", or raises ``DataError`` at fire time.
-Either way the mistake is made at declaration, so that is where it is refused.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
@@ -40,16 +31,10 @@ def _declared(key: str) -> Iterator[None]:
 
 
 def _derived_function(length: int) -> Callable[[OrderPlaced], None]:
-    """A function whose derived key is exactly ``length`` characters long.
-
-    The prefix is asked of ``label_for`` rather than written down, so the test
-    follows the app label of whichever app the module belongs to.
-    """
+    """A function whose derived key is exactly ``length`` characters long."""
 
     def fn(evt: OrderPlaced) -> None: ...
 
-    # tests.testapp.events is inside the installed ``testapp``, which this test
-    # module is not.
     fn.__module__ = "tests.testapp.events"
     prefix = label_for(fn.__module__, "")
     fn.__name__ = "x" * (length - len(prefix))
@@ -57,10 +42,7 @@ def _derived_function(length: int) -> Callable[[OrderPlaced], None]:
 
 
 def test_a_key_of_exactly_the_limit_is_accepted() -> None:
-    """Holds the comparison: ``>=`` instead of ``>`` refuses this key.
-
-    Passes on a tree without the check, as it must; it is here for the mutant.
-    """
+    """Holds the comparison: ``>=`` instead of ``>`` refuses this key."""
     key = "k" * LIMIT
     with _declared(key):
         receiver(OrderPlaced, key=key)(_plain)
@@ -99,8 +81,7 @@ def test_a_derived_key_of_exactly_the_limit_is_accepted() -> None:
 
 
 def test_a_derived_key_over_the_limit_is_refused() -> None:
-    """Holds the derived-key path: a check applied only to an explicit ``key=``
-    lets this through. Sized at one over, so the boundary is what answers."""
+    """Holds the derived-key path: an explicit key= check alone lets this through."""
     fn = _derived_function(LIMIT + 1)
     key = label_for(fn.__module__, fn.__name__)
     assert len(key) == LIMIT + 1
@@ -115,11 +96,7 @@ def test_a_derived_key_over_the_limit_is_refused() -> None:
 
 @pytest.mark.parametrize("mode", [DeliveryMode.INLINE, DeliveryMode.ON_COMMIT])
 def test_a_long_key_is_refused_in_every_mode(mode: DeliveryMode) -> None:
-    """Holds the rule as mode-blind: a check scoped to ``DURABLE`` lets these through.
-
-    Neither mode writes the key to a column, so this is the rule rather than a
-    database limit: a receiver's key stays valid when its mode changes.
-    """
+    """Holds the rule as mode-blind: a check scoped to ``DURABLE`` lets these through."""
     key = "k" * (LIMIT + 1)
     with _declared(key), pytest.raises(ValueError, match=f"{LIMIT + 1} characters"):
         receiver(OrderPlaced, key=key, mode=mode)(_plain)

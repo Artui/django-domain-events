@@ -40,22 +40,14 @@ BACKEND = "tests.delivery.test_django_tasks_backend.RecordingBackend"
 
 
 class RecordingBackend:
-    """A task backend is a one-method protocol precisely so this is all it takes
-    to stand in for one. Settings name a dotted path and the package builds it,
-    so the record has to live outside the instance.
-
-    It keeps the message exactly as the relay sent it, arguments and all, so a
-    test can replay it into the task body the way a worker would - including a
-    second time, which is what a redelivering queue does.
-    """
+    """A task backend is a one-method protocol, so a stand-in is cheap."""
 
     def __init__(self) -> None:
         self.enqueued = ENQUEUED
 
     def enqueue(self, *args: object, **kwargs: object) -> None:
         self.enqueued.append(args[0])
-        # Through JSON, because that is the only form every queue can carry: a
-        # datetime would pass here and be refused by django.tasks at enqueue.
+        # Carried through JSON, the one form every queue can carry.
         MESSAGES.append(json.loads(json.dumps([args, kwargs])))
 
 
@@ -81,8 +73,7 @@ def _replay(message: list) -> None:
 
 
 def _handed_off(order: OrderPlaced, worker_id: str = "w1") -> tuple[int, list]:
-    """Fire, claim and dispatch the way the relay does, and return the row and
-    the message the backend received for it."""
+    """Fire, claim and dispatch as the relay does; return the row and message."""
     with transaction.atomic():
         fire(order)
     claim_batch(
@@ -101,8 +92,6 @@ def test_a_relay_site_receiver_is_delivered_in_place(
 ) -> None:
     settings.DJANGO_DOMAIN_EVENTS = {
         # The dotted path names this module, so it has to move with the file.
-        # It is the one reference a rename cannot follow: everything else is an
-        # import the tooling rewrites, and this is a string a setting resolves.
         "TASK_BACKEND": "tests.delivery.test_django_tasks_backend.RecordingBackend"
     }
     with transaction.atomic():
@@ -120,12 +109,7 @@ def test_a_relay_site_receiver_is_delivered_in_place(
 def test_a_task_site_receiver_is_handed_off(
     order: OrderPlaced, record: list[str], task_site: None
 ) -> None:
-    """The row stays claimed under its lease and no outcome is counted: nothing
-    has happened to it yet. If the enqueue is lost the lease lapses and the
-    relay reclaims it, which is what makes a lossy queue safe here.
-
-    The message names the claim it was handed off under, exactly as the row
-    holds it, because that is what the task has to take the row by."""
+    """The row stays claimed under its lease, with no outcome counted yet."""
     delivery_id, message = _handed_off(order)
 
     row = DeliveryRecord.objects.get(pk=delivery_id)
@@ -140,10 +124,7 @@ def test_a_task_site_receiver_is_handed_off(
 def test_an_unclaimed_row_is_not_enqueued(
     order: OrderPlaced, record: list[str], task_site: None
 ) -> None:
-    """A message carries a claim, and a PENDING row has none: the task could
-    never take it, so the hand-off would only spend a queue slot. Holds the
-    status half of the hand-off guard; the lease half is
-    test_a_lost_row_is_not_enqueued."""
+    """A PENDING row has no claim, so the task could never take it."""
     with transaction.atomic():
         fire(order)
     delivery_id = DeliveryRecord.objects.values_list("pk", flat=True).get(
@@ -160,8 +141,7 @@ def test_an_unclaimed_row_is_not_enqueued(
 def test_the_task_body_delivers_the_row(
     order: OrderPlaced, record: list[str], task_site: None
 ) -> None:
-    """A backend has to find this by dotted path in a worker process, so it
-    cannot be a closure or a method."""
+    """A backend is found by dotted path in a worker, so no closure or method."""
     delivery_id, message = _handed_off(order)
     record.clear()
 
@@ -176,14 +156,7 @@ def test_the_task_body_delivers_the_row(
 def test_the_django_tasks_adapter_enqueues(
     order: OrderPlaced, record: list[str], settings, task_site: None
 ) -> None:
-    """The framework is not a dependency, so the import is lazy - and it has two
-    paths, because core gained django.tasks in 6.0 while the backport covers 4.2
-    upward. Running this on every Django in the matrix is the point: an adapter
-    only its newest supported version can execute is one nobody has tried.
-
-    Driven from the relay's own hand-off rather than by calling enqueue, so the
-    claim reaches the framework as the relay sends it: Django Tasks refuses
-    arguments that are not JSON, and a datetime here would fail at enqueue."""
+    """The framework is not a dependency, so the import is lazy."""
     settings.TASKS = {"default": {"BACKEND": "django_tasks.backends.immediate.ImmediateBackend"}}
     settings.DJANGO_DOMAIN_EVENTS = {
         "TASK_BACKEND": "django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend"
@@ -198,7 +171,6 @@ def test_the_django_tasks_adapter_enqueues(
     record.clear()
     assert dispatch_one(delivery_id, worker_id="w1") is None
 
-    # The immediate backend runs it inline, so the receiver has already fired.
     assert record == ["durable:7"]
     assert (
         DeliveryRecord.objects.values_list("status", flat=True).get(pk=delivery_id)
@@ -207,12 +179,7 @@ def test_the_django_tasks_adapter_enqueues(
 
 
 def test_the_adapter_falls_back_to_the_backport() -> None:
-    """Core gained django.tasks in 6.0; below that the backport is the only
-    path. Forcing the fallback here rather than relying on the interpreter's
-    Django means both branches are covered on every version in the matrix -
-    otherwise the branch that does not apply is uncovered, and the coverage gate
-    fails on exactly the versions the other branch is for.
-    """
+    """Core gained django.tasks in 6.0; below that the backport is the only path."""
     import sys
     from unittest import mock
 
@@ -223,8 +190,7 @@ def test_the_adapter_falls_back_to_the_backport() -> None:
 
 
 def test_the_adapter_prefers_core_when_it_is_there() -> None:
-    """A project that has moved past 6.0 should not keep resolving a backport it
-    no longer needs."""
+    """A project that has moved past 6.0 should not keep resolving a backport it no longer needs."""
     import django
 
     from django_domain_events.delivery.django_tasks_backend import _task
@@ -237,14 +203,7 @@ def test_the_adapter_prefers_core_when_it_is_there() -> None:
 def test_every_delivery_path_honours_the_site(
     order: OrderPlaced, record: list[str], settings
 ) -> None:
-    """dispatch_one was reachable only from run_relay, so deliver_pending,
-    drain_outbox and the eager path all ran a site='task' receiver in process.
-
-    drain_outbox is the sharpest of the three: its docstring promises it "runs
-    the same claim, encode, decode and acknowledgement as the relay", so a
-    consumer's tests took a path production does not - the exact failure that
-    docstring exists to prevent.
-    """
+    """Other paths ran a site='task' receiver in process, not on the task backend."""
     settings.DJANGO_DOMAIN_EVENTS = {
         "TASK_BACKEND": "tests.delivery.test_django_tasks_backend.RecordingBackend"
     }
@@ -266,8 +225,7 @@ def test_every_delivery_path_honours_the_site(
 
 
 def test_a_task_site_with_no_backend_refuses(order: OrderPlaced, record: list[str]) -> None:
-    """Silently running in the relay makes the declaration a lie, and the only
-    symptom is work happening in the wrong process."""
+    """Silently running in the relay makes the declaration a lie."""
     from django.core.exceptions import ImproperlyConfigured
 
     from django_domain_events.declaration.registry import registry
@@ -289,8 +247,7 @@ def test_a_task_site_with_no_backend_refuses(order: OrderPlaced, record: list[st
 def test_a_broken_backend_does_not_break_relay_site_receivers(
     order: OrderPlaced, record: list[str], settings
 ) -> None:
-    """The backend is built only for a receiver that asked for one, so a typo in
-    TASK_BACKEND cannot break receivers that never wanted it."""
+    """The backend is built only for receivers that asked for one."""
     settings.DJANGO_DOMAIN_EVENTS = {"TASK_BACKEND": "nope.NotThere"}
     with transaction.atomic():
         fire(order)
@@ -304,8 +261,7 @@ def test_a_broken_backend_does_not_break_relay_site_receivers(
 
 
 def test_a_backend_can_be_configured_with_options(settings) -> None:
-    """A dotted path alone gives the constructor no arguments, so a backend with
-    any options is unreachable through the documented setting."""
+    """A dotted path alone passes no arguments, so options are unreachable."""
     from django_domain_events.settings import get_task_backend
 
     settings.DJANGO_DOMAIN_EVENTS = {
@@ -321,9 +277,7 @@ def test_a_backend_can_be_configured_with_options(settings) -> None:
 def test_the_task_site_extends_the_lease_before_enqueueing(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The path where the wait is the point: the row now has to survive the
-    queue's backlog as well as the receiver's runtime, and this is the last
-    moment before the relay stops looking at it."""
+    """The path where the wait is the point: the row must survive the queue's backlog."""
     from datetime import timedelta
 
     from django_domain_events.delivery.claim_batch import claim_batch
@@ -371,8 +325,7 @@ def test_the_task_site_extends_the_lease_before_enqueueing(
 
 @pytest.mark.django_db
 def test_a_lost_row_is_not_enqueued(order: OrderPlaced, record: list[str]) -> None:
-    """Enqueueing a row another worker holds hands the same work to two
-    places, which is what the lease exists to prevent."""
+    """Enqueueing a row another worker holds hands it to two places."""
     from django_domain_events.delivery.deliver import dispatch_one
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.types.delivery_mode import DeliveryMode
@@ -416,9 +369,7 @@ def test_a_lost_row_is_not_enqueued(order: OrderPlaced, record: list[str]) -> No
 def test_a_message_delivered_twice_runs_its_receiver_once(
     order: OrderPlaced, record: list[str], task_site: None
 ) -> None:
-    """``acks_late`` and a broker's visibility timeout both redeliver a message
-    whose task already ran. The second copy finds the row it was enqueued for
-    already taken and settled, and does nothing."""
+    """acks_late and visibility timeouts both redeliver a task that already ran."""
     delivery_id, message = _handed_off(order)
     record.clear()
 
@@ -450,8 +401,7 @@ def test_a_message_for_a_dead_row_does_not_run(
 def test_a_message_for_a_failed_row_not_yet_due_does_not_run(
     order: OrderPlaced, record: list[str], task_site: None
 ) -> None:
-    """The message outlived the attempt it was for. The row has since failed and
-    been told to wait an hour, and the late copy must not cut that short."""
+    """The message outlived the attempt it was for."""
     delivery_id, message = _handed_off(order)
     DeliveryRecord.objects.filter(pk=delivery_id).update(
         status=DeliveryStatus.FAILED,
@@ -469,10 +419,7 @@ def test_a_message_for_a_failed_row_not_yet_due_does_not_run(
 def test_a_stale_message_does_not_run_a_row_the_relay_reclaimed(
     order: OrderPlaced, record: list[str], task_site: None
 ) -> None:
-    """The case the not-owed check cannot see: the row is CLAIMED and owed, just
-    not under the claim this message carries. The queue sat on it past its
-    lease, the relay reclaimed it and handed it off again, and the old copy
-    arriving now would run beside the new one."""
+    """A CLAIMED row owed under another claim, which the not-owed check cannot see."""
     delivery_id, message = _handed_off(order)
     DeliveryRecord.objects.filter(pk=delivery_id).update(
         lease_expires_at=django_timezone.now() - timedelta(seconds=1)
@@ -490,8 +437,7 @@ def test_a_stale_message_does_not_run_a_row_the_relay_reclaimed(
 def test_a_message_naming_another_worker_does_not_take_the_row(
     order: OrderPlaced, record: list[str], task_site: None
 ) -> None:
-    """Holds the ``claimed_by`` half of the take on its own: the timestamp still
-    matches, only the owner moved."""
+    """Holds the claimed_by half of the take alone: only the owner moved."""
     delivery_id, message = _handed_off(order)
     DeliveryRecord.objects.filter(pk=delivery_id).update(claimed_by="someone-else")
     record.clear()
@@ -505,9 +451,7 @@ def test_a_message_naming_another_worker_does_not_take_the_row(
 def test_a_message_from_an_earlier_claim_by_the_same_worker_does_not_take_the_row(
     order: OrderPlaced, record: list[str], task_site: None
 ) -> None:
-    """Holds the ``claimed_at`` half on its own: one relay process reclaims its
-    own lapsed row under the same worker id, so only the timestamp tells the
-    two claims apart."""
+    """Holds the claimed_at half alone: the same worker reclaims its own lapsed row."""
     delivery_id, message = _handed_off(order)
     later = django_timezone.now() + timedelta(seconds=1)
     DeliveryRecord.objects.filter(pk=delivery_id).update(claimed_at=later)
@@ -522,9 +466,7 @@ def test_a_message_from_an_earlier_claim_by_the_same_worker_does_not_take_the_ro
 def test_a_message_for_a_released_row_does_not_take_it(
     order: OrderPlaced, record: list[str], task_site: None
 ) -> None:
-    """Holds the status half on its own. A PENDING row is owed, so the not-owed
-    check lets it through, and it still carries the token the message names;
-    only the take's requirement that the row be CLAIMED refuses it."""
+    """Holds the status half on its own."""
     delivery_id, message = _handed_off(order)
     DeliveryRecord.objects.filter(pk=delivery_id).update(status=DeliveryStatus.PENDING)
     record.clear()
@@ -538,11 +480,7 @@ def test_a_message_for_a_released_row_does_not_take_it(
 def test_a_stale_copy_turned_away_is_logged_at_info(
     order: OrderPlaced, record: list[str], task_site: None, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A copy the queue redelivered, or held past its lease while the relay
-    took the row back, is the outcome the take exists for, and a queue
-    draining a lapsed backlog turns thousands of them away. A warning each
-    would bury the ones that mean something; the line stays, at INFO, so a
-    count is still there to be had."""
+    """A redelivered or lapsed copy is what the take exists to turn away."""
     delivery_id, message = _handed_off(order)
     _replay(message)
     record.clear()
@@ -565,18 +503,14 @@ def test_a_stale_copy_turned_away_is_logged_at_info(
 def test_two_copies_at_once_run_the_receiver_once(
     order: OrderPlaced, record: list[str], task_site: None, caplog
 ) -> None:
-    """Two workers dequeue the same message at the same moment, each on its own
-    connection. Both read a CLAIMED row with the token they carry; the take is
-    one conditional UPDATE, so the database serialises the two and the loser's
-    WHERE no longer matches once the winner commits."""
+    """Two workers dequeue the same message at the same moment, each on its own connection."""
     delivery_id, message = _handed_off(order)
     ran: list[int] = []
     barrier = threading.Barrier(2)
 
     def slow(evt: OrderPlaced) -> None:
         ran.append(1)
-        # Long enough that the other copy is certainly past its read while this
-        # one is still inside the receiver's transaction.
+        # Long enough that the other copy is past its read while this one still runs.
         time.sleep(0.3)
 
     errors: list[BaseException] = []
@@ -600,16 +534,10 @@ def test_two_copies_at_once_run_the_receiver_once(
         for t in threads:
             t.join(timeout=20)
 
-    # A copy that died - on the barrier, a connection, anything - would also
-    # leave one run behind. Both must have finished cleanly, and the loser must
-    # have been turned away by the take rather than by a crash.
     assert not any(t.is_alive() for t in threads), "a copy did not finish"
     assert errors == []
     refused = [r for r in caplog.records if "no longer holds" in r.getMessage()]
     assert len(refused) == 1
-    # INFO, not WARNING: a redelivered copy and one held past its lease are
-    # what the take exists to turn away, and a queue draining a lapsed backlog
-    # turns away thousands. Nothing is wrong when it does.
     assert refused[0].levelno == logging.INFO
     assert ran == [1]
     row = DeliveryRecord.objects.get(pk=delivery_id)
@@ -619,10 +547,7 @@ def test_two_copies_at_once_run_the_receiver_once(
 def test_the_eager_path_hands_off_under_its_own_claim(
     order: OrderPlaced, record: list[str], task_site: None
 ) -> None:
-    """The eager path claims as ``eager`` and must dispatch as ``eager``. If it
-    let the fence read the owner off the row, a row taken between its claim and
-    its dispatch would be handed off under the thief's token - and that message
-    would then legitimately take the thief's row."""
+    """The eager path claims as ``eager`` and must dispatch as ``eager``."""
     from django_domain_events.declaration.registry import registry
     from django_domain_events.delivery import claim_batch as claim_module
 
@@ -647,11 +572,7 @@ def test_the_eager_path_hands_off_under_its_own_claim(
 def test_the_take_survives_a_receiver_that_raises(
     order: OrderPlaced, record: list[str], task_site: None
 ) -> None:
-    """The take commits on its own, before the receiver's transaction opens.
-    Inside that transaction it would roll back with a raising receiver: the row
-    would stay CLAIMED under the relay's claim, the failure would be written
-    against a claim that never landed and so not at all, and the same message
-    delivered again would take the row and run it a second time."""
+    """The take commits on its own, before the receiver's transaction opens."""
     from django_domain_events.declaration.registry import registry
 
     delivery_id, message = _handed_off(order)

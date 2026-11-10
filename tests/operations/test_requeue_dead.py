@@ -19,8 +19,7 @@ pytestmark = pytest.mark.django_db(transaction=True)
 
 
 def test_it_gives_dead_rows_their_budget_back(order: OrderPlaced, record: list[str]) -> None:
-    """A row requeued at its limit dead-letters again on the first failure, and
-    the operator learns nothing they did not already know."""
+    """A row requeued at its limit dead-letters again on the first failure."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(status=DeliveryStatus.DEAD, attempts=5, claimed_by="w1")
@@ -38,8 +37,7 @@ def test_it_leaves_everything_else_alone(order: OrderPlaced, record: list[str]) 
 
 
 def test_a_cancelled_row_is_not_requeued(order: OrderPlaced, record: list[str]) -> None:
-    """Requeue is for dead letters only. A cancelled row was withdrawn on
-    purpose, and the way back for it is a replay, which says so by name."""
+    """Requeue is for dead letters only."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(status=DeliveryStatus.CANCELLED)
@@ -51,8 +49,7 @@ def test_a_cancelled_row_is_not_requeued(order: OrderPlaced, record: list[str]) 
 
 
 def test_it_can_be_scoped_to_one_receiver(order: OrderPlaced, record: list[str]) -> None:
-    """The usual reason to requeue is that one downstream was broken and now is
-    not."""
+    """The usual reason to requeue is that one downstream was broken and now is not."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(status=DeliveryStatus.DEAD)
@@ -74,9 +71,7 @@ def test_a_limit_caps_it(order: OrderPlaced, record: list[str]) -> None:
 
 
 def test_limit_zero_requeues_nothing(order: OrderPlaced, record: list[str]) -> None:
-    """An operator asking for the smallest possible blast radius must not get
-    the largest one. Reading the limit for truthiness rather than for None turns
-    'requeue at most nothing' into 'requeue everything'."""
+    """An operator asking for the smallest possible blast radius must not get the largest one."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(status=DeliveryStatus.DEAD)
@@ -91,14 +86,7 @@ def test_a_negative_limit_is_refused(order: OrderPlaced, record: list[str]) -> N
 
 
 def test_it_will_not_wipe_a_live_claim(order: OrderPlaced, record: list[str]) -> None:
-    """The status guard on the update, not on the read.
-
-    The interleaving has to be real: an earlier version of this test claimed the
-    row *before* calling, so the select never picked it up and the test passed
-    with the guard removed. The row must be DEAD when requeue chooses it and
-    CLAIMED by the time requeue writes - so the steal is hooked onto the clock
-    read that happens between those two statements.
-    """
+    """The status guard on the update, not on the read."""
     module = importlib.import_module("django_domain_events.operations.requeue_dead")
 
     with transaction.atomic():
@@ -133,8 +121,7 @@ def test_it_clears_the_dead_letter_message(order: OrderPlaced, record: list[str]
 
 
 def test_it_chunks_the_update(order: OrderPlaced, record: list[str], settings) -> None:
-    """SQLite refuses more than 32,766 parameters in one statement, and a
-    dead-letter table past that is an ordinary outcome of one bad deploy."""
+    """SQLite refuses more than 32,766 parameters in one statement."""
     settings.DJANGO_DOMAIN_EVENTS = {"BATCH_SIZE": 1}
     with transaction.atomic():
         fire(order)
@@ -143,8 +130,7 @@ def test_it_chunks_the_update(order: OrderPlaced, record: list[str], settings) -
 
 
 def test_it_can_be_scoped_to_named_rows(order: OrderPlaced, record: list[str]) -> None:
-    """The other reason to requeue: an operator reading a dead-letter list and
-    picking the ones they understand."""
+    """An operator picks the dead letters they understand to requeue."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(status=DeliveryStatus.DEAD, attempts=5)
@@ -160,8 +146,7 @@ def test_it_can_be_scoped_to_named_rows(order: OrderPlaced, record: list[str]) -
 def test_naming_rows_that_are_not_dead_requeues_nothing(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The id list narrows the selection; it does not widen it past DEAD. An
-    admin action handed a mixed selection must not reset a live claim."""
+    """The id list narrows the selection; it does not widen it past DEAD."""
     with transaction.atomic():
         fire(order)
     ids = list(DeliveryRecord.objects.values_list("pk", flat=True))
@@ -170,8 +155,7 @@ def test_naming_rows_that_are_not_dead_requeues_nothing(
 
 
 def test_an_empty_id_list_requeues_nothing(order: OrderPlaced, record: list[str]) -> None:
-    """``[]`` is an operator selecting nothing, and must not mean "no filter"
-    the way ``None`` does."""
+    """[] is an operator selecting nothing, and must not mean no filter as None does."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(status=DeliveryStatus.DEAD, attempts=5)
@@ -190,9 +174,7 @@ def test_the_receiver_and_id_scopes_intersect(order: OrderPlaced, record: list[s
 def test_a_huge_id_list_does_not_reach_the_parameter_ceiling(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """SQLite refuses more than 32,766 parameters in one statement, and an
-    admin select-all over a dead-letter queue past that is an ordinary outcome
-    of one bad deploy. The UPDATE chunks; the SELECT has to as well."""
+    """An admin select-all past SQLite's parameter limit is an ordinary outcome."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(status=DeliveryStatus.DEAD, attempts=5)
@@ -204,8 +186,7 @@ def test_a_huge_id_list_does_not_reach_the_parameter_ceiling(
 def test_the_limit_stops_the_chunked_scan_early(
     order: OrderPlaced, record: list[str], settings
 ) -> None:
-    """Once the limit is filled there is nothing left to select, and walking
-    the rest of a select-all id list would be work with no result."""
+    """Once the limit is filled, walking the rest of the id list is wasted work."""
     settings.DJANGO_DOMAIN_EVENTS = {"BATCH_SIZE": 1}
     with transaction.atomic():
         fire(order)
@@ -217,8 +198,7 @@ def test_the_limit_stops_the_chunked_scan_early(
 
 
 def test_a_requeued_row_is_owed_from_the_requeue(order: OrderPlaced, record: list[str]) -> None:
-    """A bound measured in time reads ``due_at``, and a dead letter requeued a
-    month after its event was recorded must not be past that bound already."""
+    """A time bound reads due_at, so a month-old dead letter is not already past it."""
     with transaction.atomic():
         fire(order)
     EventRecord.objects.update(recorded_at=django_timezone.now() - timedelta(days=30))

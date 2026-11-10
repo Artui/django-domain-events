@@ -16,18 +16,7 @@ pytestmark = pytest.mark.django_db(transaction=True)
 def test_the_scope_is_read_at_fire_time_not_at_commit(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The hard rule: capture eagerly, never read a ContextVar in deferred code.
-
-    ``on_commit`` callbacks run at commit, which can be *after* the
-    ``with attributed(...)`` block has exited - so a callback reading the
-    variable then gets a stale answer or nothing, and does it silently.
-
-    Firing inside the block and committing outside it is the shape that catches
-    it, and the two assertions together are what make it a test rather than a
-    demonstration: the scope really is gone by commit, and the row really does
-    have the value. An implementation that read at commit could not satisfy
-    both.
-    """
+    """The hard rule: capture eagerly, never read a ContextVar in deferred code."""
     with transaction.atomic():
         with attributed(actor_key="system:inside"):
             fire(order)
@@ -39,9 +28,7 @@ def test_the_scope_is_read_at_fire_time_not_at_commit(
 def test_a_durable_delivery_reads_attribution_off_the_row(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """A durable delivery can run in another process hours later. What it is
-    told about the actor has to come off the row, because no context survives
-    that distance."""
+    """A durable delivery can run in another process hours later."""
     seen: list[str] = []
 
     with attributed(actor_key="system:firer"), transaction.atomic():
@@ -59,9 +46,7 @@ def test_a_durable_delivery_reads_attribution_off_the_row(
 def test_a_receiver_reading_the_live_scope_gets_nothing(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The mistake the rule exists to prevent, pinned so the difference between
-    the row and the ambient scope stays visible: by delivery time the block is
-    gone, and a receiver reaching for current_scope() finds it empty."""
+    """By delivery time the ambient scope block is gone, so current_scope() is empty."""
     seen: list[str] = []
 
     with attributed(actor_key="system:firer"), transaction.atomic():

@@ -16,9 +16,7 @@ pytestmark = pytest.mark.django_db(transaction=True)
 def test_an_event_fired_from_a_receiver_records_its_parent(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """What lets the log answer what an event fanned out to, rather than only
-    what caused it - and with no ceremony at the call site, because a parameter
-    threaded through every receiver is a parameter someone forgets."""
+    """The log answers what an event fanned out to, with no call-site ceremony."""
 
     def fires_another(evt: OrderPlaced) -> None:
         fire(PinnedName(value=evt.order_id))
@@ -33,8 +31,7 @@ def test_an_event_fired_from_a_receiver_records_its_parent(
 
 
 def test_the_correlation_id_carries_down_the_chain(order: OrderPlaced, record: list[str]) -> None:
-    """Causation is one hop; correlation is the whole tree. A child fired hours
-    later in another process still belongs to the request that started it."""
+    """Causation is one hop; correlation is the whole tree."""
 
     def fires_another(evt: OrderPlaced) -> None:
         fire(PinnedName(value=1))
@@ -55,8 +52,7 @@ def test_a_root_event_has_no_cause(order: OrderPlaced, record: list[str]) -> Non
 
 
 def test_causation_does_not_leak_past_the_delivery(order: OrderPlaced, record: list[str]) -> None:
-    """The relay delivers many rows in a pass. A cause left set would attach the
-    previous delivery's parent to whatever the next one fires."""
+    """The relay delivers many rows in a pass."""
     with transaction.atomic():
         fire(order)
     drain_outbox()
@@ -67,8 +63,7 @@ def test_causation_does_not_leak_past_the_delivery(order: OrderPlaced, record: l
 
 
 def test_an_inline_receiver_records_the_parent(order: OrderPlaced, record: list[str]) -> None:
-    """Causation is about descent, not about which execution site a receiver
-    happens to use."""
+    """Causation is about descent, not about which execution site a receiver happens to use."""
 
     def fires_another(evt: OrderPlaced) -> None:
         fire(PinnedName(value=1))
@@ -82,13 +77,10 @@ def test_an_inline_receiver_records_the_parent(order: OrderPlaced, record: list[
 def test_an_on_commit_receiver_records_the_parent_and_the_chain(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The callback runs at commit, after the attributed() block has exited, so
-    the cause has to have been captured at fire time like everything else."""
+    """The cause is captured at fire time, since commit runs after the block exits."""
 
     def fires_another(evt: OrderPlaced) -> None:
-        # An on-commit receiver runs after the commit, so it is in autocommit and
-        # the package rightly warns. Wrapping is what a consumer should do, and
-        # it is what makes this child's own row atomic with its work.
+        # An on-commit receiver runs after commit, in autocommit, and warns rightly.
         with transaction.atomic():
             fire(PinnedName(value=1))
 
@@ -103,9 +95,7 @@ def test_an_on_commit_receiver_records_the_parent_and_the_chain(
 def test_a_block_inside_a_receiver_stays_in_the_chain(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Naming yourself inside a receiver is the obvious thing to do, and minting
-    a fresh chain there detaches everything the receiver fires from the request
-    that caused it."""
+    """Minting a fresh chain in a receiver detaches its fires from their cause."""
 
     def fires_another(evt: OrderPlaced) -> None:
         with attributed(actor_key="system:fulfilment"):

@@ -49,9 +49,7 @@ def test_a_claimed_row_is_not_claimed_again(order: OrderPlaced, record: list[str
 
 
 def test_a_lapsed_lease_becomes_claimable_again(order: OrderPlaced, record: list[str]) -> None:
-    """The crash path, and it is the same path as an ordinary retry rather than
-    a special case: a worker that dies without acknowledging simply stops
-    renewing."""
+    """The crash path: a worker that dies without acknowledging simply stops renewing."""
     with transaction.atomic():
         fire(order)
     claim_batch(worker_id="w1", now=_now(), lease=timedelta(seconds=1), limit=10)
@@ -64,8 +62,7 @@ def test_a_lapsed_lease_becomes_claimable_again(order: OrderPlaced, record: list
 
 
 def test_a_row_scheduled_for_later_is_not_claimed(order: OrderPlaced, record: list[str]) -> None:
-    """Backoff is expressed as availability, so the claim query is what honours
-    it; nothing else has to remember that a row is serving a wait."""
+    """Backoff is expressed as availability, so the claim query is what honours it."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(available_at=_now() + timedelta(hours=1))
@@ -82,11 +79,7 @@ def test_the_limit_is_honoured(order: OrderPlaced, record: list[str]) -> None:
 def test_a_retry_due_now_waits_behind_every_row_due_before_it(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The backoff is a floor under a row's place in the queue, not its delay:
-    the claim takes the oldest ``available_at`` first, so a retry that has just
-    come due goes behind every row that came due earlier, however new or
-    however many. The delivery and operations pages say so, and this holds
-    them to it."""
+    """Backoff floors a row's queue place: the oldest available_at is claimed first."""
     with transaction.atomic():
         fire(order)
         fire(order)
@@ -102,8 +95,7 @@ def test_a_retry_due_now_waits_behind_every_row_due_before_it(
 
 
 def test_only_ids_narrows_the_claim(order: OrderPlaced, record: list[str]) -> None:
-    """What the eager path needs: claim the rows this process just wrote, and
-    leave the rest of the backlog to the relay."""
+    """The eager path claims just the rows this process wrote, not the backlog."""
     with transaction.atomic():
         fire(order)
     everything = list(DeliveryRecord.objects.values_list("pk", flat=True))
@@ -115,18 +107,13 @@ def test_only_ids_narrows_the_claim(order: OrderPlaced, record: list[str]) -> No
 
 
 def test_it_locks_as_strongly_as_the_backend_allows() -> None:
-    """Skipping is preferred so workers do not queue behind each other, but a
-    blocking FOR UPDATE is still correct - it serialises the claim rather than
-    losing it. Only a backend with no row locking at all falls through, and that
-    is what the relay refuses to start on."""
+    """Skipping spares workers a queue, and a blocking FOR UPDATE is still correct."""
     from django_domain_events.delivery.claim_batch import _locked
     from django_domain_events.models.delivery_record import DeliveryRecord
 
     base = DeliveryRecord.objects.all()
 
-    # The decision the helper makes, not the SQL a particular backend compiles
-    # it to: SQLite drops the clause entirely, so reading the query string would
-    # make this assert the backend rather than the code.
+    # The decision the helper makes, not the SQL a backend compiles it to.
     def locking(**caps: bool) -> tuple[bool, bool]:
         query = _locked(base, **caps).query
         return query.select_for_update, query.select_for_update_skip_locked
@@ -139,8 +126,7 @@ def test_it_locks_as_strongly_as_the_backend_allows() -> None:
 def test_a_scheduled_retry_can_be_claimed_when_backoff_is_ignored(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """What the test helper needs: a failed delivery is scheduled a jittered
-    interval ahead, and a suite cannot wait it out."""
+    """A suite cannot wait out the jittered interval a failure schedules."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(
@@ -188,8 +174,7 @@ def test_a_named_lane_claims_only_its_own_receivers(order: OrderPlaced, record: 
 def test_the_default_lane_claims_everything_no_named_lane_takes(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Which is what isolates a slow lane: the default relay has to stay out of
-    it, and an exclusion list kept in deployment manifests goes stale."""
+    """Isolates a slow lane: the default relay stays out, and manifests do not go stale."""
     with receiver_registered(_mail()):
         with transaction.atomic():
             fire(order)
@@ -211,9 +196,7 @@ def test_no_lane_claims_every_lane(order: OrderPlaced, record: list[str]) -> Non
 def test_a_lapsed_claim_in_a_named_lane_stays_out_of_the_default_lane(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The lane filter covers both arms of the claim. Applied to the retryable
-    arm alone, the default relay would take over every row a crashed mail relay
-    left behind."""
+    """The lane filter covers both arms of the claim."""
     with receiver_registered(_mail()):
         with transaction.atomic():
             fire(order)
@@ -230,9 +213,7 @@ def test_a_lapsed_claim_in_a_named_lane_stays_out_of_the_default_lane(
 def test_a_deleted_receivers_rows_drain_through_the_default_lane(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """A row whose receiver is gone belongs to no named lane, so the default
-    relay claims it and records it orphaned. Phrasing the default lane as the
-    receivers declared in it would strand that row forever."""
+    """A row whose receiver is gone is claimed by the default relay as orphaned."""
     with receiver_registered(_mail()), transaction.atomic():
         fire(order)
 
@@ -244,8 +225,7 @@ def test_a_deleted_receivers_rows_drain_through_the_default_lane(
 def test_lane_membership_is_read_from_the_registry_at_claim_time(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Not copied onto the row, so moving a receiver to another lane moves the
-    rows it is still owed with it."""
+    """Not copied onto the row, so moving a receiver moves the rows it is still owed."""
     with receiver_registered(_mail()), transaction.atomic():
         fire(order)
     with receiver_registered(_mail("search")):
@@ -263,8 +243,7 @@ def test_a_lane_with_no_receivers_claims_nothing(order: OrderPlaced, record: lis
 
 
 def test_without_named_lanes_the_default_lane_sends_the_unfiltered_claim() -> None:
-    """Byte for byte, so a deployment that never declares a lane runs exactly
-    the query it ran before lanes existed."""
+    """Byte for byte, so an undeclared-lane deployment runs the query it always ran."""
     fixed = datetime(2026, 10, 10, 12, 0, tzinfo=timezone.utc)
 
     def sql(**kwargs: str) -> list[str]:
@@ -279,8 +258,7 @@ def test_without_named_lanes_the_default_lane_sends_the_unfiltered_claim() -> No
 def test_a_paused_named_lane_is_left_out_of_a_claim_of_every_lane(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """What lets a relay serving every lane keep the others flowing while one
-    destination is throttling."""
+    """Lets an all-lanes relay keep others flowing while one destination throttles."""
     with receiver_registered(_mail()):
         with transaction.atomic():
             fire(order)
@@ -305,9 +283,7 @@ def test_a_paused_default_lane_leaves_only_the_named_lanes(
 def test_a_paused_default_lane_with_no_named_lanes_claims_nothing(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The default lane is *not the named ones*, so excluding it negates a
-    negated ``__in`` over no values at all - which has to come out as nothing,
-    not everything, on every backend."""
+    """Excluding the default lane negates an empty __in, which must yield nothing."""
     with transaction.atomic():
         fire(order)
 
@@ -318,8 +294,7 @@ def test_a_paused_default_lane_with_no_named_lanes_claims_nothing(
 
 
 def test_a_paused_lane_covers_its_lapsed_claims_too(order: OrderPlaced, record: list[str]) -> None:
-    """The rows a relay hands back on a deferral are lapsed claims, and those
-    are exactly the ones it must not take straight back."""
+    """Deferred rows are lapsed claims, so the relay must not take them straight back."""
     with receiver_registered(_mail()):
         with transaction.atomic():
             fire(order)
@@ -341,8 +316,7 @@ def _schedule(key: str, due: datetime) -> int:
 def test_a_scheduled_row_is_claimed_at_its_due_time_and_not_before(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The claim needs no change for scheduling: a scheduled row's
-    ``available_at`` is its due time, so the backoff predicate keeps it out."""
+    """A scheduled row's available_at is its due time, so backoff keeps it out."""
     with transaction.atomic():
         fire(order)
     due = _now() + timedelta(days=14)
@@ -356,10 +330,7 @@ def test_a_scheduled_row_is_claimed_at_its_due_time_and_not_before(
 def test_ignoring_the_backoff_never_ignores_the_schedule(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """``ignore_backoff`` claims a retry still waiting out its backoff, which a
-    test cannot sit through - and never a row whose due time has not come,
-    because that would run every scheduled reaction the moment its event fired.
-    The two are told apart by ``due_at``, which the backoff never moves."""
+    """ignore_backoff claims a waiting retry, but never a row not yet due."""
     with transaction.atomic():
         fire(order)
     now = _now()
@@ -383,9 +354,7 @@ def test_ignoring_the_backoff_never_ignores_the_schedule(
 def test_ignoring_the_backoff_still_claims_a_row_with_no_due_time(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """NULL ``due_at`` is a row owed since its event was recorded, which is every
-    row written before scheduling existed - so the NULL arm of the schedule
-    predicate is what keeps ``drain_outbox`` delivering them at all."""
+    """NULL due_at marks rows written before scheduling, which owe delivery now."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(
@@ -401,9 +370,7 @@ def test_ignoring_the_backoff_still_claims_a_row_with_no_due_time(
 def test_a_cancelled_row_is_never_claimed(
     order: OrderPlaced, record: list[str], ignore_backoff: bool
 ) -> None:
-    """The claim names the statuses it takes, so a cancelled row is outside it
-    however far ahead ``now`` is, and with the backoff skipped, which drops the
-    time predicate the schedule otherwise rides on."""
+    """The claim names its statuses, so a cancelled row is never claimed."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(status=DeliveryStatus.CANCELLED, available_at=_now())

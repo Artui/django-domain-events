@@ -1,17 +1,3 @@
-"""Receivers declared ``async def``, run to completion wherever a receiver runs.
-
-Every test here observes the receiver's body having run, or a refusal having
-been recorded, rather than the declaration. Before ``call_receiver`` ran a
-coroutine function through ``async_to_sync``, an ``async def`` receiver was
-recorded ``SUCCEEDED`` with its body never entered, and the only trace was a
-``coroutine ... was never awaited`` warning: so a test asserting a status alone
-would pass against exactly that defect.
-
-The tests are plain ``def`` unless they are about a running loop. pytest-asyncio
-runs in auto mode, and an ``async def`` test puts a running loop in the thread,
-which turns every delivery into the running-loop case.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -90,12 +76,7 @@ def _unawaited(caught: list[warnings.WarningMessage]) -> list[str]:
 
 
 def _sync_wrapper(func: Callable[..., Any]) -> Callable[..., Any]:
-    """The shape a ``functools.wraps`` decorator gives an ``async def``.
-
-    It looks like an ordinary function to every detection there is, and calling
-    it returns the coroutine rather than running it: the exact shape of the
-    silent drop.
-    """
+    """The shape a ``functools.wraps`` decorator gives an ``async def``."""
 
     @functools.wraps(func)
     def wrapper(*args: Any) -> Any:
@@ -108,11 +89,7 @@ def _sync_wrapper(func: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def test_an_async_receiver_runs_and_leaves_nothing_unawaited() -> None:
-    """Warnings are recorded, not turned into errors. The "never awaited"
-    warning is issued from the coroutine's finalizer, where an error filter
-    becomes an unraisable-exception report rather than a raise, so a test
-    relying on ``filterwarnings("error")`` alone passes against the defect.
-    The side effect is what proves the body ran."""
+    """Warnings are recorded, not turned into errors."""
     ran: list[int] = []
 
     async def remember(event: Unheard) -> None:
@@ -132,9 +109,7 @@ def test_an_async_receiver_runs_and_leaves_nothing_unawaited() -> None:
 
 
 def test_each_call_runs_on_a_loop_of_its_own_closed_when_it_returns() -> None:
-    """Why a client bound to one loop cannot be shared between calls: the loop
-    it was bound to is closed by the time the next call runs. The loops are
-    kept, not their ids, because an id can be reused once the first is freed."""
+    """A loop-bound client cannot be shared: its loop closes before the next call."""
     loops: list[asyncio.AbstractEventLoop] = []
 
     async def remember_loop(event: Unheard) -> None:
@@ -151,8 +126,7 @@ def test_each_call_runs_on_a_loop_of_its_own_closed_when_it_returns() -> None:
 
 
 def test_a_task_the_coroutine_starts_and_does_not_await_is_cancelled() -> None:
-    """Why the docs say to await what a receiver starts: its loop is closed
-    when the call returns, and closing it cancels whatever is still pending."""
+    """Why the docs say to await what a receiver starts: its loop closes on return."""
     seen: list[str] = []
 
     async def background() -> None:
@@ -206,10 +180,7 @@ def _marked_wrapper(ran: list[int]) -> Callable[..., Any]:
 def test_the_async_shapes_detection_accepts_all_run(
     shape: Callable[[list[int]], Callable[..., Any]],
 ) -> None:
-    """A callable object is detected through its type's ``__call__``, a
-    partial is unwrapped, and a sync wrapper marked with
-    ``markcoroutinefunction`` - the fix the refusal names - is taken at its
-    word. The instance case holds the ``__call__`` half of the detection."""
+    """A partial is unwrapped, and a markcoroutinefunction wrapper is taken at its word."""
     ran: list[int] = []
     receiver(Unheard, key="probe.shape")(shape(ran))
 
@@ -236,8 +207,7 @@ def test_an_async_inline_receiver_runs_before_fire_returns() -> None:
 
 
 def test_an_async_inline_receiver_vetoes_the_change_by_raising() -> None:
-    """The receiver's own exception reaches the caller, so the INLINE veto works
-    from a coroutine exactly as from a function."""
+    """The receiver's exception reaches the caller, so INLINE veto works in coroutines."""
 
     class Refused(Exception): ...
 
@@ -286,9 +256,7 @@ def test_an_async_eager_receiver_runs_at_commit(
 
 
 def test_an_async_receiver_handed_to_a_task_runs_there(settings: Any) -> None:
-    """``site="task"``: the relay hands the row to a task backend, whose worker
-    runs it through the same delivery function. The immediate backend runs the
-    task inline, so the receiver has finished by the time the hand-off returns."""
+    """site="task": a task backend's worker runs the same delivery function."""
     settings.TASKS = {"default": {"BACKEND": "django_tasks.backends.immediate.ImmediateBackend"}}
     settings.DJANGO_DOMAIN_EVENTS = {
         "TASK_BACKEND": "django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend"
@@ -315,11 +283,7 @@ def test_an_async_receiver_handed_to_a_task_runs_there(settings: Any) -> None:
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("raises", [False, True], ids=["succeeds", "raises"])
 def test_an_async_receivers_writes_share_its_acknowledgements_transaction(raises: bool) -> None:
-    """Django's async ORM calls hop back to the calling thread and its
-    connection, so what the coroutine writes is in the transaction carrying the
-    acknowledgement: kept with a success, rolled back with a raise. A real
-    transaction (``transaction=True``) rather than the test's savepoint, so the
-    delivery's ``atomic()`` is the outermost one, as in a relay."""
+    """Async ORM calls hop back to the caller's thread and its transaction."""
     seen: list[bool] = []
 
     async def create_group(event: Unheard) -> None:
@@ -347,8 +311,7 @@ class _Child:
 
 
 def test_an_event_fired_inside_an_async_receiver_records_its_parent() -> None:
-    """The cause is a ContextVar, and asgiref copies the calling context into the
-    coroutine and on into ``sync_to_async``, so nothing is threaded through."""
+    """The cause is a ContextVar, copied into the coroutine and on into sync_to_async."""
 
     async def fire_child(event: Unheard) -> None:
         await sync_to_async(fire)(_Child(value=event.value))
@@ -366,9 +329,7 @@ def test_an_event_fired_inside_an_async_receiver_records_its_parent() -> None:
 
 
 def test_an_async_receiver_sees_the_clock_and_due_time_a_sync_one_sees() -> None:
-    """Run by CI under both ``USE_TZ`` values and a zone other than UTC. The
-    clock is read the same way on the loop's thread, the context carries the
-    same ``due_at``, and an activated zone is visible inside the coroutine."""
+    """Run by CI under both ``USE_TZ`` values and a zone other than UTC."""
     seen: dict[str, tuple[Any, ...]] = {}
 
     def sync_probe(event: Unheard, ctx: DeliveryContext) -> None:
@@ -439,9 +400,7 @@ def _raising(verdict: Callable[[], Exception], is_async: bool) -> Callable[..., 
 def test_a_verdict_raised_from_a_coroutine_is_read_as_from_a_function(
     verdict: Callable[[], Exception], status: DeliveryStatus, attempts: int, is_async: bool
 ) -> None:
-    """asgiref re-raises the coroutine's own exception object, so the boundary
-    reading verdicts sees the same type and the same fields. Each case asserts
-    the same row whichever way the receiver is declared."""
+    """asgiref re-raises the coroutine's own exception, unchanged."""
     receiver(Unheard, key="probe.verdict")(_raising(verdict, is_async))
     row = _owed("probe.verdict")
 
@@ -475,10 +434,7 @@ async def _atomic(event: Unheard) -> None:
 def test_a_sync_database_call_in_a_coroutine_fails_the_attempt_loudly(
     body: Callable[..., Any],
 ) -> None:
-    """Django refuses a sync database call on the loop's thread. That covers a
-    sync ORM call and ``transaction.atomic()``, which is a sync API: a receiver
-    wanting a savepoint wraps a sync function in ``sync_to_async``. Loud, not
-    corrupting, and an ordinary failure."""
+    """Django refuses a sync database call on the loop's thread."""
     receiver(Unheard, key="probe.sync_call")(body)
 
     row = _delivered("probe.sync_call")
@@ -492,9 +448,7 @@ def test_a_sync_database_call_in_a_coroutine_fails_the_attempt_loudly(
 
 
 def test_a_sync_wrapper_returning_a_coroutine_is_refused_and_retried() -> None:
-    """Refused rather than run, with the fix named, and closed so no "never
-    awaited" warning fires. An ordinary failure, so the row is retried and a
-    deploy that fixes the declaration drains it without ``requeue_dead``."""
+    """Refused with the fix named, and closed so no never-awaited warning fires."""
     ran: list[int] = []
 
     async def body(event: Unheard) -> None:
@@ -516,10 +470,7 @@ def test_a_sync_wrapper_returning_a_coroutine_is_refused_and_retried() -> None:
 
 
 def test_an_async_generator_is_refused_without_a_warning() -> None:
-    """An ``async def`` containing ``yield`` is not a coroutine function, so
-    calling it builds an async generator and runs nothing: the same silent
-    drop, refused the same way. Never started, it is dropped without the
-    finalizer warning an ``aclose()`` left unawaited would raise."""
+    """An async def with yield builds a generator and runs nothing: refused too."""
     ran: list[int] = []
 
     async def yields(event: Unheard) -> Any:
@@ -542,8 +493,7 @@ def test_an_async_generator_is_refused_without_a_warning() -> None:
 
 
 def test_a_refused_callable_with_no_qualified_name_is_named_by_its_repr() -> None:
-    """A partial has no ``__qualname__``, so the message falls back to its repr
-    rather than naming nothing."""
+    """A partial has no __qualname__, so the message falls back to its repr."""
 
     async def body(event: Unheard) -> None: ...
 
@@ -591,11 +541,7 @@ def test_an_inline_sync_wrapper_returning_a_coroutine_raises_into_the_caller() -
 @pytest.mark.filterwarnings("ignore:coroutine .* was never awaited")
 @pytest.mark.parametrize("name", ["targets", "due"])
 def test_a_sync_wrapper_around_an_async_targets_or_due_fails_at_the_fire(name: str) -> None:
-    """The decorator refuses an ``async def`` for either, and cannot see one
-    behind a sync wrapper. That still fails loudly, inside the caller's
-    transaction, because a coroutine is neither a list of targets nor a
-    datetime. The coroutine is not this package's to close here, so the
-    warning is expected."""
+    """The decorator refuses an async def, and cannot see one behind a sync wrapper."""
 
     async def resolver(*args: object) -> None: ...
 
@@ -612,12 +558,7 @@ def test_a_sync_wrapper_around_an_async_targets_or_due_fails_at_the_fire(name: s
 
 
 def test_a_coroutine_that_cancels_itself_fails_its_attempt() -> None:
-    """``CancelledError`` is a ``BaseException``, so the relay's ``except
-    Exception`` would let it through: the row would stay claimed until its
-    lease lapsed, spend no attempt, and take the relay down. Read as what it
-    is - the receiver did not finish - it is an ordinary failure. Run through
-    ``deliver_pending`` so the row is claimed first, which is the state it
-    would otherwise be stranded in."""
+    """CancelledError is a BaseException that except Exception would let through."""
 
     async def gives_up(event: Unheard) -> None:
         task = asyncio.current_task()
@@ -629,10 +570,6 @@ def test_a_coroutine_that_cancels_itself_fails_its_attempt() -> None:
     with transaction.atomic():
         fire(Unheard(value=1))
 
-    # Full jitter can put the retry a few milliseconds out, and deliver_pending
-    # claims again until a claim comes back empty, so an unpinned draw near zero
-    # retries the row in the same call. The top of the range keeps it a whole
-    # backoff away; zero reproduces the flake.
     with mock.patch("django_domain_events.delivery.deliver.random.random", return_value=1.0):
         outcome = deliver_pending(worker_id="probe")
     assert outcome == {DeliveryStatus.FAILED: 1}
@@ -643,8 +580,7 @@ def test_a_coroutine_that_cancels_itself_fails_its_attempt() -> None:
 
 
 def test_an_inline_coroutine_that_cancels_itself_raises_a_chained_runtime_error() -> None:
-    """The cancellation is kept as the cause, so a traceback still shows where
-    the coroutine was cancelled."""
+    """The cancellation is kept as the cause, so the traceback shows the cancel."""
 
     async def gives_up(event: Unheard) -> None:
         task = asyncio.current_task()
@@ -707,9 +643,7 @@ async def _cancelled_hook(failure: DeliveryFailure) -> None:
 def test_an_async_on_failure_hook_that_fails_is_logged_and_swallowed(
     hook: Callable[..., Any], logged: type[BaseException], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """As a sync hook's raise is. A cancelled one arrives as the adapter's
-    RuntimeError, which is an ``Exception``; left a ``CancelledError`` it would
-    escape the hook's ``except Exception`` and the delivery with it."""
+    """As a sync hook's raise is."""
     receiver(Unheard, key="probe.broken_hook", on_failure=hook)(_failing)
 
     with caplog.at_level(logging.ERROR, logger="django_domain_events.delivery.deliver"):
@@ -744,9 +678,7 @@ def _owed_pk(key: str) -> int:
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("_thread_connections_closed")
 async def test_deliver_one_inside_a_running_loop_stops_before_the_receiver() -> None:
-    """A pin of a limit rather than a test of the change: the row is read
-    through the sync ORM before any receiver is reached, so the call raises
-    ``SynchronousOnlyOperation`` with the row untouched and no attempt spent."""
+    """A pin of a limit: the sync ORM raises before any receiver is reached."""
 
     async def body(event: Unheard) -> None: ...
 
@@ -765,9 +697,7 @@ async def test_deliver_one_inside_a_running_loop_stops_before_the_receiver() -> 
 async def test_deliver_one_allowed_inside_a_running_loop_records_a_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """With ``DJANGO_ALLOW_ASYNC_UNSAFE`` the call reaches the receiver, and
-    asgiref refuses to start a loop in a thread that has one. That is an
-    ordinary failure, and spends an attempt."""
+    """With DJANGO_ALLOW_ASYNC_UNSAFE, the call reaches the receiver and asgiref objects."""
     ran: list[int] = []
 
     async def body(event: Unheard) -> None:
@@ -783,8 +713,6 @@ async def test_deliver_one_allowed_inside_a_running_loop_records_a_failure(
     assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 1)
     assert row.last_error.startswith("RuntimeError: You cannot use AsyncToSync")
     assert ran == []
-    # Otherwise the connection used from inside the loop is still open when
-    # Postgres is asked to drop the test database. Closed while allowed.
     connections.close_all()
 
 
@@ -794,9 +722,7 @@ async def test_deliver_one_allowed_inside_a_running_loop_records_a_failure(
 async def test_fire_inside_a_running_loop_never_reaches_an_inline_receiver_unless_allowed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``fire()`` writes before it reaches a receiver, so in a running loop it
-    stops at the write. Allowed past that, the INLINE async receiver is where
-    asgiref refuses, and its RuntimeError reaches the caller."""
+    """fire() writes before any receiver, so a running loop stops at the write."""
 
     async def body(event: Unheard) -> None: ...
 
@@ -809,8 +735,6 @@ async def test_fire_inside_a_running_loop_never_reaches_an_inline_receiver_unles
     with pytest.raises(RuntimeError, match="You cannot use AsyncToSync"), transaction.atomic():
         fire(Unheard(value=1))
     assert not EventRecord.objects.filter(name="testapp.Unheard").exists()
-    # Otherwise the connection used from inside the loop is still open when
-    # Postgres is asked to drop the test database. Closed while allowed.
     connections.close_all()
 
 
@@ -845,10 +769,7 @@ urlpatterns = [path("fire/", _fire_in_a_request), path("commit/", _fire_and_comm
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("_thread_connections_closed")
 async def test_under_asgi_an_inline_coroutine_writes_in_the_requests_transaction() -> None:
-    """Served through Django's ASGI handler, asgiref schedules the coroutine on
-    the server's loop rather than a fresh one, and its ORM calls still hop back
-    to the request's thread: the row is visible in the request's transaction
-    and rolled back with it."""
+    """Under Django's ASGI handler the coroutine runs in the request's transaction."""
     loops: list[asyncio.AbstractEventLoop] = []
 
     async def create_group(event: Unheard) -> None:
@@ -870,9 +791,7 @@ async def test_under_asgi_an_inline_coroutine_writes_in_the_requests_transaction
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("_thread_connections_closed")
 async def test_under_asgi_an_on_commit_coroutine_runs_on_the_servers_loop() -> None:
-    """Commit happens on the request's thread too, so an ON_COMMIT coroutine is
-    scheduled where an INLINE one is: why a client shared between calls can
-    work under ASGI and then fail in the relay."""
+    """Commit runs on the request's thread too, so ON_COMMIT coroutines schedule there."""
     loops: list[asyncio.AbstractEventLoop] = []
 
     async def remember_loop(event: Unheard) -> None:

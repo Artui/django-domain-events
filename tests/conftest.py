@@ -1,5 +1,3 @@
-"""Shared fixtures."""
-
 from __future__ import annotations
 
 import re
@@ -22,12 +20,7 @@ from tests.testapp.events import Currency, OrderPlaced, calls
 
 
 def stored(value: datetime) -> datetime:
-    """What a column holding the aware ``value`` reads back as under ``USE_TZ``.
-
-    The value itself under ``True``; naive ``TIME_ZONE`` local time under
-    ``False``, which the suite also runs with (``DDE_TEST_USE_TZ=false``). For a
-    test comparing a fixed instant it wrote with what the database returns.
-    """
+    """What a column holding the aware ``value`` reads back as under ``USE_TZ``."""
     return value if settings.USE_TZ else django_timezone.make_naive(value)
 
 
@@ -55,13 +48,7 @@ def order() -> OrderPlaced:
 
 @contextmanager
 def receiver_deleted(key: str) -> Iterator[None]:
-    """Take a receiver out of the live registry, and put it back where it was.
-
-    The whole dict is restored, not just the entry. Re-inserting a popped key
-    appends it, and receivers are read in insertion order - so a pop-and-restore
-    silently reorders the fan-out for every test that runs afterwards, which
-    only shows up as a different delivery order in the full suite.
-    """
+    """Take a receiver out of the live registry, and put it back where it was."""
     original = dict(registry._receivers)
     del registry._receivers[key]
     try:
@@ -85,11 +72,7 @@ def receiver_replaced(key: str, func: object) -> Iterator[None]:
 
 @contextmanager
 def event_deleted(name: str) -> Iterator[None]:
-    """Take one event out of the live registry, and put it back.
-
-    Both indexes, because the registry keeps two and a check reading one while
-    a test cleared the other would pass on a registry no consumer can produce.
-    """
+    """Take one event out of the live registry, and put it back."""
     entry = registry.event_for_name(name)
     assert entry is not None, f"{name} is not registered"
     del registry._events_by_name[name]
@@ -127,15 +110,7 @@ DELIVERY_TABLE = "django_domain_events_deliveryrecord"
 
 
 def delivery_table_access(plan: str) -> set[str]:
-    """How a plan reads the delivery table: the index names it scans, plus
-    ``"Seq Scan"`` when it reads the heap directly.
-
-    Index names alone are not enough. With sequential scans priced out, a
-    predicate no partial index matches is answered by walking a *whole*
-    index - the unique one, say - and filtering every entry, which never
-    reads ``Seq Scan`` and costs exactly as much. So the assertion worth
-    making is that every access is through a partial index.
-    """
+    """How a plan reads the delivery table: the index names it scans, or Seq Scan."""
     access = set(re.findall(rf"using (\S+) on {DELIVERY_TABLE}\b", plan))
     access |= {
         name

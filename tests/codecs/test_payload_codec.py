@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/codecs/payload_codec.py``."""
-
 from __future__ import annotations
 
 from typing import Any

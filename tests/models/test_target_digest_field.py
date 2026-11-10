@@ -1,11 +1,3 @@
-"""Tests mirroring ``django_domain_events/models/target_digest_field.py``.
-
-The digest derivation and the column shape are asserted through the model, in
-``test_delivery_record.py``. What lives here is the field's contract with the
-SQL compiler: which statement a multi-row insert becomes, and that the value
-survives every way the package writes, reads and looks it up.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -69,21 +61,13 @@ def _rows(event: EventRecord, targets: list[str]) -> list[DeliveryRecord]:
 def test_the_field_has_no_placeholder_hook_so_postgres_can_unnest_a_bulk_insert(
     hook: str,
 ) -> None:
-    """Django's PostgreSQL compiler gives up the UNNEST form for a whole insert
-    when any one field has a placeholder hook, because a hook may answer a
-    different placeholder per value. ``BinaryField`` has one, named
-    ``get_placeholder`` to 6.0 and ``get_placeholder_sql`` from 6.1, so a field
-    inheriting it costs every fan-out a multi-row VALUES statement. Both names,
-    because the compiler checks whichever its version calls the hook; this is
-    the backend-independent half of the UNNEST test below."""
+    """Any placeholder hook on a field drops the whole insert from UNNEST form."""
     field = DeliveryRecord._meta.get_field("target_digest")
     assert not hasattr(field, hook)
 
 
 def test_the_serialised_field_is_what_the_migrations_already_hold() -> None:
-    """Migration 0006 names the class by path and passes no arguments. A change
-    to the class that altered either would make ``makemigrations`` write a new
-    migration for a column that has not changed."""
+    """Migration 0006 names the class by path and passes no arguments."""
     field = DeliveryRecord._meta.get_field("target_digest")
     assert field.deconstruct() == (
         "target_digest",
@@ -98,11 +82,7 @@ def test_the_serialised_field_is_what_the_migrations_already_hold() -> None:
 def test_a_bulk_insert_compiles_to_one_unnest_statement_for_postgres(
     on_conflict: OnConflict | None,
 ) -> None:
-    """Compiled for a PostgreSQL connection that never connects, so it runs in
-    every cell of the matrix rather than only where a server is. The fields are
-    the ones ``bulk_create`` hands the compiler for rows without a primary key;
-    ``OnConflict.IGNORE`` is replay's ``ignore_conflicts=True``, which appends
-    ``ON CONFLICT DO NOTHING`` and keeps the form."""
+    """Compiled for a Postgres connection that never connects, so every cell runs it."""
     postgres = ConnectionHandler(
         {"default": {"ENGINE": "django.db.backends.postgresql", "NAME": "never-opened"}}
     )["default"]
@@ -124,21 +104,12 @@ def test_a_bulk_insert_compiles_to_one_unnest_statement_for_postgres(
 
     assert "UNNEST" in sql
     assert "VALUES" not in sql
-    # One array parameter per column, each holding every row's value: the
-    # statement's size no longer grows with the row count.
     assert [len(column) for column in params] == [3] * len(fields)
     assert postgres.connection is None
 
 
 def test_a_digest_write_on_mysql_carries_no_binary_prefix() -> None:
-    """What hiding the hook costs MySQL, pinned so it is a decision rather than
-    a drift: its hook answered ``_binary %s``, and an insert or update now
-    binds a bare ``%s``, as every lookup on the column always did. Compiled
-    through MySQL's operations on a connection that is never opened, so it
-    holds on every backend, the SQLite runs without mysqlclient included. The
-    MySQL job writes and reads digests on a real server throughout the suite,
-    which is what shows the bytes survive the bare placeholder; the warning
-    that follows there is documented, not asserted."""
+    """Hiding the hook costs MySQL nothing: inserts bind a bare %s, as lookups do."""
     mysql = ConnectionHandler(
         {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
     )["default"]
@@ -152,7 +123,6 @@ def test_a_digest_write_on_mysql_carries_no_binary_prefix() -> None:
                 event_id=1,
                 receiver_key="probe.fan",
                 target=target,
-                # MySQL's operations refuse an aware value under USE_TZ = False.
                 available_at=now(),
             )
             for target in ("a", "b")
@@ -171,9 +141,7 @@ def test_a_digest_write_on_mysql_carries_no_binary_prefix() -> None:
 
 @unnest_capable_server
 def test_a_bulk_insert_on_postgres_is_one_unnest_statement() -> None:
-    """The statement fan-out writes, and what replay writes for the targets it
-    finds missing. VALUES costs Postgres a parse and plan over one placeholder
-    per column per row; UNNEST binds one array per column whatever the count."""
+    """The statement fan-out writes, and what replay writes for the targets it finds missing."""
     event = _event()
     targets = [f"endpoint-{n}" for n in range(20)]
 
@@ -190,9 +158,7 @@ def test_a_bulk_insert_on_postgres_is_one_unnest_statement() -> None:
 
 
 def test_rows_written_every_way_read_back_with_their_digests() -> None:
-    """``save()``, a one-row and a multi-row ``bulk_create``, read back through
-    the model and through ``values_list``. Bytes in; bytes, or the read-only
-    buffer psycopg 2 returns, out - so compared as bytes."""
+    """save(), bulk_create and reads through the model and values_list."""
     event = _event()
     saved = DeliveryRecord(
         event=event, receiver_key="probe.fan", target="saved", available_at=event.recorded_at
@@ -212,8 +178,7 @@ def test_rows_written_every_way_read_back_with_their_digests() -> None:
 
 
 def test_a_row_is_found_by_its_digest_alone_and_in_a_set() -> None:
-    """The two lookups replay makes: ``target_digest__in`` to find which
-    targets already have a row, and an equality on one digest."""
+    """The two lookups replay makes: target_digest__in, and an equality on one digest."""
     event = _event()
     DeliveryRecord.objects.bulk_create(_rows(event, ["a", "b", "c"]))
 

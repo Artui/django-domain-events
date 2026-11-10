@@ -1,8 +1,3 @@
-"""Tests mirroring ``django_domain_events/delivery/permanent_failure.py``.
-
-The class is a marker, so what these test is what the relay does on reading it.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -42,12 +37,7 @@ def test_it_is_exported_from_the_package_root() -> None:
 
 
 def test_it_dead_letters_on_the_attempt_that_raised_it() -> None:
-    """Attempt one of five, and the row is dead.
-
-    ``limit=1`` is one claim and one attempt, so a row that came back ``FAILED``
-    cannot be retried inside this call and reach ``DEAD`` by spending its
-    budget - which would read, from the status alone, like the same outcome.
-    """
+    """Attempt one of five, and the row is dead."""
     seen: list[DeliveryFailure] = []
 
     def gone(event: Unheard) -> None:
@@ -62,17 +52,11 @@ def test_it_dead_letters_on_the_attempt_that_raised_it() -> None:
     assert (row.status, row.attempts, row.max_attempts) == (DeliveryStatus.DEAD, 1, 5)
     assert row.completed_at is not None
     assert row.last_error == "PermanentFailure: 410 Gone: the customer deleted this endpoint"
-    # The hook sees DEAD, exactly as it does when the budget is spent, so a
-    # consumer's failure log needs no second case to recognise it.
     assert [(failure.status, failure.attempt) for failure in seen] == [(DeliveryStatus.DEAD, 1)]
 
 
 def test_an_ordinary_exception_saying_the_same_thing_is_still_retried() -> None:
-    """The type is the signal, never the words.
-
-    Pins that the relay is not reading the message: a receiver that raises a
-    ``RuntimeError`` about a 410 has said nothing about whether to retry.
-    """
+    """The type is the signal, never the words."""
 
     def vague(event: Unheard) -> None:
         raise RuntimeError("410 Gone: the customer deleted this endpoint")

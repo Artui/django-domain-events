@@ -1,10 +1,3 @@
-"""Declarations the autodiscovery picks up, exercising the real entry point.
-
-Deliberately declared here rather than inside each test: autodiscovery of an
-``events`` module is how a consumer's declarations actually load, and a suite
-that only ever registers inline never runs that path.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -77,12 +70,7 @@ def on_commit_receiver(evt: OrderPlaced) -> None:
 
 @receiver(OrderPlaced, mode=INLINE, takes_context=True, key="testapp.inline_with_context")
 def inline_context_receiver(evt: OrderPlaced, ctx: DeliveryContext) -> None:
-    """An inline receiver that wants the context.
-
-    Its attempt is always 1 and it has no delivery row, which is exactly what
-    the mode promises: it cannot be retried, because a failure rolls the whole
-    transaction back instead.
-    """
+    """An inline receiver that wants the context."""
     calls.append(f"inline_context:{ctx.event_name}:{ctx.attempt}")
 
 

@@ -21,12 +21,7 @@ LEASE = timedelta(seconds=300)
 
 
 def _claim(worker_id: str, sink: list[list[int]], barrier: threading.Barrier) -> None:
-    """Claim from this thread's own connection.
-
-    A claim test sharing one connection proves nothing: SKIP LOCKED is about what
-    a second session sees while the first holds a row lock, and two claims on one
-    connection never contend.
-    """
+    """Claim from this thread's own connection."""
     try:
         barrier.wait(timeout=10)
         sink.append(
@@ -37,8 +32,7 @@ def _claim(worker_id: str, sink: list[list[int]], barrier: threading.Barrier) ->
 
 
 def test_two_workers_never_claim_the_same_row(order: OrderPlaced, record: list[str]) -> None:
-    """The guarantee 0.2.0 exists for, asserted against real contention rather
-    than inferred from the SQL."""
+    """The guarantee 0.2.0 exists for, asserted against real contention."""
     with transaction.atomic():
         for _ in range(20):
             fire(order)

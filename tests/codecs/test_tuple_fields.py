@@ -1,12 +1,3 @@
-"""Tuple fields, which ``@event``'s own frozen-dataclass rule steers callers towards.
-
-A ``list`` field in a frozen dataclass is a mutable field in a nominally
-immutable object, so ``tuple`` is the idiomatic sequence type for an event
-payload -- and until this was fixed, neither codec could read one back. JSON has
-no tuple, so the encoder writes a list either way; what was missing was the
-decoder agreeing about the type it had asked for.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -64,8 +55,7 @@ def test_a_fixed_length_tuple_round_trips() -> None:
 
 
 def test_a_fixed_length_tuple_refuses_the_wrong_length() -> None:
-    """Refused rather than truncated: a row of the wrong shape is a defect, and
-    silently dropping the extra would make the payload disagree with itself."""
+    """Refused rather than truncated: a wrong-shaped row is a defect."""
     with pytest.raises(UnsupportedPayloadType, match="expects 2"):
         plain.decode(FixedTuple, {"point": [4, "north", "extra"]}, 1)
 

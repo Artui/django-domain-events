@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/quiet_receivers.py``."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -34,18 +32,14 @@ def _keys() -> list[str]:
 
 
 def test_a_receiver_that_has_never_run_is_reported_as_never() -> None:
-    """The answer worth having, and the one a query over delivery rows alone
-    cannot produce: there is no row to find."""
+    """The answer a delivery-row query cannot give: there is no row to find."""
     quiet = {q.key: q for q in quiet_receivers()}
     assert quiet["testapp.durable_receiver"].last_succeeded_at is None
     assert quiet["testapp.durable_receiver"].event_name == "testapp.OrderPlaced"
 
 
 def _pruned_after_running(order: OrderPlaced, *, skip: str | None = None) -> None:
-    """Fire, deliver, and prune the event and its delivery rows away.
-
-    ``skip`` deletes one receiver's row before delivery, so that receiver has
-    never run when the prune does."""
+    """Fire, deliver, and prune the event and its delivery rows away."""
     with transaction.atomic():
         fire(order)
     if skip is not None:
@@ -59,9 +53,7 @@ def _pruned_after_running(order: OrderPlaced, *, skip: str | None = None) -> Non
 def test_a_receiver_whose_deliveries_were_pruned_still_reports_its_last_success(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """An event deleted on consumption takes its delivery rows within a sweep,
-    so a receiver that ran a minute ago would otherwise read as never having
-    run at all."""
+    """A sweep deletes consumed events and their rows, so run history can vanish."""
     _pruned_after_running(order)
 
     assert "testapp.durable_receiver" not in _keys()
@@ -99,9 +91,7 @@ def test_the_later_of_the_pruned_record_and_the_live_rows_is_reported(
 
 
 def test_only_durable_receivers_are_considered() -> None:
-    """An INLINE receiver leaves no row, so it has no history to be quiet
-    about. Listing it as silent forever teaches the reader to skip the
-    output."""
+    """An INLINE receiver leaves no row, so it has no history to be quiet about."""
     keys = _keys()
     assert "testapp.inline_receiver" not in keys
     assert "testapp.on_commit_receiver" not in keys
@@ -143,8 +133,7 @@ def test_the_window_is_the_caller_s_when_they_pass_one(
 def test_the_default_window_is_the_retention_setting(
     order: OrderPlaced, record: list[str], settings
 ) -> None:
-    """Not a coincidence of numbers: past retention the prune has deleted the
-    evidence, so this is the longest answer the query can honestly give."""
+    """Past retention the prune has deleted the evidence, so this is the honest answer."""
     with transaction.atomic():
         fire(order)
     drain_outbox()
@@ -160,8 +149,7 @@ def test_the_default_window_is_the_retention_setting(
 def test_a_failed_delivery_does_not_count_as_having_run(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The question is whether the receiver did its work, not whether the relay
-    tried. A row stuck failing for a month is the case this must catch."""
+    """The question is whether the receiver did its work, not whether the relay tried."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").update(
@@ -189,8 +177,7 @@ class NeverDeclared:
 
 
 def test_a_receiver_for_an_undeclared_event_falls_back_to_the_class_name() -> None:
-    """Registering a receiver for a class with no @event is a check error, not
-    an import error, so this runs in a project that has one."""
+    """A receiver for a class with no @event is a check error, not an import error."""
     entry = RegisteredReceiver(
         key="tests.quiet_dangling",
         event_class=NeverDeclared,
@@ -209,9 +196,7 @@ def test_a_receiver_for_an_undeclared_event_falls_back_to_the_class_name() -> No
 def test_a_replay_does_not_erase_that_the_receiver_ran(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The two features contradicted each other: replay reopens a row and
-    clears its completion, so an operator who replayed yesterday's events to
-    re-run a receiver they had just fixed was then told it had never run."""
+    """Replay clears completion, so a re-run read as never run."""
     with transaction.atomic():
         fire(order)
     drain_outbox()
@@ -236,8 +221,7 @@ def test_a_requeue_does_not_erase_it_either(order: OrderPlaced, record: list[str
 def test_a_row_that_never_succeeded_has_no_timestamp_to_keep(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The column records success, not settlement: a dead-lettered delivery
-    must not read as one that ran."""
+    """The column records success, not settlement: a dead letter must not read as run."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(status=DeliveryStatus.DEAD, attempts=5)
@@ -246,8 +230,7 @@ def test_a_row_that_never_succeeded_has_no_timestamp_to_keep(
 
 
 def test_a_quiet_wildcard_is_reported_under_the_name_it_was_declared_with() -> None:
-    """A wildcard is declared for no event, so the name reported is the marker's,
-    which is what the declaration in the source says."""
+    """A wildcard is declared for no event, so the name reported is the marker's."""
     wildcard = RegisteredReceiver(
         key="testapp.everything",
         event_class=AnyEvent,
@@ -265,9 +248,7 @@ def test_a_quiet_wildcard_is_reported_under_the_name_it_was_declared_with() -> N
 
 
 def test_the_latest_success_wins_over_older_ones_and_failures() -> None:
-    """Several rows per receiver, so the answer depends on picking the newest
-    success rather than any one row: a lookup that read the first row it found,
-    or the oldest, passes every one-row test above."""
+    """Several rows per receiver: the answer must pick the newest success, not any row."""
     event = EventRecord.objects.create(
         name="testapp.OrderPlaced",
         version=1,
@@ -298,15 +279,7 @@ def test_the_latest_success_wins_over_older_ones_and_failures() -> None:
 def test_each_receiver_costs_one_probe_of_the_last_success_index(
     plans_without_seqscan: Plans,
 ) -> None:
-    """``MAX(succeeded_at)`` for one key is a single descent of the index on
-    ``(receiver_key, succeeded_at)``: the planner rewrites it into a backward
-    scan under ``LIMIT 1``. Grouped across keys it is not, and reads every row
-    the receivers ever had.
-
-    Populated and analyzed first, because the rewrite is chosen on cost: on an
-    empty table the planner expects one row per key and an ordinary aggregate
-    over the index costs the same, so the plan would not say which query was
-    sent."""
+    """MAX(succeeded_at) per key is one index descent: a backward scan under LIMIT 1."""
     event = EventRecord.objects.create(
         name="testapp.OrderPlaced",
         version=1,
@@ -328,17 +301,12 @@ def test_each_receiver_costs_one_probe_of_the_last_success_index(
         cursor.execute(f"ANALYZE {DeliveryRecord._meta.db_table}")
     plans = plans_without_seqscan(quiet_receivers)
     durable = [r for r in registry.receivers() if r.mode is DeliveryMode.DURABLE]
-    # One read of the pruned receivers' record, for every receiver at once: it
-    # holds a row per receiver key, so it is as small as the registry.
     [pruned] = [p for p in plans if ReceiverLastSuccess._meta.db_table in p]
     assert DeliveryRecord._meta.db_table not in pruned, pruned
     plans.remove(pruned)
     assert len(plans) == len(durable)
     for plan in plans:
         assert delivery_table_access(plan) == {"dde_last_success"}, plan
-    # The receivers with no rows are estimated at one entry, where an ordinary
-    # aggregate over it costs the same; the one with history is where the
-    # rewrite has to show.
     [busy] = [p for p in plans if "'testapp.durable_receiver'" in p]
     assert "Limit" in busy, busy
     assert "Index Only Scan Backward using dde_last_success" in busy, busy

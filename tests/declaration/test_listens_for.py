@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/listens_for.py``."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,8 +10,7 @@ from tests.conftest import receiver_registered
 
 
 def test_it_names_the_event_a_receiver_is_declared_for() -> None:
-    """The question a dead-letter row raises: it names a receiver key, and the
-    next thing anyone wants is what it was supposed to be receiving."""
+    """A dead-letter row names a receiver key, and the operator wants its event."""
     entry = listens_for("testapp.durable_receiver")
     assert entry is not None
     assert entry.name == "testapp.OrderPlaced"
@@ -35,9 +32,7 @@ class NeverDeclared:
 
 
 def test_a_receiver_whose_event_was_deleted_is_also_none() -> None:
-    """Two cases look identical from a delivery row - a key never declared, and
-    one whose event class went away - and both leave the operator with nothing
-    to decode."""
+    """Two cases look identical from a delivery row, and both leave nothing to decode."""
     entry = RegisteredReceiver(
         key="tests.dangling",
         event_class=NeverDeclared,
@@ -53,8 +48,7 @@ def test_a_receiver_whose_event_was_deleted_is_also_none() -> None:
 
 
 def test_a_wildcard_names_no_single_event() -> None:
-    """Owed every event, so there is no one answer; the delivery row already
-    says which event it was."""
+    """Owed every event, so there is no one answer; the delivery row names its event."""
     wildcard = RegisteredReceiver(
         key="testapp.everything",
         event_class=AnyEvent,

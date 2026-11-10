@@ -30,10 +30,7 @@ def test_the_alias_follows_the_router(routed) -> None:
 def test_the_warning_follows_the_rows_not_the_default_connection(
     routed, order: OrderPlaced, record: list[str]
 ) -> None:
-    """Wrapping the wrong database is the dangerous case, and it was the silent
-    one: the check asked ``default`` while every row went to ``events``, so it
-    warned the caller who had it right and said nothing to the caller who did
-    not."""
+    """Wrapping the wrong database is the silent danger, checked against default."""
     with warnings.catch_warnings(record=True) as correct:
         warnings.simplefilter("always")
         with transaction.atomic(using="events"):
@@ -42,15 +39,13 @@ def test_the_warning_follows_the_rows_not_the_default_connection(
 
     with warnings.catch_warnings(record=True) as wrong:
         warnings.simplefilter("always")
-        with transaction.atomic():  # default only; the event row is unprotected
+        with transaction.atomic():
             fire(order)
     assert any("outside a transaction" in str(w.message) for w in wrong)
 
 
 def test_effectively_once_survives_a_router(routed, order: OrderPlaced, record: list[str]) -> None:
-    """The headline guarantee: the receiver's work and the acknowledgement commit
-    together. With the transaction opened on the wrong connection they did not,
-    so a retry re-ran the side effect every time."""
+    """The headline guarantee: the receiver's work and the acknowledgement commit together."""
 
     def write_then_explode(evt: OrderPlaced) -> None:
         EventRecord.objects.create(

@@ -1,10 +1,3 @@
-"""Tests mirroring ``django_domain_events/codecs/dacite_codec.py``.
-
-This file is the ten-case probe that settled the codec decision, kept as a
-regression test. The evidence for a design decision should be the test that
-re-runs it; otherwise the reasoning survives in prose and nothing checks it.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -54,8 +47,7 @@ def _basket() -> Basket:
 
 
 def test_a_nested_payload_round_trips() -> None:
-    """What the extra dependency buys, and the reason encoding is inherited: the
-    default codec's encode already writes this correctly."""
+    """What the extra dependency buys: the default codec already encodes this correctly."""
     value = _basket()
     assert codec.decode(Basket, codec.encode(value), 1) == value
 
@@ -73,16 +65,14 @@ def test_a_field_added_with_a_default_decodes_from_an_older_row() -> None:
 
 
 def test_a_field_removed_from_the_class_is_ignored() -> None:
-    """Non-strict is load-bearing rather than a default left alone: turning
-    strict on would make a removed field a dead letter."""
+    """Non-strict is load-bearing: strict would dead-letter a removed field."""
     value = _basket()
     payload = {**codec.encode(value), "retired": 1}
     assert codec.decode(Basket, payload, 1) == value
 
 
 def test_a_required_field_missing_names_the_field() -> None:
-    """The breaking change, failing with a sentence good enough to be the
-    dead-letter reason an operator reads."""
+    """The breaking change fails with a sentence an operator can read as the reason."""
     payload = codec.encode(_basket())
     del payload["basket_id"]
     with pytest.raises(Exception, match="basket_id"):
@@ -102,6 +92,5 @@ def test_a_literal_outside_its_options_is_rejected() -> None:
 
 
 def test_it_also_handles_what_the_default_codec_handles(order: OrderPlaced) -> None:
-    """Swapping the codec must not narrow anything, or the choice would not be a
-    seam."""
+    """Swapping the codec must not narrow anything, or the choice would not be a seam."""
     assert codec.decode(OrderPlaced, codec.encode(order), 1) == order

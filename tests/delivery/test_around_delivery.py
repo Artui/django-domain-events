@@ -1,15 +1,3 @@
-"""``AROUND_DELIVERY``: one context manager around each durable attempt.
-
-Every test here configures the hook by its dotted path, as a project does, and
-observes what it recorded: when it was entered, with which context, and what
-``__exit__`` was handed. The hooks are factories in this module, so
-``import_string`` resolves them exactly as it would a project's own.
-
-A test asserting only that something did *not* happen would pass against a
-tree with no hook at all. The negative ones therefore deliver a control row
-too, and assert the hook was entered for that one and for nothing else.
-"""
-
 from __future__ import annotations
 
 import gc
@@ -304,8 +292,7 @@ def test_the_hook_wraps_each_attempt_once_with_its_context(
 
 @pytest.mark.django_db(transaction=True)
 def test_the_relay_wraps_each_attempt(settings: Any) -> None:
-    """A real transaction, as the relay's tests use, so its claim and each
-    delivery's ``atomic()`` are the outermost ones."""
+    """A real transaction, so its claim and each delivery's atomic() are the outermost."""
     ran: list[Any] = []
     receiver(Unheard, key="probe.relayed")(_record(ran))
     _hook(settings, "recording")
@@ -338,10 +325,7 @@ def test_the_eager_attempt_is_wrapped(
 def test_a_row_handed_to_a_task_is_wrapped_once_in_the_worker_and_not_at_the_hand_off(
     settings: Any,
 ) -> None:
-    """The relay's hand-off never runs the receiver, so wrapping it too would
-    open a span for a delivery that has not happened, and a second one when it
-    does. The immediate backend runs the task inside ``dispatch_one``, so one
-    call covers both halves."""
+    """The hand-off never runs the receiver, so wrapping it would open a span too early."""
     settings.TASKS = {"default": {"BACKEND": "django_tasks.backends.immediate.ImmediateBackend"}}
     settings.DJANGO_DOMAIN_EVENTS = {
         "TASK_BACKEND": "django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend",
@@ -360,8 +344,7 @@ def test_a_row_handed_to_a_task_is_wrapped_once_in_the_worker_and_not_at_the_han
 
 
 def test_the_path_is_read_on_every_delivery(settings: Any) -> None:
-    """Not cached, for the reason ``get_codec`` gives: a cached hook would be
-    whatever the first delivery saw."""
+    """Not cached: a cached hook would be whatever the first delivery saw."""
     receiver(Unheard, key="probe.durable")(lambda event: None)
     first, second = _owed("probe.durable"), _owed("probe.durable")
 
@@ -395,9 +378,7 @@ def test_with_no_hook_a_delivery_runs_as_before(settings: Any) -> None:
 
 
 def test_exit_sees_the_receivers_exception_and_cannot_suppress_it(settings: Any) -> None:
-    """``__exit__`` returning True would suppress the exception in a ``with``
-    statement. Here the failure is recorded before ``__exit__`` is called, so
-    there is nothing left for it to suppress, and its answer is ignored."""
+    """``__exit__`` returning True would suppress the exception in a ``with`` statement."""
     failure = ValueError("the mail server refused")
 
     def fails(event: Unheard) -> None:
@@ -419,10 +400,7 @@ def test_exit_sees_the_receivers_exception_and_cannot_suppress_it(settings: Any)
 def test_exit_raising_after_a_success_leaves_the_acknowledgement_and_is_logged(
     settings: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The acknowledgement has committed before ``__exit__`` runs. Run inside
-    the receiver's transaction, the raise would roll back the acknowledgement of
-    work already done; reaching the failure path, it would overwrite SUCCEEDED
-    with FAILED and the work would be done again."""
+    """The acknowledgement has committed before ``__exit__`` runs."""
 
     def writes(event: Unheard) -> None:
         Group.objects.create(name="probe-around-delivery")
@@ -472,10 +450,7 @@ def test_exit_raising_after_a_failure_is_logged_and_the_failure_stands(
 
 
 def test_a_row_lost_mid_flight_still_exits_the_hook(settings: Any) -> None:
-    """The receiver finishes after another worker took the row: its work rolls
-    back, nothing is recorded, and the hook is still closed, cleanly, since the
-    receiver did not raise. A relay thread lives for days, so a hook left open
-    leaves its log context on every later line."""
+    """A receiver whose row was taken rolls back, and the hook still closes cleanly."""
     seen: list[Any] = []
 
     def loses_the_row(event: Unheard) -> None:
@@ -500,10 +475,7 @@ def _broker_down() -> None:
 
 @pytest.mark.django_db(transaction=True)
 def test_the_hook_is_not_handed_an_on_commit_callbacks_exception(settings: Any) -> None:
-    """A callback the receiver registered raises once the acknowledgement has
-    committed, and that is not the delivery failing: a tracing hook handed it
-    would mark a committed success as an error. A real transaction, so the
-    delivery's ``atomic()`` is the outermost one and its callbacks run."""
+    """A callback raised after the acknowledgement committed is not a delivery failure."""
 
     def enqueues(event: Unheard) -> None:
         transaction.on_commit(_broker_down)
@@ -520,9 +492,7 @@ def test_the_hook_is_not_handed_an_on_commit_callbacks_exception(settings: Any) 
 def test_the_hook_is_exited_even_when_recording_the_failure_raises(
     settings: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A failed write of the outcome (the database went away) propagates, as it
-    did before the hook existed. The hook is still exited, with the receiver's
-    exception, so a span closes and a log context is reset."""
+    """A failed write of the outcome propagates, as it did before the hook existed."""
     failure = ValueError("refused")
 
     def fails(event: Unheard) -> None:
@@ -544,9 +514,7 @@ def test_the_hook_is_exited_even_when_recording_the_failure_raises(
 
 
 def test_a_base_exception_reaches_exit_and_propagates(settings: Any) -> None:
-    """A worker's timeout signal or a KeyboardInterrupt is not a failure of the
-    delivery. The hook sees it, the row stays claimed until its lease lapses,
-    and it goes on up."""
+    """A worker's timeout signal or a KeyboardInterrupt is not a failure of the delivery."""
     stop = _Stop()
 
     def interrupted(event: Unheard) -> None:
@@ -566,8 +534,7 @@ def test_a_base_exception_reaches_exit_and_propagates(settings: Any) -> None:
 
 
 def test_what_the_hook_writes_is_not_rolled_back_with_the_receiver(settings: Any) -> None:
-    """The hook is outside the transaction carrying the acknowledgement, so a
-    receiver raising rolls back its own work and not the hook's."""
+    """The hook sits outside the acknowledgement's transaction, so a raise spares it."""
 
     def fails(event: Unheard) -> None:
         Group.objects.create(name="probe-receiver-work")
@@ -585,10 +552,7 @@ def test_what_the_hook_writes_is_not_rolled_back_with_the_receiver(settings: Any
 
 @pytest.mark.django_db(transaction=True)
 def test_the_outcome_is_committed_before_exit_runs(settings: Any) -> None:
-    """A real transaction (``transaction=True``), so the delivery's ``atomic()``
-    is the outermost one: by ``__exit__`` it has committed and the connection is
-    back in autocommit. Called inside that block instead, ``__exit__`` would see
-    ``(True, False)``."""
+    """A real transaction (transaction=True), so the delivery's atomic() is outermost."""
     receiver(Unheard, key="probe.durable")(lambda event: None)
     _hook(settings, "observing")
     row = _owed("probe.durable")
@@ -602,9 +566,7 @@ def test_the_outcome_is_committed_before_exit_runs(settings: Any) -> None:
 def test_inside_a_callers_transaction_the_outcome_is_recorded_not_committed(
     settings: Any,
 ) -> None:
-    """Why the docs say "recorded" rather than "committed": a delivery run
-    inside the caller's own ``atomic()`` writes its outcome into that
-    transaction, which is still open when ``__exit__`` runs."""
+    """Why the docs say recorded, not committed: the caller's atomic() is still open."""
     receiver(Unheard, key="probe.durable")(lambda event: None)
     _hook(settings, "observing")
     _owed("probe.durable")
@@ -616,9 +578,7 @@ def test_inside_a_callers_transaction_the_outcome_is_recorded_not_committed(
 
 
 def test_a_base_exception_from_exit_propagates_and_the_success_stands(settings: Any) -> None:
-    """Only an ``Exception`` from ``__exit__`` is logged and swallowed. A
-    ``BaseException`` goes on up, as one from the receiver does, and the
-    success recorded before ``__exit__`` ran is kept."""
+    """Only an ``Exception`` from ``__exit__`` is logged and swallowed."""
     receiver(Unheard, key="probe.durable")(lambda event: None)
     _hook(settings, "halting_on_exit")
     row = _owed("probe.durable")
@@ -636,11 +596,7 @@ class _Marker:
 
 @pytest.mark.parametrize("name", [None, "quiet"], ids=["no-hook", "hook"])
 def test_a_failed_attempt_leaves_no_reference_cycle(settings: Any, name: str | None) -> None:
-    """The exception kept for ``__exit__`` holds its traceback, which holds the
-    delivery's frame, which holds the exception's keeper: a cycle only the
-    garbage collector frees, so every failed attempt's frames, with whatever
-    the receiver had in its locals, would outlive it. Run with the collector
-    off, so only reference counting can free them."""
+    """The kept exception's traceback is a cycle that only the collector frees."""
     alive: list[weakref.ref[_Marker]] = []
 
     def fails(event: Unheard) -> None:
@@ -665,12 +621,7 @@ def test_a_failed_attempt_leaves_no_reference_cycle(settings: Any, name: str | N
 def test_a_hook_that_opens_a_transaction_rolls_back_the_recorded_failure(
     settings: Any,
 ) -> None:
-    """The hazard the docs warn about, held so the warning stays true: the
-    outcome is written after the receiver's transaction closes and before
-    ``__exit__``, so a transaction the hook opened holds that write, and exiting
-    it with the receiver's exception rolls the failure back after
-    ``on_failure`` was told and the warning was logged. The row is left as if
-    the attempt never happened, and what ``on_failure`` wrote goes with it."""
+    """The docs' warned hazard: the outcome write sits inside on_failure's transaction."""
     told: list[DeliveryStatus] = []
 
     def fails(event: Unheard) -> None:
@@ -696,8 +647,7 @@ def test_a_hook_that_opens_a_transaction_rolls_back_the_recorded_failure(
 
 
 def test_entering_raising_fails_the_attempt_without_running_the_receiver(settings: Any) -> None:
-    """A hook setting a tenant or a database role that cannot be set must not
-    let the receiver run without it."""
+    """A hook that cannot set its tenant or role must not let the receiver run."""
     ran: list[Any] = []
     told: list[DeliveryFailure] = []
     receiver(Unheard, key="probe.guarded", on_failure=told.append)(_record(ran))
@@ -713,8 +663,6 @@ def test_entering_raising_fails_the_attempt_without_running_the_receiver(setting
     assert [(f.delivery_id, f.attempt, f.error) for f in told] == [
         (row.pk, 1, "RuntimeError: the tracer is down")
     ]
-    # Entered, never exited: a context manager whose __enter__ raised was
-    # never entered, which is what a with statement does too.
     assert len(_entered()) == 1
     assert _exits() == []
 
@@ -757,9 +705,7 @@ def test_a_hook_entering_with_an_uncounted_retry_after_defers_without_spending(
 def test_a_hook_that_cannot_be_entered_at_all_fails_the_attempt(
     settings: Any, name: str, error: str
 ) -> None:
-    """Resolving the path and calling the factory are part of entering. A typo
-    the system check would have named, deployed anyway, fails each attempt
-    loudly rather than taking the relay down or running receivers unwrapped."""
+    """Resolving the path and calling the factory are part of entering."""
     ran: list[Any] = []
     receiver(Unheard, key="probe.guarded")(_record(ran))
     _hook(settings, name)
@@ -774,9 +720,7 @@ def test_a_hook_that_cannot_be_entered_at_all_fails_the_attempt(
 
 
 def test_a_manager_with_no_exit_is_refused_before_it_is_entered(settings: Any) -> None:
-    """``__exit__`` is looked up before ``__enter__`` is called, as a ``with``
-    statement looks it up. Entered first, a hook setting a tenant would be set
-    and never reset, on a relay thread that serves every later delivery."""
+    """__exit__ is looked up before __enter__ is called, as a with statement does."""
     ran: list[Any] = []
     receiver(Unheard, key="probe.guarded")(_record(ran))
     _hook(settings, "enter_without_exit")
@@ -797,8 +741,7 @@ def test_a_manager_with_no_exit_is_refused_before_it_is_entered(settings: Any) -
 def test_on_failure_and_the_failure_warning_run_inside_the_hook(
     settings: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Most of what a log context hook is for: the lines a failure writes carry
-    the context the hook set."""
+    """Most of what a log context hook is for: failure lines carry its context."""
     told: list[Any] = []
 
     def fails(event: Unheard) -> None:
@@ -835,9 +778,7 @@ def test_on_failure_and_the_failure_warning_run_inside_the_hook(
 def test_an_async_receiver_sees_the_hooks_context_and_its_exception_reaches_exit(
     settings: Any,
 ) -> None:
-    """The hook enters on the calling thread, outside the adapter that runs a
-    coroutine; asgiref copies the context into it, and re-raises what the
-    coroutine raised, the same object."""
+    """The hook enters on the calling thread; asgiref copies context into the coroutine."""
     ran: list[Any] = []
     ran_on: list[int] = []
     failure = ValueError("the review platform refused")
@@ -855,8 +796,6 @@ def test_an_async_receiver_sees_the_hooks_context_and_its_exception_reaches_exit
 
     assert ran == [f"{row.pk}:probe.async"]
     assert [(exc_type, exc) for exc_type, exc, _ in _exits()] == [(ValueError, failure)]
-    # Entered on the thread that called deliver_one, whose connection holds
-    # the acknowledging transaction; the coroutine ran on a thread of its own.
     here = threading.get_ident()
     assert list(ENTERED_ON) == [here]
     assert len(ran_on) == 1
@@ -927,9 +866,7 @@ def _take_refused() -> int:
 def test_a_row_that_never_reaches_its_receiver_is_not_wrapped(
     settings: Any, subject: Callable[[], int]
 ) -> None:
-    """No ``DeliveryContext`` exists for these, and each is logged already.
-    The control row is delivered afterwards, so the test fails against a tree
-    with no hook as well as against one that wraps too early."""
+    """No ``DeliveryContext`` exists for these, and each is logged already."""
     _hook(settings, "recording")
     subject_pk = subject()
 
@@ -945,9 +882,7 @@ def test_a_row_that_never_reaches_its_receiver_is_not_wrapped(
 def test_inline_and_on_commit_receivers_are_not_wrapped(
     settings: Any, mode: DeliveryMode, django_capture_on_commit_callbacks: Callable[..., Any]
 ) -> None:
-    """They run in the caller's own request, under whatever context it already
-    has. The durable control is delivered in the same test, for the reason the
-    test above gives."""
+    """They run in the caller's own request, under whatever context it already has."""
     ran: list[Any] = []
     receiver(Unheard, mode=mode, key="probe.immediate")(_record(ran))
     receiver(Unheard, key="probe.control")(lambda event: None)
@@ -983,8 +918,7 @@ def test_a_durable_receiver_is_told_its_own_key(settings: Any) -> None:
 def test_an_immediate_receiver_is_told_its_own_key(
     mode: DeliveryMode, django_capture_on_commit_callbacks: Callable[..., Any]
 ) -> None:
-    """Two receivers of one event, so a context shared between them, or one
-    carrying the first receiver's key, is caught."""
+    """Two receivers of one event: a context shared between them is caught."""
     seen: list[tuple[str, Any]] = []
 
     def first(event: Unheard, context: DeliveryContext) -> None:
@@ -1017,8 +951,7 @@ def test_a_targets_callable_is_told_the_key_of_the_receiver_it_fans_out() -> Non
 
 
 def test_replay_asks_a_targets_callable_with_its_key() -> None:
-    """``replay_events`` asks a fan-out receiver for its targets again, with a
-    context of its own: the same key as at fire time."""
+    """replay_events asks a fan-out receiver for targets again, under the same key."""
     seen: list[Any] = []
 
     def targets(event: Unheard, context: DeliveryContext) -> list[str]:
@@ -1034,9 +967,7 @@ def test_replay_asks_a_targets_callable_with_its_key() -> None:
 
 
 def test_a_context_built_by_keyword_without_the_key_still_constructs() -> None:
-    """The shape django-outbound-webhooks' tests build one in: every required
-    field by keyword, and ``target`` among the defaulted ones. A new field
-    added without a default, or ahead of these, breaks every such caller."""
+    """The shape django-outbound-webhooks' tests build: every required field by keyword."""
     context = DeliveryContext(
         event_id=1,
         event_name="testapp.OrderPlaced",

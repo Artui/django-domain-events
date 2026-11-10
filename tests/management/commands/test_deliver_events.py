@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/management/commands/deliver_events.py``."""
-
 from __future__ import annotations
 
 import re
@@ -66,8 +64,7 @@ def _captured(monkeypatch: pytest.MonkeyPatch, name: str) -> list[dict[str, obje
 def test_without_a_lane_it_serves_the_default_lane(
     argv: list[str], name: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Both modes, so a cron running --once beside a mail relay stays out of the
-    mail lane exactly as the default relay does."""
+    """Both modes: a cron running --once stays out of the mail lane."""
     seen = _captured(monkeypatch, name)
 
     call_command("deliver_events", *argv, stdout=StringIO())
@@ -99,10 +96,7 @@ def test_a_lane_and_a_batch_size_are_passed_through(
 def test_one_lane_alone_is_passed_as_that_lane(
     argv: list[str], name: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``--lane mail`` serves ``mail`` and nothing else. ``--lane`` appends, and an
-    append starts from its default, so a default naming the default lane
-    would serve ``default`` and ``mail``. A lane given once goes through as
-    the string it was, so its path is the one a single lane always took."""
+    """``--lane mail`` serves ``mail`` and nothing else."""
     seen = _captured(monkeypatch, name)
 
     call_command("deliver_events", *argv, "--lane", "mail", stdout=StringIO())
@@ -126,8 +120,7 @@ def test_a_repeated_lane_serves_every_lane_named(
 
 
 def test_a_single_pass_over_two_lanes_delivers_both(order: OrderPlaced, record: list[str]) -> None:
-    """The real single pass, with no stand-in, over the default lane and a lane
-    of its own."""
+    """The real single pass, with no stand-in, over the default lane and a lane of its own."""
     mail = RegisteredReceiver(
         key="tests.mail",
         event_class=OrderPlaced,
@@ -156,8 +149,7 @@ def test_a_single_pass_over_two_lanes_delivers_both(order: OrderPlaced, record: 
 def test_a_lane_batch_size_is_split_at_its_last_equals_sign(
     argv: list[str], name: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A lane name may contain ``=`` and a size cannot, so ``a=b=5`` sizes the
-    lane ``a=b``."""
+    """A lane name may contain ``=`` and a size cannot, so ``a=b=5`` sizes the lane ``a=b``."""
     seen = _captured(monkeypatch, name)
 
     call_command(
@@ -189,8 +181,7 @@ def test_a_lane_batch_size_is_split_at_its_last_equals_sign(
 def test_a_malformed_lane_batch_size_is_refused(
     values: list[str], message: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Before anything runs. A lane sized twice is refused even with one value,
-    since two values could conflict and the command should not pick one."""
+    """Before anything runs."""
     seen = _captured(monkeypatch, "run_relay")
     argv = [arg for value in values for arg in ("--lane-batch-size", value)]
 
@@ -210,15 +201,13 @@ def test_a_malformed_lane_batch_size_is_refused(
 def test_a_lane_size_the_pass_cannot_use_is_refused_as_python_refuses_it(
     value: str, message: str
 ) -> None:
-    """Left to ``deliver_pending``, so the command line and Python refuse a
-    size below one and a lane not served with the same error."""
+    """Left to deliver_pending, so the command line and Python refuse the same errors."""
     with pytest.raises(ValueError, match=re.escape(message)):
         call_command("deliver_events", "--once", "--lane-batch-size", value, stdout=StringIO())
 
 
 def test_a_single_pass_with_a_batch_size_delivers(order: OrderPlaced, record: list[str]) -> None:
-    """The real single pass, with no stand-in: --limit defaults to None, so a
-    --batch-size alone is not mistaken for the refused limit-and-batch pair."""
+    """A --batch-size alone is not mistaken for the refused limit-and-batch pair."""
     with transaction.atomic():
         fire(order)
     out = StringIO()
@@ -233,9 +222,7 @@ def test_a_single_pass_refuses_a_limit_with_a_batch_size() -> None:
 
 @pytest.mark.parametrize("limit", ["5", "0"])
 def test_the_relay_refuses_a_limit(monkeypatch: pytest.MonkeyPatch, limit: str) -> None:
-    """Before the relay starts, so the refusal holds on every backend: the relay
-    is a stand-in here, and one that ran would record its call. A limit of zero
-    too, which a truthiness test would let through."""
+    """Before the relay starts, so the refusal holds on every backend."""
     seen = _captured(monkeypatch, "run_relay")
     with pytest.raises(CommandError, match="--limit caps a single pass and needs --once"):
         call_command("deliver_events", "--limit", limit, "--passes", "1")
@@ -243,15 +230,7 @@ def test_the_relay_refuses_a_limit(monkeypatch: pytest.MonkeyPatch, limit: str) 
 
 
 def test_the_relay_refuses_where_locks_cannot_be_skipped() -> None:
-    """SQLite cannot express a skipped lock, so two relays on it would hand the
-    same row to two receivers on every pass.
-
-    Guarded on the backend rather than left to run everywhere. Without ``--passes``
-    the command relays forever, so on a backend that does *not* refuse this call
-    never returns -- and the version of this test that did not skip hung the whole
-    Postgres suite until it was killed. A test that passes only because the
-    default backend refuses is a test that passes for the wrong reason.
-    """
+    """SQLite cannot skip locks, so two relays would double-deliver rows."""
     if connection.features.has_select_for_update_skip_locked:
         pytest.skip("this backend supports skipped locks, so the relay would run")
     with pytest.raises(RuntimeError, match="SKIP LOCKED"):
@@ -289,8 +268,7 @@ def _handlers() -> dict[int, object]:
 def test_a_signal_asks_the_relay_to_stop(
     signum: signal.Signals, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The first signal only sets the flag the relay reads, so the delivery in
-    hand finishes and the rest of the batch is handed back."""
+    """The first signal sets a flag: the delivery in hand finishes, the rest returns."""
     seen: list[bool] = []
 
     def relay(*, worker_id: str, passes: int | None, stop: Callable[[], bool], **_: object) -> dict:
@@ -309,9 +287,7 @@ def test_a_signal_asks_the_relay_to_stop(
 
 
 def test_a_single_pass_leaves_the_signals_alone(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``--once`` is one pass, so it has no batch to hand back and nothing to
-    stop between; a signal ends it as it ends any command, which the
-    operations page says."""
+    """--once has no batch to hand back: a signal ends it like any command."""
     during: list[dict[int, object]] = []
 
     def one_pass(*, limit: int | None, worker_id: str, **_: object) -> dict:
@@ -327,9 +303,7 @@ def test_a_single_pass_leaves_the_signals_alone(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_a_second_signal_exits_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An operator who sends it twice has stopped waiting for the receiver in
-    hand. A BaseException, because the relay swallows every Exception a
-    delivery raises and a receiver may too."""
+    """An operator who sends it twice has stopped waiting for the receiver in hand."""
 
     def relay(*, worker_id: str, passes: int | None, stop: Callable[[], bool], **_: object) -> dict:
         signal.raise_signal(signal.SIGTERM)
@@ -349,9 +323,7 @@ def test_a_second_signal_exits_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_off_the_main_thread_the_relay_runs_without_a_stop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Python delivers signals to the main thread only and refuses to install a
-    handler from any other, so a relay started from a thread cannot be stopped
-    by one. It still runs, and says so, rather than refusing."""
+    """Signals reach only the main thread, so a thread-started relay ignores them."""
     seen: list[bool] = []
 
     def relay(*, worker_id: str, passes: int | None, stop: Callable[[], bool], **_: object) -> dict:
@@ -380,13 +352,7 @@ def test_off_the_main_thread_the_relay_runs_without_a_stop(
 
 
 def test_a_signal_mid_batch_hands_back_the_rest(order: OrderPlaced, record: list[str]) -> None:
-    """The whole path on a relay that runs: SIGTERM arrives while a receiver is
-    running, that delivery finishes, and every other row of the batch is
-    claimable by another worker at once.
-
-    Bounded by ``--passes`` so a stop that is not honoured fails the assertions
-    below rather than relaying forever.
-    """
+    """SIGTERM mid-receiver: that delivery finishes, the other rows are claimable."""
     if not connection.features.has_select_for_update_skip_locked:
         pytest.skip("this backend cannot skip locks, so the relay refuses")
     with transaction.atomic():

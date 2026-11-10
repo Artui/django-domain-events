@@ -1,10 +1,3 @@
-"""Tests mirroring ``django_domain_events/declaration/any_event.py``.
-
-The class is a marker, so what these test is what declaring a receiver for it
-does: the wildcard is matched when an event is fired, never expanded when the
-receiver is declared.
-"""
-
 from __future__ import annotations
 
 import sys
@@ -75,15 +68,7 @@ def test_it_is_handed_the_event_that_was_fired() -> None:
 
 
 def test_an_event_declared_by_an_app_that_loads_later_still_gets_a_row() -> None:
-    """The failure the registry walk has, exercised through real app loading.
-
-    The wildcard is declared first. Only then is ``tests.lateapp`` installed, so
-    its ``events.py`` is imported by the substrate's own autodiscovery and the
-    event comes into existence afterwards. A wildcard expanded to one receiver
-    per event at declaration time has nothing to expand to for it, and writes
-    no row - which is what the precondition below pins, so this cannot pass by
-    the event having been declared up front after all.
-    """
+    """The failure the registry walk has, exercised through real app loading."""
     received: list[object] = []
     receiver(AnyEvent, key="probe.everything")(received.append)
     assert registry.event_for_name(LATE_EVENT) is None, "declared before the wildcard"

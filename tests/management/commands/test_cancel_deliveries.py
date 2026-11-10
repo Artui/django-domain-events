@@ -49,8 +49,7 @@ def test_it_can_be_narrowed_to_one_receiver(order: OrderPlaced, record: list[str
 
 
 def test_it_refuses_a_call_naming_no_events(order: OrderPlaced, record: list[str]) -> None:
-    """A cancel with no scope is refused rather than read as "every event":
-    the smallest call an operator can type must not be the widest."""
+    """A cancel with no scope is refused: the smallest call must not be the widest."""
     with transaction.atomic():
         fire(order)
 
@@ -61,17 +60,13 @@ def test_it_refuses_a_call_naming_no_events(order: OrderPlaced, record: list[str
 
 
 def test_it_refuses_an_event_id_that_is_not_a_number() -> None:
-    """Refused by the parser, naming the argument, rather than reaching the
-    operation as a string and failing there as a database error."""
+    """Refused by the parser, naming the argument, not as a database error later."""
     with pytest.raises(CommandError, match="invalid int"):
         call_command("cancel_deliveries", "abc")
 
 
 def test_it_refuses_a_second_receiver(order: OrderPlaced, record: list[str]) -> None:
-    """One receiver per call, said out loud. ``replay_events`` repeats
-    ``--receiver`` and uses every value, so an operator carrying that habit
-    here would otherwise have all but the last silently dropped - and the
-    receivers dropped are the ones whose work stays owed."""
+    """One receiver per call, said out loud."""
     with transaction.atomic():
         event_id = fire(order)
 

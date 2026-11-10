@@ -1,11 +1,3 @@
-"""The admin actions, exercised through the real permission layer.
-
-Calling ``site.replay(request, queryset)`` directly proves the action works and
-proves nothing about who may run it: Django filters actions by
-``has_<name>_permission`` when it builds the changelist, and a test that never
-posts to the changelist stays green under any authorization behaviour at all.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -44,8 +36,7 @@ def _post(client: Client, url: str, action: str, pks: list[int]):
 
 
 def test_view_only_staff_cannot_replay(order: OrderPlaced, record: list[str]) -> None:
-    """Replay re-runs every durable receiver: re-sent emails, re-called
-    webhooks. A view grant must not carry it."""
+    """Replay re-runs every durable receiver: re-sent emails, re-called webhooks."""
     with transaction.atomic():
         fire(order)
     drain_outbox()
@@ -97,8 +88,7 @@ def test_change_permission_carries_requeue(order: OrderPlaced, record: list[str]
 def test_view_only_staff_are_not_offered_cancel_deliveries(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Not offered, which is the half a post cannot see: an action declared
-    without ``permissions=`` appears in a view-only changelist's dropdown."""
+    """An action declared without permissions= appears in a view-only changelist."""
     with transaction.atomic():
         fire(order)
     client = _staff("view_deliveryrecord")
@@ -114,8 +104,7 @@ def test_change_permission_offers_cancel_deliveries(order: OrderPlaced, record: 
 
 
 def test_view_only_staff_cannot_cancel_deliveries(order: OrderPlaced, record: list[str]) -> None:
-    """Cancelling withdraws work an application is owed. A view grant must not
-    carry it, even posted by hand."""
+    """Cancelling withdraws work an application is owed."""
     with transaction.atomic():
         fire(order)
 
@@ -178,8 +167,7 @@ def test_change_permission_carries_cancel_on_events(order: OrderPlaced, record: 
 def test_the_change_form_stays_refused_even_with_the_permission(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The permission carries the action, not the form. A row that can be
-    edited by hand is a row the guarantee does not cover."""
+    """The permission carries the action, not the form."""
     with transaction.atomic():
         fire(order)
     client = _staff("view_eventrecord", "change_eventrecord")

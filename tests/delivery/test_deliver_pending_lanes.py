@@ -1,13 +1,3 @@
-"""A single pass over several lanes: one claim per lane, in turn, and a limit shared.
-
-A file of its own beside ``test_deliver.py``, for the reason
-``test_run_relay_lanes.py`` gives: every test here needs two lanes with rows of
-their own. ``Push`` and ``Sms`` have one receiver each, in the lanes ``push``
-and ``sms``, and nothing else listens to them, so the default lane is empty
-unless a test fires ``OrderPlaced``. Sorted, the lanes are ``default``,
-``push``, ``sms``.
-"""
-
 from __future__ import annotations
 
 import re
@@ -115,8 +105,7 @@ def _claims(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[dict[str, Any]]]:
 
 
 def _deferring(seen: list[int], *, times: int = 1) -> Callable[[Sms], None]:
-    """An SMS receiver whose destination asks for a pause on its first ``times``
-    calls and accepts the rest."""
+    """An SMS receiver whose destination pauses on its first calls, then accepts."""
 
     def sms(evt: Sms) -> None:
         seen.append(evt.value)
@@ -137,9 +126,7 @@ def _delivered() -> dict[str, int]:
 
 
 def test_a_burst_in_one_lane_does_not_hold_back_another_under_every_lane(lanes: None) -> None:
-    """Thirty push rows owed before one SMS row, claimed ten at a time. One
-    claim across every lane, in ``available_at`` order, would deliver every
-    push row first; one claim per lane delivers SMS within one push batch."""
+    """Thirty push rows owed before one SMS row, claimed ten at a time."""
     _fire(Push, 30)
     _fire(Sms)
 
@@ -149,8 +136,7 @@ def test_a_burst_in_one_lane_does_not_hold_back_another_under_every_lane(lanes: 
 
 
 def test_a_lanes_wait_is_one_batch_of_each_other_lane_not_their_backlog(lanes: None) -> None:
-    """``push`` sized at three in a set: every SMS row waits for at most three
-    push deliveries, however many push rows are owed."""
+    """push is sized at three, so SMS waits behind at most three push deliveries."""
     _fire(Push, 30)
     _fire(Sms, 3)
 
@@ -163,8 +149,7 @@ def test_a_lanes_wait_is_one_batch_of_each_other_lane_not_their_backlog(lanes: N
 def test_every_lane_is_claimed_under_its_own_lease(
     lanes: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``push`` declares 60 seconds and ``sms`` 30. One claim across every lane
-    would stamp ``LEASE_SECONDS`` on both, since the two differ."""
+    """``push`` declares 60 seconds and ``sms`` 30."""
     _fire(Push)
     _fire(Sms)
 
@@ -179,9 +164,7 @@ def test_every_lane_is_claimed_under_its_own_lease(
 def test_a_set_is_served_once_per_lane_in_sorted_order_until_a_rotation_claims_nothing(
     lanes: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Duplicates name the same work. The call ends after the first rotation in
-    which no lane claimed anything, and a lane that claimed nothing in one
-    rotation is still asked in the next while another had work."""
+    """Duplicates name the same work."""
     _fire(Push, 3)
 
     with _claims(monkeypatch) as made:
@@ -201,9 +184,7 @@ def test_a_set_is_served_once_per_lane_in_sorted_order_until_a_rotation_claims_n
 def test_a_deferral_sets_its_lane_aside_and_the_next_lane_is_still_claimed(
     lanes: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``push`` defers at its first row and sorts before ``sms``: its other rows
-    go straight back, it is not claimed again, and ``sms`` is delivered in the
-    same call."""
+    """push defers at its first row and sorts first, so sms is still delivered."""
     seen: list[int] = []
 
     def push(evt: Push) -> None:
@@ -232,9 +213,7 @@ def test_a_deferral_sets_its_lane_aside_and_the_next_lane_is_still_claimed(
 
 
 def test_a_deferral_asks_nothing_about_the_rows_it_hands_back(lanes: None) -> None:
-    """Under every lane, each batch is one lane's, so a deferral hands back the
-    rest of it with no query to sort out which rows are the lane's. That query
-    would select each row's ``receiver_key`` by its id, over the whole batch."""
+    """Each batch is one lane's, so a deferral hands back the rest unsorted."""
     _fire(Sms, 3)
 
     with (
@@ -258,9 +237,7 @@ def test_a_deferral_asks_nothing_about_the_rows_it_hands_back(lanes: None) -> No
 
 @pytest.mark.parametrize("lane", [None, ["push", "sms"]], ids=["every-lane", "a-set"])
 def test_a_limit_is_shared_between_the_lanes_with_work(lanes: None, lane: list[str] | None) -> None:
-    """Twenty owed in each, push's fired first: ten split five and five, rather
-    than ten push rows because they are older. Under every lane, ``default``
-    is empty, takes nothing of its share and leaves it to the others."""
+    """Twenty owed in each, ten split five and five across the two lanes."""
     _fire(Push, 20)
     _fire(Sms, 20)
 
@@ -272,9 +249,7 @@ def test_a_limit_is_shared_between_the_lanes_with_work(lanes: None, lane: list[s
 def test_an_uneven_share_is_rounded_up_for_the_earlier_lane(
     lanes: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Five over two lanes: push, first in sorted order, takes three and sms the
-    two left. Rounded down, push would take two and sms three, which still
-    totals five and is why only an odd limit can tell the two apart."""
+    """Five over two lanes: push, first in sorted order, takes three and sms the two left."""
     _fire(Push, 20)
     _fire(Sms, 20)
 
@@ -288,8 +263,7 @@ def test_an_uneven_share_is_rounded_up_for_the_earlier_lane(
 def test_a_drained_lanes_share_goes_to_the_lanes_with_work(
     lanes: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Two owed in ``sms``: it takes two of its five and is drained, and push
-    takes the three left in a second rotation."""
+    """A drained lane takes its two rows, and the other lane takes the three left."""
     _fire(Push, 20)
     _fire(Sms, 2)
 
@@ -307,8 +281,7 @@ def test_a_drained_lanes_share_goes_to_the_lanes_with_work(
 def test_a_limit_below_the_number_of_lanes_serves_the_first_lanes(
     lanes: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """One row over two lanes goes to the first in sorted order, and the second
-    is not asked for none."""
+    """One row over two lanes goes to the first in sorted order."""
     _fire(Push, 2)
     _fire(Sms, 2)
 
@@ -320,8 +293,7 @@ def test_a_limit_below_the_number_of_lanes_serves_the_first_lanes(
 
 
 def test_rows_handed_back_on_a_deferral_do_not_count_against_the_limit(lanes: None) -> None:
-    """``sms`` takes five of the ten, defers at the first and hands four back.
-    Four of the limit are left, not none, and push takes them."""
+    """``sms`` takes five of the ten, defers at the first and hands four back."""
     seen: list[int] = []
     _fire(Push, 20)
     _fire(Sms, 5)
@@ -336,8 +308,7 @@ def test_rows_handed_back_on_a_deferral_do_not_count_against_the_limit(lanes: No
 def test_with_one_lane_a_limit_is_one_claim_of_that_many(
     lanes: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The lane's share is the whole limit, and a claim either spends it or
-    finds the lane drained, so there is never a second."""
+    """A lane's share is the whole limit: a claim spends it or finds the lane drained."""
     _fire(Push, 5)
 
     with _claims(monkeypatch) as made:
@@ -348,8 +319,7 @@ def test_with_one_lane_a_limit_is_one_claim_of_that_many(
 
 
 def test_a_limit_with_lane_sizes_is_refused(lanes: None) -> None:
-    """Each lane's claim is its share of the limit, so the sizes would be
-    ignored. Each alone is accepted, which holds both conjuncts."""
+    """Each lane's claim is its share of the limit, so the sizes would be ignored."""
     _fire(Push, 2)
 
     with pytest.raises(ValueError, match="limit=10 sizes each claim as its lane.s share of it"):
@@ -394,8 +364,7 @@ def test_a_lane_size_below_one_is_refused(lanes: None, size: int) -> None:
 
 @contextmanager
 def _statements() -> Iterator[list[str]]:
-    """The SQL sent on the write connection, as templates with placeholders,
-    because primary keys and timestamps differ between two identical passes."""
+    """The SQL is sent as templates, since keys and timestamps differ per pass."""
     sent: list[str] = []
 
     def capture(
@@ -409,11 +378,7 @@ def _statements() -> Iterator[list[str]]:
 
 
 def _the_pass_without_lanes(*, lane: str | None, ignore_backoff: bool = False) -> None:
-    """``deliver_pending`` as it ran before a pass served several lanes: claims
-    of ``BATCH_SIZE`` for ``lane``, with nothing set aside, each followed by a
-    delivery per row, until one comes back empty. Run against that
-    ``deliver_pending`` and found equal to it, which is why the tests below can
-    compare against it on any backend and Django."""
+    """deliver_pending as it ran before lanes: one lane, nothing set aside."""
     while True:
         ids = claim_batch(
             worker_id="deliver_pending",
@@ -434,9 +399,7 @@ def _the_pass_without_lanes(*, lane: str | None, ignore_backoff: bool = False) -
 
 
 def test_a_single_lane_pass_sends_what_it_always_sent(lanes: None) -> None:
-    """A single lane given as a ``str``, with no deferral: the same statements,
-    in the same order and number, as the claims and deliveries a pass made
-    before it served several lanes."""
+    """A single str lane issues the same statements, in the same order, as before."""
     _fire(Sms, 3)
     with _statements() as passed:
         assert deliver_pending(lane="sms") == {DeliveryStatus.SUCCEEDED: 3}
@@ -460,11 +423,7 @@ def test_with_no_named_lanes_every_lane_sends_what_it_always_sent(
     run: Callable[[], dict[DeliveryStatus, int]],
     ignore_backoff: bool,
 ) -> None:
-    """``lane=None`` in a project that names no lane is the default lane alone,
-    whose condition compiles to no filter at all and whose lease is every
-    receiver's: the same claims across every lane that None always made. The
-    statements are compared as templates, so the lease, a parameter, is
-    compared on its own."""
+    """lane=None in a lane-less project claims exactly as None always did."""
     assert registry.lanes() == ["default"]
     for _ in range(2):
         with transaction.atomic():

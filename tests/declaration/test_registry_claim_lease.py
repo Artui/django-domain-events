@@ -1,8 +1,3 @@
-"""``Registry.claim_lease_seconds``: the lease a claim stamps.
-
-On a registry of its own, so the test app's receivers are not in the count.
-"""
-
 from __future__ import annotations
 
 from typing import Any
@@ -62,8 +57,7 @@ def test_a_receiver_declaring_no_lease_counts_as_the_default() -> None:
 
 
 def test_a_lane_sharing_a_lease_longer_than_the_default_is_claimed_under_the_default() -> None:
-    """Capped, so a lane of long receivers recovers a crashed batch's unstarted
-    rows as soon as it did before rather than after their own half hour."""
+    """Capped, so a lane of long receivers recovers unstarted rows as soon as before."""
     registry = _registry(
         {"lane": "reports", "lease_seconds": 1800}, {"lane": "reports", "lease_seconds": 1800}
     )
@@ -108,8 +102,7 @@ def test_every_lane_counts_every_receiver() -> None:
 
 
 def test_the_eager_attempt_counts_only_eager_receivers() -> None:
-    """The attempt after commit claims only eager receivers' rows, and a lane
-    does not bound it: it runs whatever lane its receivers are in."""
+    """The post-commit attempt claims only eager rows, in whatever lane they sit."""
     registry = _registry(
         {"eager": True, "lane": "mail", "lease_seconds": 60},
         {"eager": True, "lease_seconds": 60},
@@ -120,9 +113,7 @@ def test_the_eager_attempt_counts_only_eager_receivers() -> None:
 
 
 def test_eager_receivers_mixing_leases_are_claimed_under_the_default() -> None:
-    """The eager attempt knows its rows' ids and not their receivers, so its base
-    is every eager receiver's: a mix there costs the skip, never correctness,
-    since the band is decided per row against the row's own receiver."""
+    """Row ids, not receivers, are known: a mixed base costs a skip, not correctness."""
     registry = _registry({"eager": True, "lease_seconds": 60}, {"eager": True, "lease_seconds": 90})
     assert registry.claim_lease_seconds(None, default=SETTING, eager=True) == (
         SETTING * LEASE_HEADROOM

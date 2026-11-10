@@ -35,8 +35,7 @@ UNSAFE = {"allow_unsafe_concurrency": True}
 
 
 def test_it_refuses_where_locks_cannot_be_skipped() -> None:
-    """Two relays on a backend without skipped locks would hand the same row to
-    two receivers on every pass."""
+    """Without skip-locked, two relays hand the same row to two receivers."""
     if connection.features.has_select_for_update_skip_locked:
         pytest.skip("this backend supports skipped locks")
     with pytest.raises(RuntimeError, match="SKIP LOCKED"):
@@ -64,10 +63,7 @@ def test_it_claims_and_delivers(order: OrderPlaced, record: list[str]) -> None:
 
 
 def test_an_idle_pass_waits_rather_than_spinning() -> None:
-    """The idle wait is an argument so the branch is reachable without elapsing
-    real seconds. ``wait`` rather than ``sleep``: on a backend that can notify,
-    the loop blocks on the notification instead of sleeping, so injecting the
-    sleep would control the loop on SQLite and not on Postgres."""
+    """The idle wait is an argument so the branch is reachable without elapsing real seconds."""
     waited: list[float] = []
     run_relay(worker_id="w1", passes=2, wait=lambda t: bool(waited.append(t)), **UNSAFE)
     assert len(waited) == 2
@@ -82,8 +78,7 @@ def test_a_pass_with_work_does_not_wait(order: OrderPlaced, record: list[str]) -
 
 
 def test_the_clock_is_an_argument(order: OrderPlaced, record: list[str]) -> None:
-    """A row serving a backoff wait is invisible until its time comes, and that
-    is asserted by moving the clock rather than by waiting."""
+    """A row serving a backoff wait is invisible until its time, by clock move."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(available_at=django_timezone.now() + timedelta(hours=1))
@@ -97,17 +92,14 @@ def test_the_clock_is_an_argument(order: OrderPlaced, record: list[str]) -> None
 
 
 def test_the_isolation_helper_swallows_what_deliver_one_does_not() -> None:
-    """deliver_one guards the receiver and the decode, not the row fetch. A row
-    that vanished between the claim and the delivery must not take the daemon
-    with it."""
+    """deliver_one guards the receiver and the decode, not the row fetch."""
     from django_domain_events.delivery.run_relay import _deliver_or_survive
 
     assert _deliver_or_survive(999_999, "w1", connections[write_alias()]) is None
 
 
 def test_a_lost_row_does_not_stop_the_pass(order: OrderPlaced, record: list[str]) -> None:
-    """The relay counts outcomes and skips rows it lost, which must not end the
-    batch: two events so a lost row lands mid-pass rather than at the end."""
+    """Rows the relay lost are skipped, and must not end the batch."""
     from django_domain_events.models.delivery_record import DeliveryRecord
 
     def steal_everything_else(evt: OrderPlaced) -> None:
@@ -122,19 +114,13 @@ def test_a_lost_row_does_not_stop_the_pass(order: OrderPlaced, record: list[str]
     with receiver_replaced("testapp.durable_receiver", steal_everything_else):
         counts = run_relay(worker_id="w1", passes=1, wait=lambda _: False, **UNSAFE)
 
-    # Deterministic regardless of how many receivers are registered: the first
-    # row delivered succeeds and takes every other row away from this worker, so
-    # the rest are lost mid-pass rather than at its end.
     lost = DeliveryRecord.objects.filter(claimed_by="someone-else").count()
     assert lost >= 2, "nothing was lost mid-pass, so the loop was never resumed"
     assert counts == {DeliveryStatus.SUCCEEDED: 2}
 
 
 def test_a_failure_while_idling_does_not_kill_the_daemon() -> None:
-    """The relay spends nearly all its life waiting. The wait reaches past
-    Django's cursor to the driver, so a connection dropped there raises the
-    driver's own exception rather than a translated django.db.Error - which a
-    supervisor written to catch the latter would miss entirely."""
+    """The relay spends nearly all its life waiting."""
     calls: list[float] = []
 
     def explode(timeout: float) -> bool:
@@ -148,10 +134,7 @@ def test_a_failure_while_idling_does_not_kill_the_daemon() -> None:
 
 
 def test_a_wait_that_fails_at_once_still_idles_for_the_poll(settings) -> None:
-    """A wait that raises returns at once, and the next pass claims straight
-    away: an idle relay whose wait always fails would claim and log in a tight
-    loop for as long as it stayed idle. So the relay sleeps the poll after one,
-    whatever raised and whatever the driver."""
+    """A wait that raises returns at once, so an idle relay does not spin."""
     settings.DJANGO_DOMAIN_EVENTS = {"POLL_SECONDS": 0.25}
     slept: list[float] = []
 
@@ -201,10 +184,7 @@ def _claims_failing(monkeypatch: pytest.MonkeyPatch, outcomes: list[bool]) -> No
 def test_a_failed_claim_does_not_kill_the_relay(
     order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch, closes: list[str]
 ) -> None:
-    """The claim was the one unguarded call in the loop, so one database error
-    there ended the daemon. Guarding it is not enough on its own: Django only
-    reconnects a connection that has been set to None, so the relay closes the
-    connection before it tries again."""
+    """The claim was the one unguarded call in the loop, so one error ended the daemon."""
     with transaction.atomic():
         fire(order)
     _claims_failing(monkeypatch, [False, True])
@@ -218,9 +198,7 @@ def test_a_failed_claim_does_not_kill_the_relay(
 
 
 def test_a_raw_driver_error_while_idling_closes_the_connection(closes: list[str]) -> None:
-    """The wait reaches past Django's cursor, so a dropped connection there can
-    surface as the driver's own exception, which is not a ``django.db.Error``.
-    Holds the driver half of what counts as a database error."""
+    """The wait reaches past Django's cursor, so a drop raises a driver exception."""
     conn = connections[write_alias()]
 
     def drop(timeout: float) -> bool:
@@ -234,8 +212,7 @@ def test_a_raw_driver_error_while_idling_closes_the_connection(closes: list[str]
 def test_a_database_error_in_a_delivery_closes_the_connection(
     order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch, closes: list[str]
 ) -> None:
-    """A delivery is where the database is most likely to be found gone, mid
-    pass, and the batch goes on to its next row on the same connection."""
+    """A delivery is where a gone database is most likely found mid-pass."""
     with transaction.atomic():
         fire(order)
 
@@ -249,9 +226,7 @@ def test_a_database_error_in_a_delivery_closes_the_connection(
 
 
 def test_an_error_that_is_not_the_databases_keeps_the_connection(closes: list[str]) -> None:
-    """Closing costs a reconnect, and a misconfiguration raising once per row
-    would pay it once per row. Only a database error says the connection may be
-    gone."""
+    """Closing costs a reconnect, so a per-row misconfiguration pays it per row."""
 
     def explode(timeout: float) -> bool:
         raise RuntimeError("not a database problem")
@@ -264,8 +239,7 @@ def test_an_error_that_is_not_the_databases_keeps_the_connection(closes: list[st
 def test_a_close_that_raises_does_not_kill_the_relay(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Django discards the connection object even when closing it raises, so
-    there is nothing left to do but say so and carry on."""
+    """Django discards the connection even when closing raises, so say so and carry on."""
 
     def refuse() -> None:
         raise OperationalError("could not close")
@@ -282,9 +256,7 @@ def test_a_close_that_raises_does_not_kill_the_relay(
 
 
 def test_repeated_claim_failures_back_off_to_a_cap(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Doubling from the poll interval, and capped well inside a default
-    Kubernetes grace period: the sleep is not interrupted by a stop request, so
-    the cap is also the longest a database outage can delay a shutdown."""
+    """Doubling from the poll interval, capped inside a default grace period."""
     _claims_failing(monkeypatch, [False] * 7)
     slept: list[float] = []
 
@@ -294,8 +266,7 @@ def test_repeated_claim_failures_back_off_to_a_cap(monkeypatch: pytest.MonkeyPat
 
 
 def test_a_claim_that_succeeds_resets_the_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An outage is measured from its own first failure, not from the first
-    failure the process ever saw."""
+    """An outage is measured from its own first failure."""
     _claims_failing(monkeypatch, [False, False, True, False])
     slept: list[float] = []
 
@@ -307,16 +278,7 @@ def test_a_claim_that_succeeds_resets_the_backoff(monkeypatch: pytest.MonkeyPatc
 def test_a_connection_killed_while_idling_is_replaced(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The real thing, on a real server: the backend is terminated while the
-    relay waits for work, which is where it spends its life.
-
-    Where the death surfaces is what decides whether the close is needed.
-    Found first inside the claim's transaction, Django closes the connection
-    itself when the rollback fails, and the next claim reconnects. Found first
-    in autocommit, as the wait's LISTEN finds it, nothing closes it, and every
-    later claim fails with "the connection is lost" for as long as the process
-    lives - which, with the claim guarded, is forever.
-    """
+    """The real thing: the backend is terminated while the relay waits for work."""
     if connection.vendor != "postgresql":
         pytest.skip("needs a server whose backend can be terminated")
     if not psycopg_any.is_psycopg3:
@@ -327,8 +289,6 @@ def test_a_connection_killed_while_idling_is_replaced(
     with transaction.atomic():
         fire(order)
     record.clear()
-    # Not owed until the clock moves, so the first pass idles and the second,
-    # after the kill, has something to deliver.
     DeliveryRecord.objects.update(available_at=django_timezone.now() + timedelta(hours=1))
     waited: list[float] = []
 
@@ -353,7 +313,6 @@ def test_a_connection_killed_while_idling_is_replaced(
             worker_id="w1", passes=2, now=clock, sleep=lambda _: None, wait=kill_then_wait
         )
     finally:
-        # So the suite's own teardown has a live connection whatever happened.
         connection.close()
 
     assert waited, "the first pass did not idle, so nothing was killed"
@@ -364,10 +323,7 @@ def test_a_connection_killed_while_idling_is_replaced(
 
 
 class _Runaway(BaseException):
-    """Raised by a test double that has been called more often than a working
-    stop allows, so a broken stop fails the test instead of hanging the suite.
-    A BaseException because the relay swallows every ``Exception`` its wait
-    raises."""
+    """Raised by a test double called past what a working stop allows."""
 
 
 def test_a_stop_before_the_claim_claims_nothing(order: OrderPlaced, record: list[str]) -> None:
@@ -381,8 +337,7 @@ def test_a_stop_before_the_claim_claims_nothing(order: OrderPlaced, record: list
 def test_a_stop_mid_batch_finishes_the_row_in_hand_and_hands_back_the_rest(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The rest of the batch is claimable by another worker at once, rather than
-    when the lease the claim stamped on it lapses - minutes, by default."""
+    """The rest of the batch is claimable at once, not when its lease lapses."""
     with transaction.atomic():
         fire(order)
         fire(order)
@@ -400,8 +355,7 @@ def test_a_stop_mid_batch_finishes_the_row_in_hand_and_hands_back_the_rest(
 
 
 def test_a_stop_while_idling_ends_the_relay() -> None:
-    """Without ``passes`` the relay runs forever, so this returns only if the
-    stop is read after the wait."""
+    """Without passes the relay runs forever: the stop must be read after the wait."""
     waited: list[float] = []
 
     def wait(timeout: float) -> bool:
@@ -427,9 +381,7 @@ class _Recorder:
 def test_a_row_handed_to_the_task_queue_is_not_handed_back(
     order: OrderPlaced, record: list[str], settings
 ) -> None:
-    """An enqueued row is still CLAIMED under the relay's claim, waiting for the
-    task to take it, so the claim alone cannot tell it from an unstarted row.
-    Expiring its lease would have another relay enqueue it a second time."""
+    """An enqueued row stays CLAIMED under the relay's claim until the task takes it."""
     settings.DJANGO_DOMAIN_EVENTS = {"TASK_BACKEND": f"{__name__}._Recorder"}
     _Recorder.enqueued = []
     entry = registry.receiver_for_key("testapp.durable_receiver")
@@ -437,8 +389,6 @@ def test_a_row_handed_to_the_task_queue_is_not_handed_back(
     with transaction.atomic():
         fire(order)
     try:
-        # Bounded, so a batch in an unexpected order ends rather than relaying
-        # forever with nothing to stop it.
         run_relay(
             worker_id="w1",
             passes=2,
@@ -464,8 +414,7 @@ def test_a_hand_back_that_fails_does_not_kill_the_relay(
     closes: list[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The process is on its way out, and the rows it could not give back are
-    reclaimed when their lease lapses, as a crashed worker's are."""
+    """Rows the exiting process could not give back are reclaimed when they lapse."""
     with transaction.atomic():
         fire(order)
     record.clear()
@@ -484,13 +433,7 @@ def test_a_hand_back_that_fails_does_not_kill_the_relay(
 def test_an_exit_raised_mid_delivery_ends_the_relay_and_rolls_the_receiver_back(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """What a second signal does: ``deliver_events`` raises ``SystemExit`` from
-    its handler, wherever the main thread is. The relay swallows every
-    ``Exception`` a delivery raises, so this holds that its guards stay that
-    narrow - widened to ``BaseException``, they would swallow the exit and the
-    relay would carry on. The receiver's work rolls back with its transaction,
-    and its row stays claimed for its lease to lapse, as a crashed worker's
-    does."""
+    """A second signal makes deliver_events raise SystemExit from its handler."""
     with transaction.atomic():
         fire(order)
     record.clear()
@@ -501,8 +444,6 @@ def test_an_exit_raised_mid_delivery_ends_the_relay_and_rolls_the_receiver_back(
         record.append("interrupted")
         raise SystemExit(128 + 15)
 
-    # Bounded, so an exit that is swallowed fails the raises below rather than
-    # leaving the relay running forever.
     with receiver_replaced("testapp.durable_receiver", interrupted), pytest.raises(SystemExit):
         run_relay(worker_id="w1", passes=2, wait=lambda _: False, **UNSAFE)
 
@@ -530,8 +471,7 @@ def _mail() -> RegisteredReceiver:
 def test_a_relay_serves_the_default_lane_unless_told_otherwise(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The default relay staying out of a named lane is the whole of the
-    isolation, so it is what a relay started with no lane does."""
+    """The default relay staying out of a named lane is what isolation means."""
     with receiver_registered(_mail()):
         with transaction.atomic():
             fire(order)
@@ -566,8 +506,7 @@ def test_a_relay_for_a_lane_nobody_declared_refuses_to_start() -> None:
 def test_a_relay_claims_in_batches_of_its_own_size(
     order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Per process, for claims only: a mail relay wants a batch it can send
-    within one lease, while BATCH_SIZE also sizes pruning and requeues."""
+    """Per process, for claims only: a mail relay needs a batch that fits one lease."""
     limits: list[int] = []
     real = run_relay_module.claim_batch
 
@@ -587,8 +526,7 @@ def test_a_relay_claims_in_batches_of_its_own_size(
 
 @pytest.mark.parametrize("size", [0, -1])
 def test_a_relay_refuses_a_batch_that_claims_nothing(size: int) -> None:
-    """A batch of zero claims nothing on every pass: a relay that idles forever
-    with work owed."""
+    """A batch of zero claims nothing on every pass: a relay that idles forever with work owed."""
     with pytest.raises(ValueError, match="batch_size must be positive"):
         run_relay(worker_id="w1", passes=1, batch_size=size, **UNSAFE)
 
@@ -597,9 +535,7 @@ def test_a_relay_refuses_a_batch_that_claims_nothing(size: int) -> None:
 
 
 def _throttled(seen: list[int]) -> RegisteredReceiver:
-    """A mail-lane receiver whose destination is throttling: every call defers
-    thirty seconds without counting. Past ten calls it raises a BaseException,
-    so a relay that kept attempting the lane fails rather than hangs."""
+    """A mail-lane receiver whose destination throttles: each call defers 30 s."""
 
     def throttled(evt: OrderPlaced) -> None:
         seen.append(evt.order_id)
@@ -654,10 +590,7 @@ def _fire_three(order: OrderPlaced) -> None:
 def test_a_deferral_pauses_the_lane_and_hands_back_the_rest_of_the_batch(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The rest of the batch is not attempted - every one would cost a call to
-    learn what the first already said - and it is claimable by any worker at
-    once. Two more passes inside the pause claim nothing: without the pause the
-    second would take a handed-back row straight back and defer it again."""
+    """The rest of the batch is not attempted, and any worker can claim it at once."""
     seen: list[int] = []
     with receiver_registered(_throttled(seen)):
         _fire_three(order)
@@ -685,8 +618,7 @@ def test_a_deferral_pauses_the_lane_and_hands_back_the_rest_of_the_batch(
 def test_the_pause_ends_when_the_requested_delay_has_passed_on_the_injected_clock(
     order: OrderPlaced, record: list[str], passes: int, attempted: int
 ) -> None:
-    """Thirty seconds asked for, ten per idle wait: passes two to four fall
-    inside the pause, and the fifth, at exactly thirty seconds, is past it."""
+    """Thirty seconds asked, ten per idle wait: passes two to four fall inside."""
     seen: list[int] = []
     with receiver_registered(_throttled(seen)):
         _fire_three(order)
@@ -698,8 +630,7 @@ def test_the_pause_ends_when_the_requested_delay_has_passed_on_the_injected_cloc
 
 
 def _search() -> RegisteredReceiver:
-    """A receiver in a lane that sorts after ``mail``, so a relay serving both
-    reaches it after a deferral in ``mail``."""
+    """A receiver in a lane that sorts after mail, reached after mail's deferral."""
     return dataclasses.replace(
         _mail(), key="tests.search", func=lambda evt: calls.append("search"), lane="search"
     )
@@ -708,8 +639,7 @@ def _search() -> RegisteredReceiver:
 def test_a_deferral_in_one_lane_leaves_the_next_lanes_claim_in_the_same_pass(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Only the deferring lane's batch goes back, and the pass goes on to the
-    next lane: ``search``'s rows are claimed and delivered in the same pass."""
+    """Only the deferring lane's batch goes back; the pass goes on to the next lane."""
     seen: list[int] = []
     with receiver_registered(_throttled(seen)), receiver_registered(_search()):
         _fire_three(order)
@@ -729,9 +659,7 @@ def test_a_deferral_in_one_lane_leaves_the_next_lanes_claim_in_the_same_pass(
 def test_a_relay_serving_every_lane_keeps_claiming_the_other_lanes_while_one_is_paused(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Batches of three put the default lane's later rows in a second pass, which
-    claims them while ``mail`` is still paused and leaves ``mail`` alone: its
-    handed-back rows stay given back rather than being taken and attempted."""
+    """Batches of three: the second pass claims default rows and leaves mail alone."""
     seen: list[int] = []
     with receiver_registered(_throttled(seen)):
         _fire_three(order)
@@ -755,9 +683,7 @@ def test_a_relay_serving_every_lane_keeps_claiming_the_other_lanes_while_one_is_
 def test_a_stop_after_a_deferral_hands_back_only_what_is_still_held(
     order: OrderPlaced, record: list[str], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The deferral already gave ``mail``'s rows back. The stop, two rows into
-    ``search``'s batch, gives back the one row of it left unstarted and counts
-    that alone."""
+    """The deferral already gave ``mail``'s rows back."""
     seen: list[int] = []
     with receiver_registered(_throttled(seen)), receiver_registered(_search()):
         _fire_three(order)
@@ -781,9 +707,7 @@ def test_a_stop_after_a_deferral_hands_back_only_what_is_still_held(
 def test_a_relay_whose_lane_is_paused_does_not_query_it(
     order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Skipping it spares a query per poll that would walk past every row the
-    lane is owed to find nothing it may take. Counted by the claims made, so
-    the pause record a deferral writes is not mistaken for one."""
+    """Skipping it spares a query per poll that would walk past every owed row."""
     claims: list[dict[str, object]] = []
     real = run_relay_module.claim_batch
 
@@ -808,10 +732,7 @@ def test_a_set_aside_that_fails_abandons_the_batch(
     closes: list[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The batch is the paused lane's, so none of the rest is attempted after
-    the failure - each could be another call to a throttled destination - and
-    the rows wait out their lease, as a crashed worker's do. The relay itself
-    goes on."""
+    """After the failure the rest of the paused batch waits out its lease."""
     seen: list[int] = []
 
     def broken(*args: object, **kwargs: object) -> int:

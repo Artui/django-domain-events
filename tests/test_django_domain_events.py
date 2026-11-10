@@ -1,8 +1,3 @@
-"""Tests mirroring ``django_domain_events/``.
-
-One file per source file, same name. This one covers the package root.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -12,19 +7,12 @@ from django_domain_events.version import __version__
 
 
 def test_version_is_exported_from_the_package_root() -> None:
-    """The root re-exports the version, which is the only public name so far.
-
-    Asserting identity rather than a literal: the point is that ``__init__``
-    and ``version.py`` cannot drift apart, not that the number is any
-    particular value on the day this runs.
-    """
+    """The root re-exports the version, which is the only public name so far."""
     assert django_domain_events.__version__ is __version__
 
 
 def test_version_is_a_dotted_release_string() -> None:
-    """``bump-my-version`` rewrites this string by pattern, and the release
-    script parses it back out, so its shape is load-bearing rather than
-    cosmetic."""
+    """bump-my-version rewrites this string by pattern, so its shape is load-bearing."""
     parts = __version__.split(".")
     assert len(parts) == 3
     assert all(part.isdigit() for part in parts)
@@ -39,19 +27,7 @@ def test_the_public_surface_is_importable() -> None:
 
 
 def test_the_symbol_wins_over_the_submodule_of_the_same_name() -> None:
-    """Under one-symbol-per-file the module and the symbol share a name, and
-    importing the submodule binds the *module* as an attribute of its package.
-
-    This is the regression test for a real consumer-facing bug: with a lazy PEP
-    562 re-export, this package's own ``from django_domain_events.delivery.fire
-    import context_for`` rebound the attribute, and ``from django_domain_events
-    import fire`` then handed back a module object.
-
-    The subject is the **package root** attribute, which is the public surface.
-    ``delivery.fire`` staying a module is correct and is the other half of the
-    same behaviour: the concern packages re-export nothing on purpose, so
-    nothing there can shadow a submodule and cause an import cycle.
-    """
+    """Importing the submodule binds the module, not the symbol, on the package."""
     import django_domain_events
     import django_domain_events.delivery.fire
 

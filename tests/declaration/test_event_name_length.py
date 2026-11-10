@@ -1,11 +1,3 @@
-"""An event name longer than the column that stores it is refused where it is declared.
-
-``EventRecord.name`` is ``CharField(max_length=255)``. SQLite does not enforce
-the length, so a longer name works there; Postgres raises ``DataError`` inside
-``fire()``, in the caller's transaction. The mistake is made at declaration, so
-that is where it is refused.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -41,13 +33,7 @@ def _plain_class(label: str = "Plain") -> type:
 
 
 def _derived_class(length: int) -> type:
-    """A frozen dataclass whose derived name is exactly ``length`` characters long.
-
-    The prefix is asked of ``label_for`` rather than written down, so the test
-    follows the app label of whichever app the module belongs to.
-    """
-    # tests.testapp.events is inside the installed ``testapp``, which this test
-    # module is not.
+    """A frozen dataclass whose derived name is exactly ``length`` characters long."""
     module = "tests.testapp.events"
     prefix = label_for(module, "")
     cls = _plain_class("x" * (length - len(prefix)))
@@ -60,10 +46,7 @@ def _snapshot() -> tuple[dict[str, object], dict[type, object]]:
 
 
 def test_a_name_of_exactly_the_limit_is_accepted() -> None:
-    """Holds the comparison: ``>=`` instead of ``>`` refuses this name.
-
-    Passes on a tree without the check, as it must; it is here for the mutant.
-    """
+    """Holds the comparison: ``>=`` instead of ``>`` refuses this name."""
     name = "n" * LIMIT
     with _declared(name):
         cls = event(name=name)(_plain_class())
@@ -106,8 +89,7 @@ def test_a_derived_name_of_exactly_the_limit_is_accepted() -> None:
 
 
 def test_a_derived_name_over_the_limit_is_refused() -> None:
-    """Holds the derived-name path: a check applied only to an explicit ``name=``
-    lets this through. Sized at one over, so the boundary is what answers."""
+    """Holds the derived-name path: an explicit name= check alone lets this through."""
     cls = _derived_class(LIMIT + 1)
     name = label_for(cls.__module__, cls.__name__)
     assert len(name) == LIMIT + 1
@@ -121,8 +103,7 @@ def test_a_derived_name_over_the_limit_is_refused() -> None:
 
 
 def test_a_long_derived_name_is_refused_through_the_called_form_too() -> None:
-    """The called ``@event(...)`` and the bare ``@event`` share one ``decorate``;
-    this holds the called one, with no ``name=`` so the name is derived."""
+    """Called form of @event with no name=, so the name is derived."""
     cls = _derived_class(LIMIT + 1)
     name = label_for(cls.__module__, cls.__name__)
     with _declared(name), pytest.raises(ValueError, match=f"{LIMIT + 1} characters"):

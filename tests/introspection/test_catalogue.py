@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/catalogue.py``."""
-
 from __future__ import annotations
 
 import functools
@@ -32,8 +30,7 @@ def test_every_declared_event_appears_sorted_by_name() -> None:
 
 
 def test_the_pinned_name_and_version_are_the_registered_ones() -> None:
-    """The catalogue publishes the identity rows are written under, not the
-    class name: those differ the moment anyone passes name=."""
+    """The catalogue publishes the identity rows are written under, not the class name."""
     entry = _by_name("testapp.pinned")
     assert entry.version == 3
     assert entry.class_path == "tests.testapp.events.PinnedName"
@@ -48,8 +45,7 @@ def test_fields_carry_type_requiredness_and_default() -> None:
 
 
 def test_a_parameterised_generic_keeps_its_parameters() -> None:
-    """``list[str].__name__`` is ``list``, so a catalogue built on __name__
-    says a field is a list without saying of what."""
+    """list[str].__name__ is 'list', so a catalogue on it loses the element type."""
     fields = {f.name: f for f in _by_name("testapp.OrderPlaced").fields}
     assert fields["tags"].type == "list[str]"
     assert fields["kind"].type == "typing.Literal['retail', 'wholesale']"
@@ -78,9 +74,7 @@ def test_a_written_docstring_is_published() -> None:
 
 
 def test_the_docstring_dataclass_writes_for_you_is_not() -> None:
-    """``@dataclass`` fills __doc__ with the signature when there is none, so
-    reading it naively puts ``PinnedName(value: int)`` where a description goes.
-    """
+    """@dataclass fills __doc__ with the signature when there is none."""
     assert _by_name("testapp.pinned").doc == ""
 
 
@@ -90,9 +84,7 @@ class WithFactory:
 
 
 def test_a_default_factory_is_named_not_called() -> None:
-    """Named ``list`` rather than ``factory``: the fallback string in _default
-    is the literal ``factory``, so a factory called ``factory`` produces the
-    same answer whether the code reads __name__ or falls through it."""
+    """Named list, not factory, so a fallback string cannot mask the name."""
     with event_registered(WithFactory, "tests.with_factory"):
         entry = _by_name("tests.with_factory")
     assert entry.fields[0].required is False
@@ -100,8 +92,7 @@ def test_a_default_factory_is_named_not_called() -> None:
 
 
 def test_building_a_catalogue_never_runs_consumer_code() -> None:
-    """A default_factory is arbitrary code from the consumer's codebase, and
-    generating a document is not a reason to execute it."""
+    """A default_factory is consumer code, and a document must not run it."""
     called = []
 
     def make() -> list[str]:
@@ -130,9 +121,7 @@ class Undocumented(Documented):
 
 
 def test_a_subclass_of_a_documented_event_publishes_no_description() -> None:
-    """A class always carries its own __doc__ and never inherits one, so
-    ``@dataclass`` writes the signature here too - and the catalogue must blank
-    that rather than publish ``Undocumented(value: int)`` as a description."""
+    """A subclass's inherited dataclass signature must not publish as a description."""
     with event_registered(Undocumented, "tests.undocumented"):
         assert _by_name("tests.undocumented").doc == ""
 
@@ -148,17 +137,14 @@ class UnresolvableQuoted:
 
 
 def test_an_unresolvable_annotation_falls_back_instead_of_raising() -> None:
-    """A consumer with ``if TYPE_CHECKING:`` imports has already made
-    ``get_type_hints`` fail. Failing on their behalf would take the whole
-    catalogue down over one annotation."""
+    """A consumer with ``if TYPE_CHECKING:`` imports has already made ``get_type_hints`` fail."""
     with event_registered(Unresolvable, "tests.unresolvable"):
         entry = _by_name("tests.unresolvable")
     assert entry.fields[0].type == "NeverImported"
 
 
 def test_quoting_a_forward_reference_does_not_change_the_catalogue() -> None:
-    """The annotation arrives as source text, so the quotes are in the string.
-    Two spellings of one type must not read as two types in a diff."""
+    """The annotation arrives as source text, so the quotes are in the string."""
     with event_registered(UnresolvableQuoted, "tests.unresolvable_quoted"):
         entry = _by_name("tests.unresolvable_quoted")
     assert entry.fields[0].type == "NeverImported"
@@ -199,9 +185,7 @@ def test_literal_annotations_survive_the_registry_round_trip() -> None:
 
 
 def test_a_declared_lease_reaches_the_catalogue() -> None:
-    """The catalogue's whole claim is that it is generated from the
-    declarations and cannot drift from them. A knob it does not publish is a
-    knob it has drifted on."""
+    """The catalogue is generated from the declarations and cannot drift from them."""
     receivers = {r.key: r for r in _by_name("testapp.SlowWork").receivers}
     assert receivers["testapp.slow_receiver"].lease_seconds == 1800
     assert _by_name("testapp.OrderPlaced").receivers[0].lease_seconds is None, (
@@ -210,8 +194,7 @@ def test_a_declared_lease_reaches_the_catalogue() -> None:
 
 
 def test_an_upgrade_hook_is_published() -> None:
-    """It is the difference between an event whose old rows still decode and
-    one whose old rows dead-letter after the next breaking change."""
+    """Old rows still decode, or dead-letter after the next breaking change."""
     assert _by_name("testapp.OrderPlaced").migrates_older_rows is False
 
     @dataclass(frozen=True)
@@ -296,17 +279,14 @@ def _kept(retention: timedelta | Retention | None) -> Iterator[None]:
 def test_the_retention_is_published_as_fire_records_it(
     retention: timedelta | Retention | None, published: tuple[int | None, str]
 ) -> None:
-    """In the two columns fire() writes, so a pipeline diffing catalogues sees
-    an event start deleting on consumption, and the JSON stays plain values."""
+    """Lands in the two columns fire() writes: a diff shows consumption deletion."""
     with _kept(retention):
         entry = _by_name("tests.kept")
     assert (entry.retention_seconds, entry.delete_when) == published
 
 
 def test_a_declared_curve_and_lane_reach_the_catalogue() -> None:
-    """Both change how a receiver behaves in production - when it is retried,
-    and which relay process runs it - so a diff of the catalogue should show a
-    change to either."""
+    """Retry and relay placement change production behaviour, so diffs show them."""
     declared = _durable(
         "testapp.mail", AnyEvent, backoff_base_seconds=60, backoff_cap_seconds=1200, lane="mail"
     )
@@ -323,8 +303,7 @@ def test_a_declared_curve_and_lane_reach_the_catalogue() -> None:
 
 
 def test_give_up_after_reaches_the_catalogue_in_seconds() -> None:
-    """It decides when a deferred delivery is dead-lettered, so a diff of the
-    catalogue should show it, and as a number the JSON can carry."""
+    """It decides when a deferred delivery dead-letters, so a diff should show it."""
     declared = _durable("testapp.bounded", AnyEvent, give_up_after=timedelta(hours=6))
     with receiver_registered(declared):
         [bounded] = catalogue().wildcard_receivers
@@ -338,8 +317,7 @@ def _offer_expiry(evt: object) -> datetime:
 
 
 def test_a_due_delay_reaches_the_catalogue_in_seconds() -> None:
-    """A scheduled reaction runs later than the event, which a reader of the
-    catalogue should see - and seconds, as every other duration here is."""
+    """A scheduled reaction runs later than its event: the catalogue shows it."""
     declared = _durable("testapp.expire", AnyEvent, due=timedelta(hours=48))
     with receiver_registered(declared):
         [expire] = catalogue().wildcard_receivers
@@ -350,8 +328,7 @@ def test_a_due_delay_reaches_the_catalogue_in_seconds() -> None:
 
 
 def test_a_due_callable_reaches_the_catalogue_as_its_path() -> None:
-    """Where it lives, as a ``targets`` callable is published: the time it
-    returns is per event, so the code that decides it is what can be named."""
+    """Where a targets callable lives, since its time is per event."""
     declared = _durable("testapp.expire", AnyEvent, due=_offer_expiry)
     with receiver_registered(declared):
         [expire] = catalogue().wildcard_receivers

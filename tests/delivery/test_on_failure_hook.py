@@ -1,5 +1,3 @@
-"""A receiver keeping a record of its own failure."""
-
 from __future__ import annotations
 
 import logging
@@ -48,12 +46,7 @@ def _fire_and_drain() -> None:
 
 
 def test_a_receivers_own_write_still_does_not_survive_its_failure() -> None:
-    """The reason the hook exists, pinned so it cannot quietly stop being true.
-
-    A receiver runs inside the transaction carrying its acknowledgement, so
-    everything it writes is discarded the moment it raises. The attempts worth
-    logging were exactly the ones that could not be logged.
-    """
+    """The reason the hook exists, pinned so it cannot quietly stop being true."""
     wrote = 0
 
     def failing(event: Unheard) -> None:
@@ -85,8 +78,7 @@ def test_the_hook_runs_and_what_it_writes_survives() -> None:
     _fire_and_drain()
 
     assert seen, "the hook was called"
-    # The half that matters: written from the failure path, so it outlives the
-    # rollback that discarded everything the receiver itself wrote.
+    # Written from the failure path, so it outlives the receiver's rollback.
     assert EventRecord.objects.filter(name="probe.Logged").count() == len(seen)
 
 
@@ -109,8 +101,7 @@ def test_it_carries_enough_to_identify_the_delivery() -> None:
 
 
 def test_it_reports_failed_then_dead_across_the_attempt_budget() -> None:
-    # Both are worth recording and they are different things: "it failed again"
-    # and "it will not be tried again".
+    # 'It failed again' and 'it will not be tried again' are different things.
     seen: list[DeliveryFailure] = []
 
     def failing(event: Unheard) -> None:
@@ -128,8 +119,7 @@ def test_it_reports_failed_then_dead_across_the_attempt_budget() -> None:
 
 
 def test_a_raising_hook_is_swallowed_and_logged(caplog: pytest.LogCaptureFixture) -> None:
-    # It is on the failure path. A failure path that fails leaves the operator
-    # with a traceback about logging rather than about the delivery.
+    # It is on the failure path.
     def failing(event: Unheard) -> None:
         raise RuntimeError("boom")
 
@@ -165,15 +155,7 @@ def test_a_succeeding_receiver_never_calls_it() -> None:
 
 
 def test_a_worker_that_lost_the_row_does_not_report_the_failure() -> None:
-    """The hook follows the write, not the attempt.
-
-    A lease can lapse while its worker is still mid-receiver. That worker's
-    verdict lands nowhere, because the fence is conditioned on a claim it no
-    longer holds, and whoever legitimately took the row will attempt the
-    delivery and report its own outcome. Reporting here too would log one
-    attempt twice and, for a delivery log, invent a failure that never happened
-    to anybody.
-    """
+    """The hook follows the write, not the attempt."""
     from datetime import timedelta
 
     from django_domain_events.delivery.claim_batch import claim_batch
@@ -217,11 +199,7 @@ def _failure_logs(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
 def test_a_failed_attempt_is_logged_with_what_identifies_it(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A failover that sent twice left no trace anywhere but the row. The line
-    names the receiver, the delivery, the attempt, what the row is now and the
-    exception's type - enough to find the row - and carries no traceback,
-    because ``last_error`` already holds the message and a failing receiver
-    retried every few seconds would otherwise fill the log with stacks."""
+    """A failover that sent twice left no trace anywhere but the row."""
 
     def failing(event: Unheard) -> None:
         raise RuntimeError("the endpoint said no")
@@ -242,9 +220,7 @@ def test_a_failed_attempt_is_logged_with_what_identifies_it(
 
 
 def test_a_deferral_and_its_give_up_are_logged_too(caplog: pytest.LogCaptureFixture) -> None:
-    """A deferral that spends no attempt is still an attempt that did not
-    succeed, and the give-up that ends one is the dead letter an operator most
-    needs to hear about. Logged under the attempt number the receiver was given."""
+    """A deferral spends no attempt, but the give-up that ends it is a dead letter."""
     from datetime import timedelta
 
     from django_domain_events.delivery.retry_after import RetryAfter
@@ -270,9 +246,7 @@ def test_a_deferral_and_its_give_up_are_logged_too(caplog: pytest.LogCaptureFixt
 
 
 def test_a_worker_that_lost_the_row_logs_no_failure(caplog: pytest.LogCaptureFixture) -> None:
-    """The log follows the write, as the hook does: the worker that holds the
-    row now will attempt it and log its own outcome, and a line from the one
-    that lost it would record an attempt nobody's row shows."""
+    """The log follows the write: only the worker holding the row logs its outcome."""
     from datetime import timedelta
 
     from django_domain_events.delivery.claim_batch import claim_batch
@@ -302,10 +276,7 @@ def _fire_undecodable(key: str, seen: list[DeliveryFailure]) -> None:
 def test_a_payload_that_will_not_decode_is_logged_as_it_is_dead_lettered(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The attempt is counted and the row goes straight to ``dead``, so it is a
-    failed attempt the relay recorded, and the line says so. The hook is not
-    told: the receiver never ran, and whether it should hear about a payload it
-    was never handed is a separate decision from logging it."""
+    """The attempt is counted and the row goes straight to dead."""
     seen: list[DeliveryFailure] = []
     _fire_undecodable("probe.undecodable", seen)
 
@@ -324,8 +295,7 @@ def test_a_payload_that_will_not_decode_is_logged_as_it_is_dead_lettered(
 def test_a_dead_letter_for_an_undecodable_payload_this_worker_could_not_record_logs_nothing(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """As at every other failure: the line follows the write, and a worker
-    whose write did not land recorded no attempt to log."""
+    """As at every other failure, the line follows the write."""
     _fire_undecodable("probe.undecodable_lost", [])
     monkeypatch.setattr(
         "django_domain_events.delivery.deliver._Fence.write", lambda self, **fields: None
@@ -340,8 +310,7 @@ def test_a_dead_letter_for_an_undecodable_payload_this_worker_could_not_record_l
 def test_a_row_whose_receiver_is_gone_is_orphaned_without_a_failure_line(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Orphaning counts no attempt and no receiver failed, so the failure log,
-    which promises one line per failed attempt, stays out of it."""
+    """Orphaning counts no attempt, so the failure log stays out of it."""
     from tests.conftest import receiver_deleted
 
     receiver(Unheard, key="probe.gone")(lambda event: None)
@@ -355,9 +324,7 @@ def test_a_row_whose_receiver_is_gone_is_orphaned_without_a_failure_line(
 
 
 def test_a_failure_no_exception_raised_says_so(caplog: pytest.LogCaptureFixture) -> None:
-    """An event nobody registers any more fails without the receiver running,
-    so there is no exception type to name, and the line says that rather than
-    inventing one."""
+    """An unregistered event fails without its receiver, and the line says so."""
     from tests.conftest import event_deleted
 
     receiver(Unheard, key="probe.unregistered")(lambda event: None)

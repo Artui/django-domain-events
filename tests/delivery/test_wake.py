@@ -35,9 +35,7 @@ def _fakes_stand_for_psycopg3(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_it_sleeps_where_the_backend_cannot_notify() -> None:
-    """The relay loop reads the same on every database; only the waiting differs.
-    ``supported`` is an argument so both branches are reachable from either
-    backend, rather than each one needing the database that has it."""
+    """The relay loop reads the same on every database; only the waiting differs."""
     slept: list[float] = []
     assert wait_for_work(0.05, supported=False, sleep=slept.append) is False
     assert slept == [0.05]
@@ -49,8 +47,7 @@ def test_notifying_is_a_no_op_where_the_backend_cannot() -> None:
 
 
 def test_it_times_out_when_nothing_is_owed() -> None:
-    """A notification sent while nobody was listening is lost, which is why the
-    poll stays as the floor rather than being replaced."""
+    """A notification sent while nobody listens is lost, so the poll stays as the floor."""
     if connection.vendor != "postgresql":
         pytest.skip("LISTEN/NOTIFY is Postgres only")
     if not LOADED_IS_PSYCOPG3:
@@ -82,12 +79,7 @@ def test_a_notification_wakes_the_waiter() -> None:
 
 
 def test_notifications_queued_while_busy_wake_the_relay_once() -> None:
-    """A relay busy delivering is not waiting, so the notifications sent meanwhile
-    queue on its connection: psycopg keeps those that arrive during other
-    statements in a backlog and yields them first on the next wait. Leaving the
-    generator after one restores the rest, so without a drain each queued
-    notification is one more instant wake - one empty claim transaction apiece -
-    before the relay waits for real again."""
+    """A busy relay queues notifications on its connection for the next wait."""
     if connection.vendor != "postgresql":
         pytest.skip("LISTEN/NOTIFY is Postgres only")
     if not LOADED_IS_PSYCOPG3:
@@ -96,16 +88,11 @@ def test_notifications_queued_while_busy_wake_the_relay_once() -> None:
     from django.db import connections
 
     listener = connections["default"]
-    # Listening first, as a relay is from its first wait on.
     assert wait_for_work(0.01) is False
     params = listener.get_connection_params()
     with psycopg.connect(**params, autocommit=True) as sender:
-        # Distinct payloads in separate statements: Postgres folds identical
-        # notifications sent in one transaction into one.
         for i in range(5):
             sender.execute("SELECT pg_notify(%s, %s)", (wake_module.CHANNEL, str(i)))
-    # A statement on the listener while they arrive, as a delivery would run,
-    # which is what lands them in the backlog rather than on the socket.
     time.sleep(0.1)
     with listener.cursor() as cursor:
         cursor.execute("SELECT 1")
@@ -148,17 +135,7 @@ class FakeConnection:
 
 
 class FakeDriver:
-    """psycopg's ``notifies`` (3.2.4 onwards), down to the parts the wait
-    depends on, in the order psycopg checks them.
-
-    ``notifications`` is the backlog the connection collected while it ran
-    other statements. A call yields all of it before it looks at
-    ``stop_after``, so a generator run to its end empties it. ``arriving`` is
-    the socket: each read takes the next batch, standing for what had arrived
-    by then, and ``stop_after`` is checked after each batch. A batch still
-    waiting after a call returns is one that arrived once it had stopped
-    reading, and ``timeout=0`` reads at most once.
-    """
+    """psycopg's notifies (3.2.4 onwards), down to the parts the wait depends on."""
 
     def __init__(self, notifications: int, *, arriving: tuple[int, ...] = ()) -> None:
         self.notifications = notifications
@@ -189,17 +166,14 @@ def test_it_notifies_on_the_package_channel() -> None:
 
 
 def test_waiting_listens_before_it_waits() -> None:
-    """LISTEN has to be issued on the connection that then waits, and before it
-    waits: a notification sent in between is lost, which is the whole reason the
-    poll remains the floor."""
+    """LISTEN is issued on the waiting connection, before the wait, or it is lost."""
     connection = FakeConnection(notifications=1)
     assert wait_for_work(1.0, connection=connection) is True
     assert connection.sql == ['LISTEN "django_domain_events"']
 
 
 def test_one_wake_drains_what_queued_behind_it() -> None:
-    """The backlog half of the Postgres test above, on any backend: three
-    queued, one wake, and nothing left for the next wait to return at once."""
+    """The backlog half of the Postgres test: three queued, one wake, then nothing."""
     connection = FakeConnection(notifications=3)
     assert wait_for_work(1.0, connection=connection) is True
     assert connection.connection.notifications == 0
@@ -207,11 +181,7 @@ def test_one_wake_drains_what_queued_behind_it() -> None:
 
 
 def test_one_wake_also_takes_what_arrived_after_its_wait_returned() -> None:
-    """The backlog empties on its own, because psycopg yields all of it before
-    it looks at ``stop_after``. What the second, zero-timeout call is for is a
-    notification that reached the socket after the first call stopped reading:
-    left there, the next wait would return at once for a claim with nothing
-    new to find."""
+    """The backlog empties on its own, since psycopg yields all of it before stop_after."""
     connection = FakeConnection(notifications=2, arriving=(1,))
     assert wait_for_work(1.0, connection=connection) is True
     assert connection.connection.arriving == []
@@ -236,9 +206,7 @@ NOTIFY = 'NOTIFY "django_domain_events"'
 
 
 def test_polling_sends_no_notification(settings) -> None:
-    """``WAKE = "poll"`` is the switch, and the vendor is deliberately Postgres
-    here: with ``supported=False`` the vendor gate would answer instead, and
-    deleting the setting check would still pass."""
+    """WAKE = 'poll' is the switch, not the vendor gate, so both are tested."""
     settings.DJANGO_DOMAIN_EVENTS = {"WAKE": "poll"}
     connection = FakeConnection()
     notify_relay(connection=connection)
@@ -246,8 +214,7 @@ def test_polling_sends_no_notification(settings) -> None:
 
 
 def test_polling_does_not_listen_either(settings) -> None:
-    """A relay under ``poll`` sleeps for the interval, so the same setting
-    reads the same on both halves."""
+    """A relay under poll sleeps for the interval."""
     settings.DJANGO_DOMAIN_EVENTS = {"WAKE": "poll"}
     slept: list[float] = []
     connection = FakeConnection(notifications=1)
@@ -257,11 +224,7 @@ def test_polling_does_not_listen_either(settings) -> None:
 
 
 def test_a_driver_that_cannot_listen_polls(monkeypatch: pytest.MonkeyPatch) -> None:
-    """psycopg2's ``notifies`` is a list the driver fills on ``poll()``, not
-    psycopg 3's blocking generator, so the wait cannot run on it: the relay
-    sleeps for the poll and issues no LISTEN. Everything else here says notify -
-    a Postgres connection, ``WAKE`` at its default, a notification queued - so
-    the driver is the only thing that can answer."""
+    """psycopg2 fills notifies on poll(), so the relay sleeps and issues no LISTEN."""
     monkeypatch.setattr(psycopg_any, "is_psycopg3", False)
     slept: list[float] = []
     connection = FakeConnection(notifications=1)
@@ -273,8 +236,7 @@ def test_a_driver_that_cannot_listen_polls(monkeypatch: pytest.MonkeyPatch) -> N
 def test_a_driver_that_cannot_listen_sends_no_notification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Both halves read one answer, as they do for ``WAKE``: a NOTIFY nothing
-    can hear would cost the serialized commit and buy nothing."""
+    """Both halves read one answer: a NOTIFY nothing hears buys nothing."""
     monkeypatch.setattr(psycopg_any, "is_psycopg3", False)
     connection = FakeConnection()
     notify_relay(connection=connection)
@@ -282,8 +244,7 @@ def test_a_driver_that_cannot_listen_sends_no_notification(
 
 
 def test_psycopg2_polls_on_a_real_connection(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The same on the server, through the driver Django actually loaded rather
-    than one stood in for it."""
+    """The same on the server, through the driver Django actually loaded."""
     if connection.vendor != "postgresql" or LOADED_IS_PSYCOPG3:
         pytest.skip("needs Postgres under psycopg2")
     monkeypatch.setattr(psycopg_any, "is_psycopg3", LOADED_IS_PSYCOPG3)
@@ -299,8 +260,7 @@ def test_notify_is_the_default_on_postgres() -> None:
 
 
 def test_two_notifications_inside_the_interval_send_one(settings) -> None:
-    """Deleting the coalescing sends two. The interval is made large rather than
-    the clock injected, so this fails on the pre-change signature too."""
+    """Deleting the coalescing sends two."""
     settings.DJANGO_DOMAIN_EVENTS = {"NOTIFY_COALESCE_SECONDS": 3600}
     connection = FakeConnection()
     notify_relay(connection=connection)
@@ -309,8 +269,7 @@ def test_two_notifications_inside_the_interval_send_one(settings) -> None:
 
 
 def test_a_notification_after_the_interval_sends_another() -> None:
-    """Holds the ``now - last < interval`` conjunct: without it nothing is sent
-    again once the first has gone."""
+    """Holds the 'now - last < interval' conjunct: without it nothing re-sends."""
     clock = FakeClock()
     connection = FakeConnection()
     notify_relay(connection=connection, clock=clock)
@@ -323,8 +282,7 @@ def test_a_notification_after_the_interval_sends_another() -> None:
 
 
 def test_a_skipped_notification_does_not_extend_the_interval() -> None:
-    """The interval runs from the last NOTIFY actually sent. Restarting it on a
-    skipped one would let a steady stream of fires suppress the wake forever."""
+    """The interval runs from the last NOTIFY actually sent."""
     clock = FakeClock()
     connection = FakeConnection()
     notify_relay(connection=connection, clock=clock)
@@ -335,9 +293,7 @@ def test_a_skipped_notification_does_not_extend_the_interval() -> None:
 
 
 def test_a_zero_interval_turns_coalescing_off(settings) -> None:
-    """Zero sends every notification, even two at the same instant. Holds the
-    strict ``<`` in the guard: ``<=`` would read an elapsed time of zero as
-    inside a zero-length interval."""
+    """Zero sends every notification, even two at the same instant."""
     settings.DJANGO_DOMAIN_EVENTS = {"NOTIFY_COALESCE_SECONDS": 0}
     connection = FakeConnection()
     clock = FakeClock()
@@ -347,8 +303,7 @@ def test_a_zero_interval_turns_coalescing_off(settings) -> None:
 
 
 def test_each_database_is_coalesced_on_its_own() -> None:
-    """A relay listens on one database. A NOTIFY on ``default`` says nothing to a
-    relay on ``events``, so it must not suppress the one that does."""
+    """A relay listens on one database."""
     clock = FakeClock()
     default, events = FakeConnection(alias="default"), FakeConnection(alias="events")
     notify_relay(connection=default, clock=clock)
@@ -359,8 +314,7 @@ def test_each_database_is_coalesced_on_its_own() -> None:
 
 
 def test_a_backend_that_cannot_notify_does_not_start_an_interval() -> None:
-    """The time is recorded only when a NOTIFY goes out, so the vendor gate
-    cannot leave a stale entry that silences the next real one."""
+    """The time is recorded only when a NOTIFY goes out, so no stale entry lingers."""
     clock = FakeClock()
     notify_relay(supported=False, connection=FakeConnection(), clock=clock)
     connection = FakeConnection()

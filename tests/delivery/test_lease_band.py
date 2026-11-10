@@ -1,19 +1,3 @@
-"""One write per delivery for the lease.
-
-A claim stamps the lease its lane needs, with a fixed headroom, and a delivery
-whose claimed lease already is what its receiver needs starts without the
-extension: a write to ``lease_expires_at``, which ``dde_claimed_by_lease`` is
-keyed on, so never a HOT update on Postgres.
-
-The extension is recognised in the captured SQL as an UPDATE of the delivery
-table setting ``lease_expires_at`` and nothing else. The claim sets four
-columns, the take two others and an outcome never this one, so none of them
-matches; ``hand_back`` would, and nothing here hands back.
-
-Probes are declared on ``Unheard``, which the test app never listens to, in a
-lane of their own, so no test app receiver shares a claim with them.
-"""
-
 from __future__ import annotations
 
 import json
@@ -133,8 +117,7 @@ def _relay(**options: Any) -> None:
 
 
 def test_a_uniform_lane_is_claimed_under_its_own_lease() -> None:
-    """Every receiver in the lane declares 60 s, so the claim stamps 60 s and
-    its headroom rather than ``LEASE_SECONDS``."""
+    """Every receiver declares 60 s, so the claim stamps 60 s plus headroom."""
     _probe("a", lease_seconds=60)
     _probe("b", lease_seconds=60)
     _fire()
@@ -157,8 +140,7 @@ def test_a_mixed_lane_is_claimed_under_the_setting() -> None:
 
 
 def test_a_lane_of_receivers_declaring_no_lease_is_claimed_under_the_setting() -> None:
-    """Uniform at the setting is uniform too: a receiver that declares none
-    needs ``LEASE_SECONDS``, so the claim stamps that and its headroom."""
+    """Receivers that declare no lease stamp LEASE_SECONDS plus headroom."""
     _probe("a")
     _probe("b")
     _fire()
@@ -170,10 +152,7 @@ def test_a_lane_of_receivers_declaring_no_lease_is_claimed_under_the_setting() -
 
 
 def test_every_lane_is_claimed_under_its_own_lease() -> None:
-    """``lane=None`` claims each lane in turn under that lane's lease: the test
-    app's default lane declares 1800 s as well as none at all, so it is claimed
-    under the setting, and ``mail`` under its own 60 s, rather than both under
-    the setting as one claim across every lane would be."""
+    """lane=None claims each lane under its own lease, not one shared lease."""
     _probe("a", lease_seconds=60)
     _fire()
 
@@ -202,13 +181,10 @@ def test_the_default_lane_relay_is_claimed_under_the_setting() -> None:
 
 
 def test_the_eager_attempt_is_claimed_under_its_receivers_lease() -> None:
-    """The attempt after commit claims only eager receivers' rows, so their
-    shared lease is its base. It then starts without an extension."""
+    """The post-commit attempt's base is the eager receivers' shared lease."""
     _probe("eager", eager=True, lease_seconds=60)
 
     with (
-        # The test app's own eager receiver needs the setting, and would make
-        # the eager receivers a mix.
         receiver_deleted("testapp.eager"),
         _claimed_leases(claim_module) as leases,
         CaptureQueriesContext(connection) as queries,
@@ -249,9 +225,7 @@ def test_a_relay_delivers_a_uniform_lane_with_one_lease_write_fewer() -> None:
 
 
 def test_a_receiver_whose_lease_differs_from_the_lanes_is_extended() -> None:
-    """A mixed lane is claimed under the setting's 330 s, more than either
-    receiver's lease and its headroom, so each row is extended to its own as
-    before: the band is what keeps a 60 s lane from holding 330 s."""
+    """A mixed lane is claimed under the setting's lease, then each row's extended."""
     _probe("a", lease_seconds=60)
     _probe("b", lease_seconds=90)
     _fire()
@@ -267,12 +241,10 @@ def test_a_receiver_whose_lease_differs_from_the_lanes_is_extended() -> None:
 
 
 def test_a_row_started_late_in_its_batch_is_extended() -> None:
-    """The lower bound. A row whose claimed lease has fewer than its
-    receiver's seconds left is extended, as a batch's tail is."""
+    """The lower bound."""
     _probe("a", lease_seconds=60)
     _fire()
     now = django_timezone.now()
-    # As a row ten seconds into its batch finds the lane's 66 s: 56 are left.
     claim_batch(worker_id="w", now=now, lease=timedelta(seconds=56), limit=10)
 
     with CaptureQueriesContext(connection) as queries:
@@ -283,10 +255,7 @@ def test_a_row_started_late_in_its_batch_is_extended() -> None:
 
 
 def test_a_row_claimed_on_a_later_clock_is_extended() -> None:
-    """The upper bound. ``deliver_pending(now=...)`` claims on a moved clock
-    and delivers on the real one, so the stamped lease is far more than the
-    receiver needs; the extension sets it to that, on the real clock, as it
-    always has."""
+    """The upper bound."""
     _probe("a", lease_seconds=60)
     _fire()
     later = django_timezone.now() + timedelta(days=1)
@@ -304,12 +273,9 @@ def test_a_row_claimed_on_a_later_clock_is_extended() -> None:
 def test_a_row_claimed_on_a_slightly_earlier_clock_starts_without_extending(
     back: int, writes: int
 ) -> None:
-    """A clock moved back by less than a tenth of the lease leaves the stamped
-    lease inside the band - at least the receiver's 60 s still ahead - so the
-    row starts as it is. Moved back by more, it falls below and is extended."""
+    """A clock moved back a little leaves the stamped lease inside the band."""
     _probe("a", lease_seconds=60)
     _fire()
-    # Owed well before the moved clock, so the claim on it takes the row.
     DeliveryRecord.objects.update(available_at=django_timezone.now() - timedelta(hours=1))
     earlier = django_timezone.now() - timedelta(seconds=back)
 
@@ -335,9 +301,7 @@ def test_a_relay_on_a_later_clock_extends_on_the_real_one() -> None:
 
 
 def test_a_row_another_worker_took_in_band_is_not_run() -> None:
-    """The owner. The thief's lease is in this receiver's band, so only the
-    owner on the row says the row is no longer this call's; the extension's
-    compare-and-set then refuses it, as it always did."""
+    """Only the owner on the row shows the row is no longer this call's."""
     _probe("a", lease_seconds=60)
     _fire()
     claim_batch(worker_id="A", now=django_timezone.now(), lease=timedelta(seconds=63), limit=10)
@@ -349,8 +313,7 @@ def test_a_row_another_worker_took_in_band_is_not_run() -> None:
 
 
 def test_a_claimed_row_with_no_lease_is_extended_and_delivered() -> None:
-    """No claim writes a CLAIMED row without a lease, but one edited by hand
-    still delivers rather than raising on the arithmetic."""
+    """A hand-edited CLAIMED row without a lease still delivers rather than raising."""
     _probe("a", lease_seconds=60)
     _fire()
     claim_batch(worker_id="w", now=django_timezone.now(), lease=timedelta(seconds=63), limit=10)
@@ -363,8 +326,7 @@ def test_a_claimed_row_with_no_lease_is_extended_and_delivered() -> None:
 
 
 def test_an_unclaimed_row_passed_directly_writes_no_lease() -> None:
-    """The status. A PENDING row run directly is nobody's claim, so there is no
-    lease to keep: it is run and acknowledged with no lease write."""
+    """A PENDING row run directly is nobody's claim, so no lease is kept."""
     _probe("a", lease_seconds=60)
     _fire()
 
@@ -379,8 +341,7 @@ class _RelayDied(BaseException):
 
 
 def test_a_dead_relays_unstarted_rows_are_claimable_after_their_lanes_lease() -> None:
-    """A uniform lane recovers in its own lease and the headroom, 66 s here,
-    not in ``LEASE_SECONDS``."""
+    """A uniform lane recovers under its own lease and headroom, not LEASE_SECONDS."""
     _probe("a", lease_seconds=60)
     _fire(2)
     claimed = django_timezone.now()
@@ -401,9 +362,7 @@ def test_a_dead_relays_unstarted_rows_are_claimable_after_their_lanes_lease() ->
 
 
 def test_a_long_lease_lane_recovers_in_the_setting() -> None:
-    """A lane of receivers declaring 1800 s is claimed under ``LEASE_SECONDS``
-    and its headroom, 330 s, as the default lane is: a killed relay's
-    unstarted tail is not held for 1980 s."""
+    """A 1800 s lane is claimed under LEASE_SECONDS, so a killed tail frees sooner."""
     _probe("a", lease_seconds=1800)
     _fire(2)
     claimed = django_timezone.now()
@@ -424,8 +383,7 @@ def test_a_long_lease_lane_recovers_in_the_setting() -> None:
 
 
 def test_an_eager_attempt_for_long_lease_receivers_recovers_in_the_setting() -> None:
-    """The same cap on the attempt after commit, when every eager receiver
-    shares one lease longer than ``LEASE_SECONDS``."""
+    """The post-commit attempt is capped at LEASE_SECONDS plus headroom too."""
     _probe("eager", eager=True, lease_seconds=1800)
 
     def die(*args: object, **kwargs: object) -> None:
@@ -451,13 +409,10 @@ def test_an_eager_attempt_for_long_lease_receivers_recovers_in_the_setting() -> 
 
 
 def test_a_batch_tail_another_relay_took_is_not_sent_twice(caplog: Any) -> None:
-    """A uniform lane's batch that outlasts its 66 s: a second relay takes the
-    tail, and the first, reaching it, finds the row gone and logs it."""
+    """A batch outlasting its lease: a second relay takes the tail, and the first logs."""
     _probe("a", lease_seconds=60)
     _fire(2)
     claimed = django_timezone.now() - timedelta(seconds=67)
-    # The first relay claims both, sixty-seven seconds ago, and delivers
-    # neither yet: the claim is all that is wanted of it here.
     with (
         _claimed_leases(run_relay_module) as leases,
         mock.patch.object(run_relay_module, "_deliver_or_survive", lambda *a, **k: None),
@@ -465,7 +420,6 @@ def test_a_batch_tail_another_relay_took_is_not_sent_twice(caplog: Any) -> None:
         _relay(now=lambda: claimed)
     assert leases == [timedelta(seconds=66)]
     first, tail = _rows()
-    # The second relay takes the lapsed rows as its own claim would.
     taken = claim_batch(
         worker_id="second", now=django_timezone.now(), lease=leases[0], limit=10, lane="mail"
     )
@@ -504,8 +458,7 @@ def test_a_hand_off_right_after_the_claim_writes_no_lease(task_backend: Any) -> 
 
 
 def test_a_worker_taking_the_row_within_the_band_writes_no_lease(task_backend: Any) -> None:
-    """The take moves the owner and leaves the lease, so a worker that took the
-    row soon after the hand-off finds it already leased for the receiver."""
+    """The take moves the owner and keeps the lease, so the worker finds it leased."""
     task_backend(RecordingBackend)
     _probe("task", site="task", lease_seconds=60)
     _fire()
@@ -532,14 +485,12 @@ def test_a_task_run_inside_the_hand_off_writes_no_lease(task_backend: Any) -> No
 
 
 def test_a_worker_taking_the_row_after_a_slow_queue_extends(task_backend: Any) -> None:
-    """Ten seconds in the queue leave 56 of the 66 s: below the receiver's 60,
-    so the worker extends, as it did after every take before."""
+    """Ten seconds in the queue leave 56 of 66 s, so the worker extends the lease."""
     task_backend(RecordingBackend)
     _probe("task", site="task", lease_seconds=60)
     _fire()
     deliver_pending(lane="mail")
     (args, kwargs) = MESSAGES[0]
-    # The queue's ten seconds, moved onto the lease rather than waited out.
     row = _rows()[0]
     DeliveryRecord.objects.update(lease_expires_at=row.lease_expires_at - timedelta(seconds=10))
 
@@ -551,8 +502,7 @@ def test_a_worker_taking_the_row_after_a_slow_queue_extends(task_backend: Any) -
 
 
 def test_a_row_another_worker_took_in_band_is_not_enqueued(task_backend: Any) -> None:
-    """The owner, at the hand-off: a message carrying this worker's claim for a
-    row the thief holds would be refused by the take, but it must not be sent."""
+    """At hand-off, a message for a row the thief holds must not be sent."""
     task_backend(RecordingBackend)
     _probe("task", site="task", lease_seconds=60)
     _fire()
@@ -582,8 +532,7 @@ def test_a_hand_off_on_a_later_clock_extends_on_the_real_one(task_backend: Any) 
 
 
 def test_the_band_decides_the_same_on_naive_time(settings) -> None:
-    """The band compares the row's lease with the clock ``_deliver_one`` reads,
-    both naive under the setting; an aware clock would raise ``TypeError``."""
+    """The band compares the lease with the naive clock _deliver_one reads."""
     settings.USE_TZ = False
     _probe("a", lease_seconds=60)
     _fire(2)
@@ -591,7 +540,6 @@ def test_the_band_decides_the_same_on_naive_time(settings) -> None:
         assert deliver_pending(lane="mail") == {DeliveryStatus.SUCCEEDED: 2}
     assert _lease_writes(queries) == 0
 
-    # And a late row is still extended.
     _fire()
     claim_batch(worker_id="w", now=django_timezone.now(), lease=timedelta(seconds=56), limit=10)
     late = DeliveryRecord.objects.get(status=DeliveryStatus.CLAIMED)

@@ -1,9 +1,3 @@
-"""Tests mirroring ``django_domain_events/delivery/retry_after.py``.
-
-Construction is tested directly; everything else is what the relay does on
-reading it, because that is the only place the delay means anything.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -59,11 +53,7 @@ def _asking_for(seconds: float, key: str, **declaration: object) -> None:
 
 
 def _other_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
-    """The warnings a test is about, without the line every failed attempt logs.
-
-    That line is held by its own tests in ``test_on_failure_hook.py``; here it
-    would make every count below one per attempt larger.
-    """
+    """The warnings a test is about, without the line every failed attempt logs."""
     return [
         r.getMessage()
         for r in caplog.records
@@ -99,11 +89,7 @@ def test_zero_means_as_soon_as_possible() -> None:
 
 @pytest.mark.parametrize("seconds", [0, 0.0])
 def test_a_deferral_that_does_not_count_must_ask_for_a_wait(seconds: float) -> None:
-    """Held by the ``not seconds > 0`` conjunct of the ``counts=False`` guard.
-
-    Zero is valid for a counting retry (``max_attempts`` bounds it), so the
-    plain check cannot be what refuses it here.
-    """
+    """Held by the ``not seconds > 0`` conjunct of the ``counts=False`` guard."""
     with pytest.raises(ValueError, match="above zero seconds"):
         RetryAfter(seconds, counts=False)
     assert RetryAfter(seconds).seconds == 0.0
@@ -115,12 +101,7 @@ def test_a_nan_deferral_that_does_not_count_is_refused_by_the_plain_check() -> N
 
 
 def test_it_sets_the_schedule_instead_of_the_backoff_curve(settings) -> None:
-    """The requested delay, not the curve.
-
-    The curve is configured to land somewhere visibly different - 500 seconds
-    with the jitter pinned, against 120 asked for - so the assertion cannot pass
-    because the two happened to agree.
-    """
+    """The requested delay, not the curve."""
     settings.DJANGO_DOMAIN_EVENTS = {"BACKOFF_BASE_SECONDS": 1000.0, "BACKOFF_CAP_SECONDS": 1000.0}
     assert backoff(1, base=1000.0, cap=1000.0, jitter=0.5) == timedelta(seconds=500)
 
@@ -139,11 +120,7 @@ def test_it_sets_the_schedule_instead_of_the_backoff_curve(settings) -> None:
 
 
 def test_it_consumes_an_attempt() -> None:
-    """A destination answering 429 forever still dead-letters.
-
-    Asking for zero seconds so the second attempt is claimable at once; the
-    budget is two, so the second request is the last one there is.
-    """
+    """A destination answering 429 forever still dead-letters."""
     seen: list[DeliveryFailure] = []
     _asking_for(0, "probe.forever", max_attempts=2, on_failure=seen.append)
     _fire()
@@ -176,8 +153,7 @@ def test_a_delay_past_the_ceiling_is_clamped_and_warned_about(
 
     warnings = _other_warnings(caplog)
     assert len(warnings) == 1
-    # Both numbers, and whose request it was, so an operator can tell whether
-    # the ceiling or the destination is the thing to question.
+    # Both numbers, and whose request it was: ceiling or destination to question.
     assert "probe.patient" in warnings[0]
     assert "3600.0s" in warnings[0]
     assert "MAX_RECEIVER_RETRY_DELAY_SECONDS of 300.0s" in warnings[0]
@@ -205,8 +181,7 @@ class _Runaway(BaseException):
 
 
 def _deferring(key: str, seconds: float = 60.0, **declaration: object) -> list[int]:
-    """Declare a receiver that defers without counting, and return the attempt
-    number each call saw in its context, so a test can read what it was told."""
+    """Declare a receiver that defers without counting, returning the attempt seen."""
     seen: list[int] = []
 
     def throttled(event: Unheard, ctx: DeliveryContext) -> None:
@@ -226,8 +201,7 @@ def test_counting_is_the_default() -> None:
 
 
 def test_a_deferral_that_does_not_count_leaves_the_attempts_and_the_budget_alone() -> None:
-    """A budget of one is the only size that shows whether it was spent: a
-    counting deferral on it dead-letters, this one leaves the row owed."""
+    """A budget of one shows whether it was spent: a counting deferral dead-letters."""
     seen = _deferring("probe.throttled", max_attempts=1, give_up_after=timedelta(days=1))
     _fire()
 
@@ -238,15 +212,12 @@ def test_a_deferral_that_does_not_count_leaves_the_attempts_and_the_budget_alone
     assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 0)
     assert row.completed_at is None
     assert row.last_error == "RetryAfter: the provider is throttling"
-    # The context names the attempt that would count, and it did not, so the
-    # next run is told the same number again.
     assert seen == [1, 1]
 
 
 @pytest.mark.django_db(transaction=True)
 def test_an_eager_deferral_is_recorded_unspent_and_pauses_nothing() -> None:
-    """The eager attempt runs in the firing process, which serves no lane and
-    so has nothing to pause: each fire calls the destination once more."""
+    """The eager attempt has no lane to pause, so each fire calls the destination again."""
     seen = _deferring(
         "probe.eager_throttled", eager=True, max_attempts=1, give_up_after=timedelta(days=1)
     )
@@ -259,8 +230,7 @@ def test_an_eager_deferral_is_recorded_unspent_and_pauses_nothing() -> None:
 
 
 def test_a_counting_retry_after_still_spends_its_attempt() -> None:
-    """The same budget of one, counted: the row dead-letters on the first
-    request. Holds the ``counts`` half of the deferral's guard."""
+    """The same budget of one, counted: the row dead-letters on the first request."""
     _asking_for(0, "probe.counted", max_attempts=1, give_up_after=timedelta(days=1))
     _fire()
 
@@ -270,8 +240,7 @@ def test_a_counting_retry_after_still_spends_its_attempt() -> None:
 
 
 def test_an_ordinary_exception_is_not_read_as_a_deferral() -> None:
-    """Holds the type half of the deferral's guard: an exception with no
-    ``counts`` is an ordinary failure, not an AttributeError in the relay."""
+    """An exception without counts is an ordinary failure, not an AttributeError."""
 
     def broken(event: Unheard) -> None:
         raise RuntimeError("down")
@@ -285,9 +254,7 @@ def test_an_ordinary_exception_is_not_read_as_a_deferral() -> None:
 
 @pytest.mark.parametrize(("jitter", "expected"), [(0.0, 60), (0.5, 90), (0.999, 119.94)])
 def test_the_requested_delay_is_jittered_upwards_only(jitter: float, expected: float) -> None:
-    """Never earlier than asked - the destination said when it will be ready -
-    and spread across as long again, so a throttled burst does not come back
-    as one wave."""
+    """Never earlier than asked, and spread over as long again."""
     _deferring("probe.spread", seconds=60, give_up_after=timedelta(days=1))
     _fire()
 
@@ -304,8 +271,7 @@ def test_the_requested_delay_is_jittered_upwards_only(jitter: float, expected: f
 def test_a_jittered_delay_stays_under_the_ceiling(
     settings, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The ceiling bounds where a row can park, jitter included; only the
-    request itself being past it is worth a warning."""
+    """The ceiling bounds where a row can park, jitter included."""
     settings.DJANGO_DOMAIN_EVENTS = {"MAX_RECEIVER_RETRY_DELAY_SECONDS": 100.0}
     _deferring("probe.near_ceiling", seconds=80, give_up_after=timedelta(days=1))
     _fire()
@@ -346,8 +312,7 @@ def _owed_since(key: str, *, recorded: timedelta, due: timedelta | None) -> None
 
 
 def test_a_deferral_past_give_up_after_dead_letters_the_row() -> None:
-    """Measured from the event's ``recorded_at`` when ``due_at`` is NULL, which
-    holds the fallback arm: with no reading at all the bound could not be met."""
+    """Measured from recorded_at when due_at is NULL, the fallback."""
     seen: list[DeliveryFailure] = []
     _deferring("probe.expired", give_up_after=timedelta(days=1), on_failure=seen.append)
     _fire()
@@ -372,10 +337,7 @@ def test_a_deferral_inside_give_up_after_is_still_deferred() -> None:
 
 
 def test_due_at_is_read_before_the_event_timestamp() -> None:
-    """A row reopened an hour ago for an event recorded last week is measured
-    from the reopening, and one due two days ago from that - whatever the
-    event's own timestamp says. Separate lanes, so the first deferral does not
-    set the second row aside."""
+    """A reopened row is measured from the reopening, not the event's timestamp."""
     _deferring("probe.reopened", give_up_after=timedelta(days=1), lane="a")
     _deferring("probe.overdue", give_up_after=timedelta(days=1), lane="b")
     _fire()
@@ -407,8 +369,7 @@ def test_the_bound_is_reached_at_exactly_give_up_after(elapsed: timedelta, given
 
 
 def test_neither_a_deferral_nor_a_counted_failure_moves_due_at() -> None:
-    """``due_at`` is when the row became owed. Moving it on a deferral would
-    reset the clock the bound reads, and the bound would never be met."""
+    """``due_at`` is when the row became owed."""
     _deferring("probe.still_due", give_up_after=timedelta(days=1), lane="slow")
     _asking_for(60, "probe.still_due_counted")
     _fire()
@@ -425,9 +386,7 @@ def test_neither_a_deferral_nor_a_counted_failure_moves_due_at() -> None:
 def test_a_deferral_with_no_give_up_after_counts_and_says_so_once(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Nothing else would ever end the delivery, so it is spent like any
-    ``RetryAfter``, and the declaration is named once per process rather than
-    once per row of a twenty-thousand row burst."""
+    """Nothing else ends it, so it is spent like any RetryAfter, named once per process."""
     _deferring("probe.unbounded", seconds=1, max_attempts=3)
     _fire()
     _fire()
@@ -449,10 +408,7 @@ def test_a_deferral_with_no_give_up_after_counts_and_says_so_once(
 
 
 def test_a_drain_meeting_a_deferral_ends() -> None:
-    """``drain_outbox`` ignores the backoff, and a deferral that does not count
-    leaves nothing else to end the loop: without the lane being set aside for
-    the rest of the pass, it would claim the row again until the receiver's
-    runaway guard stopped it."""
+    """A non-counting deferral leaves nothing else to end drain_outbox's loop."""
     seen = _deferring("probe.drained", seconds=1, give_up_after=timedelta(days=1))
     _fire()
 

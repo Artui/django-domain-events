@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/drain_outbox.py``."""
-
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -17,9 +15,7 @@ pytestmark = pytest.mark.django_db(transaction=True)
 
 
 def test_it_runs_the_real_delivery_path(order: OrderPlaced, record: list[str]) -> None:
-    """Deliberately not a task_always_eager equivalent: bypassing the transport
-    hides both the serialisation boundary and the timing, which is how a suite
-    passes while production breaks. This skips only the waiting."""
+    """Not a task_always_eager stand-in: bypassing the transport hides the boundary."""
     with transaction.atomic():
         fire(order)
     record.clear()
@@ -30,9 +26,7 @@ def test_it_runs_the_real_delivery_path(order: OrderPlaced, record: list[str]) -
 
 
 def test_the_payload_is_rebuilt_rather_than_reused(order: OrderPlaced, record: list[str]) -> None:
-    """The receiver is handed an instance decoded from the row, which is what a
-    worker in another process gets. A helper that passed the original object
-    through would agree with a payload that cannot round-trip."""
+    """The receiver gets an instance decoded from the row, as another process does."""
     seen: list[OrderPlaced] = []
     from django_domain_events.declaration.registry import registry
 
@@ -60,9 +54,7 @@ def test_a_limit_is_honoured(order: OrderPlaced, record: list[str]) -> None:
 def test_a_drain_leaves_a_row_not_yet_due_alone_until_told_the_time(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """``drain_outbox`` skips the backoff and never the schedule: otherwise
-    every test that makes an offer would also expire it. ``now=`` is how a test
-    moves forward to the due time instead of waiting for it."""
+    """drain_outbox skips the backoff, never the schedule."""
     with transaction.atomic():
         fire(order)
     due = datetime.now(timezone.utc) + timedelta(hours=48)
@@ -82,8 +74,7 @@ def test_a_drain_leaves_a_row_not_yet_due_alone_until_told_the_time(
 def test_a_drain_told_the_time_still_skips_the_backoff(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """``now=`` moves the clock the schedule is read against; it does not turn
-    the backoff back on. A retry due long after ``now`` still runs."""
+    """now= moves the schedule's clock; it does not turn the backoff back on."""
     with transaction.atomic():
         fire(order)
     now = datetime.now(timezone.utc)
@@ -97,8 +88,7 @@ def test_a_drain_told_the_time_still_skips_the_backoff(
 def test_respecting_the_backoff_reads_it_against_the_time_given(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """With the backoff respected, ``now=`` is the moment it is respected at:
-    a retry an hour away is left before the hour and run after it."""
+    """With the backoff respected, now= is the moment it is respected at."""
     with transaction.atomic():
         fire(order)
     retry = datetime.now(timezone.utc) + timedelta(hours=1)

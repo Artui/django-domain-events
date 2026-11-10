@@ -1,9 +1,3 @@
-"""Tests mirroring ``django_domain_events/delivery/not_yet.py``.
-
-Construction is tested directly; everything else is what the relay does on
-reading it, because that is the only place the time means anything.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -61,9 +55,7 @@ def _row(key: str = KEY) -> DeliveryRecord:
 
 
 def _extended_to(until: datetime, key: str = KEY, **declaration: object) -> list[DeliveryContext]:
-    """Declare a receiver that answers its first run with ``NotYet(until)`` - the
-    offer was extended - and does its work on the next. Returns the contexts it
-    was handed."""
+    """Declare a receiver that answers NotYet(until) on its first run."""
     seen: list[DeliveryContext] = []
 
     def expire(event: Unheard, context: DeliveryContext) -> None:
@@ -87,18 +79,14 @@ def test_it_carries_the_time_and_the_reason() -> None:
 
 
 def test_without_a_reason_it_says_until_when(settings) -> None:
-    # The wording, on the setting that keeps the offset; under USE_TZ = False
-    # the time is local and says so by having none.
+    # Under USE_TZ = False the time is local, and the message says so.
     settings.USE_TZ = True
     until = datetime(2099, 1, 1, tzinfo=timezone.utc)
     assert str(NotYet(until)) == "not due until 2099-01-01T00:00:00+00:00"
 
 
 def test_a_naive_time_is_refused(settings) -> None:
-    """Read as UTC or as local time, it is wrong for somebody by hours - under
-    ``USE_TZ = True``. Under ``False`` naive is the project's own convention
-    and is accepted, which ``tests/test_naive_datetimes.py`` holds; together
-    they hold both halves of the refusal's condition."""
+    """Read as UTC or as local time, it is wrong for somebody by hours - under ``USE_TZ = True``."""
     settings.USE_TZ = True
     with pytest.raises(ValueError, match="NotYet needs an aware datetime"):
         NotYet(datetime(2099, 1, 1))
@@ -106,24 +94,20 @@ def test_a_naive_time_is_refused(settings) -> None:
 
 @pytest.mark.parametrize("until", [3600, "2099-01-01T00:00:00Z", timedelta(hours=1)])
 def test_anything_but_a_datetime_is_refused(until: object) -> None:
-    """A delay is ``RetryAfter``'s spelling, and the two mean different
-    things; a time the application decided is an absolute one."""
+    """A time the application decided is absolute, not a RetryAfter delay."""
     with pytest.raises(TypeError, match="NotYet needs a datetime"):
         NotYet(until)
 
 
 @pytest.mark.parametrize("ago", [timedelta(0), timedelta(seconds=1), timedelta(days=1)])
 def test_a_time_that_is_not_in_the_future_is_refused(ago: timedelta) -> None:
-    """A deferral spending no attempt to a time already come would be claimed
-    straight back and answered the same way, a hot loop nothing ends."""
+    """A deferral to an already-past time would be claimed back: a hot loop."""
     with pytest.raises(ValueError, match="NotYet needs a time in the future"):
         NotYet(_now() - ago)
 
 
 def test_an_early_run_moves_the_row_to_the_time_and_spends_no_attempt() -> None:
-    """The extended offer: the 48-hour row ran, the offer now ends at 72, and
-    the row is due again then - with its budget untouched, because nothing
-    failed."""
+    """The offer extended to 72 hours: the row is due again then, budget untouched."""
     until = _now() + timedelta(hours=24)
     _extended_to(until, max_attempts=1)
     _fire()
@@ -137,13 +121,7 @@ def test_an_early_run_moves_the_row_to_the_time_and_spends_no_attempt() -> None:
 
 
 def test_the_documented_pattern_does_the_work_of_a_row_that_runs_after_the_moved_time() -> None:
-    """The comparison the docs teach is ``until > max(ctx.due_at, now)``, and the
-    clock term is what this holds: a row due two hours ago whose moved time is
-    already an hour gone has nothing left to wait for. Comparing against
-    ``ctx.due_at`` alone raises ``NotYet`` with a past time, which is refused
-    with a ``ValueError`` and recorded as an ordinary failure - and ``due_at``
-    never moves, so every retry would repeat it. Written exactly as documented,
-    the receiver does the work, the row succeeds and nothing fails."""
+    """A row whose moved time is already past has nothing left to wait for."""
     moved_to = _now() - timedelta(hours=1)
     done: list[int] = []
 
@@ -179,9 +157,7 @@ def test_the_row_is_not_claimed_again_before_the_time() -> None:
 
 
 def test_at_the_time_it_runs_with_the_same_attempt_and_the_new_due_time() -> None:
-    """The context carries the time the receiver asked for, so the next run
-    compares against it and goes ahead; the attempt number is the one it was
-    given before, since none was spent."""
+    """The context carries the requested time; the attempt number is unchanged."""
     until = _now() + timedelta(hours=24)
     seen = _extended_to(until)
     _fire()
@@ -195,9 +171,7 @@ def test_at_the_time_it_runs_with_the_same_attempt_and_the_new_due_time() -> Non
 
 
 def test_a_time_past_the_retry_ceiling_is_not_capped(settings) -> None:
-    """``MAX_RECEIVER_RETRY_DELAY_SECONDS`` bounds a destination's advice about
-    its own readiness. This is the application's own declaration of when the
-    work is due, so it is kept as given, and health shows it as scheduled."""
+    """MAX_RECEIVER_RETRY_DELAY_SECONDS bounds a destination's advice on readiness."""
     settings.DOMAIN_EVENTS = {"MAX_RECEIVER_RETRY_DELAY_SECONDS": 60}
     until = _now() + timedelta(days=30)
     _extended_to(until)
@@ -222,10 +196,7 @@ def test_it_is_not_a_failure_so_on_failure_is_not_told() -> None:
 
 
 def test_give_up_after_does_not_end_it() -> None:
-    """``give_up_after`` bounds a throttle the receiver does not control. A due
-    time is the application's own, so a row rescheduled past the bound is not
-    dead-lettered for it - and a receiver declaring no bound does not have the
-    answer counted against its attempts either."""
+    """``give_up_after`` bounds a throttle the receiver does not control."""
     until = _now() + timedelta(days=3)
     _extended_to(until, key="probe.bounded", give_up_after=timedelta(minutes=1))
     _extended_to(until, key="probe.unbounded", max_attempts=1)
@@ -239,8 +210,7 @@ def test_give_up_after_does_not_end_it() -> None:
 
 
 def test_it_sets_nothing_else_aside() -> None:
-    """A deferral pauses its lane because a throttle limits every row behind
-    it. This is about one row, so every other row in the batch is delivered."""
+    """A deferral pauses its lane because a throttle limits every row behind it."""
     _extended_to(_now() + timedelta(hours=1))
     ran: list[int] = []
     receiver(Unheard, key="probe.neighbour")(lambda event: ran.append(event.value))
@@ -254,11 +224,7 @@ def test_it_sets_nothing_else_aside() -> None:
 
 
 def test_a_drain_told_a_later_time_runs_a_rescheduled_row_once() -> None:
-    """A receiver deciding by the real clock answers ``NotYet`` on every run of
-    a drain told a time beyond its answer, and spends nothing doing so. The pass
-    leaves a row it has rescheduled out of its later claims, so it ends.
-    Past five calls the receiver raises a BaseException, which nothing in the
-    relay catches, so a regression fails here rather than hanging the suite."""
+    """A receiver on the real clock answers NotYet on every run of a drain told later."""
     calls: list[int] = []
 
     def always_later(event: Unheard) -> None:
@@ -284,9 +250,7 @@ def test_a_direct_call_reschedules_the_row_too() -> None:
 
 
 def test_an_inline_receiver_raising_it_fails_the_callers_change() -> None:
-    """Read by the relay and by nothing else: an INLINE receiver has no row to
-    move, so ``NotYet`` is an ordinary exception there and rolls the change back
-    with the event."""
+    """Read by the relay alone: an INLINE NotYet is an ordinary exception."""
 
     def early(event: Unheard) -> None:
         raise NotYet(_now() + timedelta(hours=1))
@@ -300,8 +264,7 @@ def test_an_inline_receiver_raising_it_fails_the_callers_change() -> None:
 
 @pytest.mark.django_db(transaction=True)
 def test_an_on_commit_receiver_raising_it_has_it_logged(caplog) -> None:
-    """An ON_COMMIT receiver runs after the change committed, so ``NotYet`` is
-    logged as any exception it raises is, and moves nothing."""
+    """An ON_COMMIT NotYet is logged like any exception, and moves nothing."""
 
     def early(event: Unheard) -> None:
         raise NotYet(_now() + timedelta(hours=1))

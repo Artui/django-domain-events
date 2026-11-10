@@ -1,17 +1,3 @@
-"""A project on ``USE_TZ = False``, through the public surface.
-
-Django stores and returns naive datetimes in ``TIME_ZONE`` local time under that
-setting, and refuses an aware one on SQLite. The package used to take "now" as
-an aware UTC value, so every comparison with a column it read back raised
-``TypeError``, and every write of one failed on SQLite. Each test here switches
-the setting itself, so it runs in the default suite on either backend - the
-whole suite also runs under the setting in CI (``DDE_TEST_USE_TZ=false``), which
-is the broad gate; these are the cases that name what broke.
-
-The test settings leave ``TIME_ZONE`` at Django's America/Chicago, so a naive
-value read as UTC would be hours out, not equal by accident.
-"""
-
 from __future__ import annotations
 
 import io
@@ -71,9 +57,7 @@ def _row(key: str) -> DeliveryRecord:
 
 
 def test_what_the_package_writes_reads_back_naive() -> None:
-    """The writes follow the setting: SQLite refuses an aware value outright
-    under it, and on Postgres an aware one would read back as a different
-    kind of value from the one written."""
+    """SQLite refuses an aware value under this setting; Postgres changes its kind."""
     receiver(Unheard, key="probe.ok")(lambda event: None)
     _fire()
     drain_outbox()
@@ -81,14 +65,11 @@ def test_what_the_package_writes_reads_back_naive() -> None:
     assert row.status == DeliveryStatus.SUCCEEDED
     for value in (row.available_at, row.completed_at, row.succeeded_at, row.event.recorded_at):
         assert django_timezone.is_naive(value)
-    # Local time, not UTC: within a minute of the project's own clock.
     assert abs(row.succeeded_at - django_timezone.now()) < timedelta(minutes=1)
 
 
 def test_a_deferral_that_does_not_count_is_recorded() -> None:
-    """The give-up bound subtracted an aware now from a naive recorded_at, so
-    every ``RetryAfter(counts=False)`` raised ``TypeError`` instead of being
-    recorded."""
+    """The give-up bound subtracted an aware now from a naive recorded_at."""
 
     def deferring(event: Unheard) -> None:
         raise RetryAfter(30, counts=False)
@@ -102,8 +83,7 @@ def test_a_deferral_that_does_not_count_is_recorded() -> None:
 
 
 def test_a_failed_row_run_directly_is_refused_until_its_backoff_ends() -> None:
-    """The owed check compared an aware now with the naive ``available_at``, so
-    a FAILED row handed to ``deliver_one`` without a claim raised."""
+    """The owed check compared aware and naive times, so a claimless row raised."""
     receiver(Unheard, key="probe.backoff")(lambda event: None)
     _fire()
     DeliveryRecord.objects.filter(receiver_key="probe.backoff").update(
@@ -125,8 +105,7 @@ def test_a_scheduled_receiver_is_written_at_its_due_time() -> None:
 
 
 def test_a_due_callable_may_answer_in_local_time() -> None:
-    """Under this setting a naive value is the project's own convention, not a
-    guess, so it is read as ``TIME_ZONE`` local time rather than refused."""
+    """A naive value is the project's convention, read as TIME_ZONE local time."""
     when = django_timezone.now() + timedelta(days=1)
     receiver(Unheard, key="probe.local", due=lambda event: when)(lambda event: None)
     _fire()
@@ -234,8 +213,7 @@ def test_a_relay_on_an_aware_clock_claims_and_delivers() -> None:
 
 
 def test_handing_back_writes_a_lease_the_backend_accepts() -> None:
-    """The handed-back lease is a fixed instant, and it was an aware constant,
-    which SQLite refuses to store under this setting."""
+    """The handed-back lease is a fixed instant, stored naive under this setting."""
     receiver(Unheard, key="probe.handed")(lambda event: None)
     _fire()
     claimed_at = django_timezone.now()
@@ -245,8 +223,7 @@ def test_handing_back_writes_a_lease_the_backend_accepts() -> None:
 
 
 def test_a_task_message_round_trips_its_claim(caplog: pytest.LogCaptureFixture, settings) -> None:
-    """The claim a task carries is the ``claimed_at`` read back, as ISO text;
-    naive under this setting, and it has to match the column it came from."""
+    """The claim a task carries is claimed_at as ISO text, naive like its column."""
     receiver(Unheard, key="probe.task")(lambda event: None)
     _fire()
     claim_batch(worker_id="relay", now=django_timezone.now(), lease=timedelta(minutes=5), limit=10)
@@ -258,8 +235,7 @@ def test_a_task_message_round_trips_its_claim(caplog: pytest.LogCaptureFixture, 
 
 
 def test_a_claim_told_an_aware_time_writes_it_as_local_time() -> None:
-    """``claim_batch`` is public, and writes the ``now`` it is told as the claim,
-    so it converts the value itself rather than trusting a caller to have."""
+    """claim_batch is public, so it converts the now it is given itself."""
     receiver(Unheard, key="probe.claimed")(lambda event: None)
     _fire()
     told = datetime.now(timezone.utc)

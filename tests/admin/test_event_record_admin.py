@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/admin/event_record_admin.py``."""
-
 from __future__ import annotations
 
 import pytest
@@ -32,15 +30,12 @@ def _admin() -> EventRecordAdmin:
 
 
 def test_django_autodiscovery_registers_our_model_admin() -> None:
-    """The integration itself: the admin lives in a package Django imports on
-    its own. A ModelAdmin built by hand in a test would pass with the package
-    never loaded at all."""
+    """The integration itself: the admin lives in a package Django imports on its own."""
     assert isinstance(admin.site._registry[EventRecord], EventRecordAdmin)
 
 
 def test_the_log_cannot_be_added_changed_or_deleted() -> None:
-    """The one guarantee this package sells is that a row exists if and only if
-    the change committed. A form that can write one is a way to break it."""
+    """A row exists if and only if the change committed: the package's one guarantee."""
     site, request = _admin(), _request()
     assert site.has_add_permission(request) is False
     assert site.has_change_permission(request) is False
@@ -65,8 +60,7 @@ def test_owed_counts_only_unsettled_deliveries(order: OrderPlaced, record: list[
 
 
 def test_a_cancelled_delivery_is_not_owed(order: OrderPlaced, record: list[str]) -> None:
-    """The column counts what is still owed, and a cancelled row never will
-    be: counted, the event would read as waiting on work nobody will do."""
+    """The column counts what is still owed; a cancelled row never will be."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").update(
@@ -102,10 +96,7 @@ def test_replay_reopens_and_reports(order: OrderPlaced, record: list[str]) -> No
 def test_cancel_withdraws_every_owed_delivery_of_the_events_and_reports(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Through cancel_deliveries, across every receiver of the selected events:
-    the owed rows are cancelled, the claimed one is left to run and counted, a
-    settled one keeps its outcome, and an event not selected is untouched. Two
-    cancelled and one in flight, so neither count can stand in for the other."""
+    """Cancels across every receiver of the selected events, leaving the rest alone."""
     with transaction.atomic():
         chosen = fire(order)
         other = fire(order)
@@ -144,9 +135,7 @@ def test_cancel_withdraws_every_owed_delivery_of_the_events_and_reports(
 def test_cancel_goes_through_the_operation(
     order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The action calls cancel_deliveries rather than updating the rows itself:
-    the operation's event lock is what makes a cancel wait for an open replay,
-    which no single-connection outcome here would notice missing."""
+    """Calls cancel_deliveries: its event lock makes a cancel wait for an open replay."""
     with transaction.atomic():
         chosen = fire(order)
         fire(order)

@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/what_listens_to.py``."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -20,8 +18,7 @@ def test_it_returns_every_receiver_sorted_by_key() -> None:
 
 
 def test_it_spans_every_mode() -> None:
-    """Not only the durable ones: "who reacts to this" is a question about the
-    code, and an inline receiver is as much a reaction as a queued one."""
+    """Inline receivers are reactions too, so they are listed beside queued ones."""
     modes = {r.mode.value for r in what_listens_to(OrderPlaced)}
     assert modes == {"durable", "inline", "on_commit"}
 
@@ -56,8 +53,7 @@ WILDCARD = RegisteredReceiver(
 
 
 def test_a_wildcard_is_the_plus_and_is_not_listed_per_event() -> None:
-    """It receives the event, as it receives every event; listing a transport
-    under each one says nothing about any of them."""
+    """It receives every event, so listing a transport under each says nothing."""
     with receiver_registered(WILDCARD):
         assert "testapp.everything" not in [r.key for r in what_listens_to(OrderPlaced)]
         assert what_listens_to(Unheard) == []
