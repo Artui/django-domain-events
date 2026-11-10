@@ -28,11 +28,7 @@ MAX_NAME_LENGTH = 255
 
 
 class Registry:
-    """What exists, and what listens to it.
-
-    Both directions are indexed because both are hot: firing looks up by class,
-    delivery looks up by the name written on the row.
-    """
+    """What exists, and what listens to it, indexed both ways because both are hot."""
 
     def __init__(self) -> None:
         self._events_by_class: dict[type, RegisteredEvent] = {}
@@ -40,14 +36,7 @@ class Registry:
         self._receivers: dict[str, RegisteredReceiver] = {}
 
     def register_event(self, entry: RegisteredEvent) -> None:
-        # Here rather than in ``@event`` so every route to registration shares one
-        # check. Before the clash check and both index writes, so a refused name
-        # registers nothing. SQLite enforces nothing, so a longer name works there;
-        # Postgres raises DataError from the insert in fire(), inside the caller's
-        # transaction. The coverage gate cannot see the boundary:
-        # test_an_event_name_of_exactly_the_limit_is_registered_directly fails on
-        # ``>=``, and test_an_event_name_over_the_limit_is_refused_by_the_registry_itself
-        # fails without the check.
+        # Shared by every registration route; SQLite would accept a name Postgres refuses.
         if len(entry.name) > MAX_NAME_LENGTH:
             raise ValueError(
                 f"Event name {entry.name[:60]!r}... is {len(entry.name)} characters; "
@@ -66,15 +55,6 @@ class Registry:
         self._events_by_name[entry.name] = entry
 
     def register_receiver(self, receiver: RegisteredReceiver) -> None:
-        # Here rather than in ``@receiver`` so every route to registration shares
-        # one check, and before the clash check so a key both too long and taken says
-        # which. Postgres truncates the key in the bulk insert (Django 5.2.0-5.2.9,
-        # 6.0.0) or raises DataError at fire time; SQLite enforces nothing. INLINE
-        # and ON_COMMIT write no row, and are held to the rule anyway so a key stays
-        # valid when its mode changes: the check reads no mode. The coverage gate
-        # cannot see the boundary: test_a_receiver_key_of_exactly_the_limit_is_registered_directly
-        # fails on ``>=``; and test_a_long_key_is_refused_in_every_mode fails on a
-        # check scoped to DURABLE.
         if len(receiver.key) > MAX_KEY_LENGTH:
             raise ValueError(
                 f"Receiver key {receiver.key[:60]!r}... is {len(receiver.key)} characters; "
@@ -83,13 +63,7 @@ class Registry:
                 f"when its mode changes. A longer one is truncated or rejected by the "
                 f"database only when an event fires. Set a shorter key=."
             )
-        # Equality, not identity of the callable. Tolerating "same function"
-        # was meant to survive a double import, but stacked decorators are
-        # exactly that shape - one function, two events, one derived key - so
-        # the second registration silently replaced the first and an event
-        # fired to nothing. Comparing the whole record keeps double imports
-        # working and catches stacking, a changed mode and a changed
-        # max_attempts alike.
+        # Compare the whole record: stacked decorators must not silently replace each other.
         existing = self._receivers.get(receiver.key)
         if existing is not None and existing != receiver:
             raise ValueError(
@@ -108,13 +82,7 @@ class Registry:
         return self._events_by_name.get(name)
 
     def receivers_for(self, event_class: type) -> list[RegisteredReceiver]:
-        """Every receiver an event of this class is owed to, in declaration order.
-
-        The ones declared for the class, **and** every wildcard declared for
-        ``AnyEvent``. The wildcard is matched here, at the moment of asking,
-        rather than expanded when it is declared - which is what makes it reach
-        an event declared by an app that loaded after it.
-        """
+        """The receivers owed an event of this class, including every wildcard."""
         return [
             r
             for r in self._receivers.values()
@@ -131,20 +99,11 @@ class Registry:
         return list(self._receivers.values())
 
     def receiver_keys_in_lane(self, lane: str) -> list[str]:
-        """The keys of the receivers declared in ``lane``, sorted.
-
-        What a relay serving a named lane claims. Asked on every claim rather
-        than cached, so membership is whatever the registry says at that moment.
-        """
+        """The keys of the receivers declared in ``lane``, sorted; asked on every claim."""
         return sorted(r.key for r in self._receivers.values() if r.lane == lane)
 
     def receiver_keys_in_named_lanes(self) -> list[str]:
-        """The keys of every receiver declared in a lane other than the default.
-
-        The default lane is phrased as *not these* rather than as the receivers
-        declared in it, because that is what reaches a row whose receiver was
-        deleted: it names no lane at all, and it still has to drain.
-        """
+        """Keys of every receiver in a named lane; the default lane is their complement."""
         return sorted(r.key for r in self._receivers.values() if r.lane != DEFAULT_LANE)
 
     def lanes(self) -> list[str]:
@@ -152,46 +111,12 @@ class Registry:
         return sorted({DEFAULT_LANE} | {r.lane for r in self._receivers.values()})
 
     def lane_for_key(self, key: str) -> str:
-        """The lane a row of ``key`` is claimed in: its receiver's, or the default.
-
-        A key no receiver holds - one deleted since its rows were written -
-        is in the default lane, because that lane is phrased as every row no
-        named lane takes, and it is where those rows drain
-        (``test_a_key_with_no_receiver_is_in_the_default_lane``).
-        """
+        """The lane a row of ``key`` is claimed in: its receiver's, or the default if none."""
         receiver = self._receivers.get(key)
         return DEFAULT_LANE if receiver is None else receiver.lane
 
     def claim_lease_seconds(self, lane: str | None, *, default: int, eager: bool = False) -> float:
-        """The lease a claim of ``lane`` stamps, in seconds: its base times the headroom.
-
-        The base is the effective lease - ``lease_seconds``, or ``default``
-        where none is declared - shared by every durable receiver the claim can
-        take, when they all share one, and ``default`` otherwise: a lane mixing
-        leases, or no durable receiver at all. A named lane's receivers are
-        those declared in it, the default lane's are those declared in no named
-        one, and None is every receiver. ``eager`` narrows them to the eager
-        ones, for the attempt after commit, which claims only their rows.
-
-        The base never exceeds ``default``. A lane of receivers declaring a
-        longer lease than ``LEASE_SECONDS`` is claimed under the setting, as the
-        default lane is, and each row extended to its own lease when it starts: stamped
-        with theirs, the unstarted tail of a batch a relay was killed holding
-        would wait out half an hour rather than five and a half minutes
-        (``test_a_long_lease_lane_recovers_in_the_setting``). A lease longer than
-        the setting plus the headroom gains no skip, and no lane loses recovery
-        time to a long lease.
-
-        ``default`` is ``LEASE_SECONDS``, passed in rather than read here so the
-        registry stays free of settings. Asked on every claim, as lane
-        membership is, so it is whatever the declarations say at that moment.
-
-        Each filter is one arc with the others, so each names its test in
-        ``tests/declaration/test_registry_claim_lease.py``: the mode -
-        ``test_a_receiver_that_writes_no_rows_does_not_count``; ``eager`` -
-        ``test_the_eager_attempt_counts_only_eager_receivers``; the lane -
-        ``test_a_named_lane_counts_only_its_own_receivers``.
-        """
+        """The lease a claim of ``lane`` stamps, in seconds: its base times the headroom."""
         leases = {
             default if r.lease_seconds is None else r.lease_seconds
             for r in self._receivers.values()
@@ -203,18 +128,7 @@ class Registry:
         return min(shared, default) * LEASE_HEADROOM
 
     def require_lane(self, lane: str | None) -> None:
-        """Refuse a lane no receiver is declared in.
-
-        A relay started for one - a typo in a manifest, or a lane renamed in
-        the code and not in the deployment - would claim nothing, forever, and
-        look healthy doing it. None is every lane, and the default lane exists
-        with no receiver in it, because that is where a deleted receiver's rows
-        drain.
-
-        One arc, two conjuncts, each held by a case of
-        ``test_a_declared_lane_the_default_and_every_lane_are_accepted``: None
-        for the first, a declared lane for the second.
-        """
+        """Refuse a lane no receiver declares: a typo would claim nothing, and look healthy."""
         if lane is not None and lane not in self.lanes():
             raise ValueError(
                 f"No receiver is declared in lane {lane!r}, so a relay serving it "
