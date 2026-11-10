@@ -10,15 +10,7 @@ from django_domain_events.types.retention import Retention
 
 
 def render_catalogue(catalogue: Catalogue, *, format: str = "markdown") -> str:
-    """Render a catalogue as a document, in Markdown or JSON.
-
-    Both, because they answer different questions: Markdown is read by a person
-    onboarding onto a codebase, JSON is diffed by a pipeline that wants to fail
-    a pull request for removing a field other teams consume.
-
-    Both end in exactly one newline. These are written to a file and diffed,
-    and a file with no final newline reports a change on its last line forever.
-    """
+    """Render a catalogue as a document, in Markdown or JSON, ending in exactly one newline."""
     if format == "json":
         return json.dumps(dataclasses.asdict(catalogue), indent=2, sort_keys=False) + "\n"
     if format == "markdown":
@@ -30,9 +22,7 @@ def _markdown(catalogue: Catalogue) -> str:
     lines = ["# Event catalogue", ""]
     wildcards = bool(catalogue.wildcard_receivers)
     if wildcards:
-        # First, because every section below refers to it, and a reader told
-        # "plus every wildcard receiver" should not have to scroll past two
-        # hundred events to find out who that is.
+        # The wildcard section comes first, because every section below refers to it.
         lines += [
             "## Every event",
             "",
@@ -65,10 +55,6 @@ def _markdown(catalogue: Catalogue) -> str:
             )
         lines.append("")
         if not event.receivers:
-            # Worth saying rather than leaving the section empty: an event with
-            # no receivers is a real finding, and the usual reason to read a
-            # catalogue at all. Said differently when a wildcard exists, because
-            # then "nothing listens" is false.
             lines += [
                 "No receiver is declared for this event alone; every wildcard receiver "
                 "still receives it."
@@ -89,9 +75,7 @@ def _receiver_table(receivers: tuple[CatalogueReceiver, ...]) -> list[str]:
         "| --- | --- | --- | --- | --- | --- |",
     ]
     for receiver in receivers:
-        # Blanked rather than printed for a mode they do not apply to. The
-        # declaration carries defaults nobody chose, and "5" beside an
-        # INLINE receiver reads as a retry budget it will never have.
+        # Blanked rather than printed for a mode they do not apply to.
         durable = receiver.mode == "durable"
         site = _cell(receiver.site) if durable else "-"
         attempts = str(receiver.max_attempts) if durable else "-"
@@ -102,9 +86,6 @@ def _receiver_table(receivers: tuple[CatalogueReceiver, ...]) -> list[str]:
             f"{attempts} | {eager} | {lease if durable else '-'} |"
         )
     lines.append("")
-    # Prose under the table rather than a seventh column. A column would
-    # change every table in every catalogue a project has already committed,
-    # for a property most receivers do not have.
     for receiver in receivers:
         if receiver.targets is not None:
             lines += [
@@ -113,12 +94,6 @@ def _receiver_table(receivers: tuple[CatalogueReceiver, ...]) -> list[str]:
                 "",
             ]
         if receiver.backoff_base_seconds is not None or receiver.backoff_cap_seconds is not None:
-            # Either half alone is a curve of its own; the other half is named
-            # as the setting it comes from rather than resolved, because the
-            # catalogue describes declarations and a setting can differ between
-            # the machine that builds it and the ones that run the relay. Each
-            # half of the condition is held by one case of
-            # test_a_declared_curve_is_said_in_prose_under_the_table.
             base = _seconds(receiver.backoff_base_seconds, "BACKOFF_BASE_SECONDS")
             cap = _seconds(receiver.backoff_cap_seconds, "BACKOFF_CAP_SECONDS")
             lines += [
@@ -165,20 +140,14 @@ _POLICIES = {
 
 
 def _retention(event: CatalogueEvent) -> str:
-    """A sentence for an event kept other than for ``RETENTION_DAYS``, or blank.
-
-    Said in prose, as the upgrade hook is, because it changes what an operator
-    will find in the table: an event deleted on consumption is not there to
-    replay an hour later.
-    """
+    """A sentence for an event kept other than for ``RETENTION_DAYS``, or blank."""
     if event.retention_seconds is not None:
         return f"Kept for {_duration(event.retention_seconds)} rather than `RETENTION_DAYS`."
     return _POLICIES.get(event.delete_when, "")
 
 
 def _duration(seconds: int) -> str:
-    """The largest whole unit, since a window is declared as a timedelta and
-    ``604800 seconds`` is not how anyone wrote ``timedelta(days=7)``."""
+    """The largest whole unit a window is declared in, so a week reads as days."""
     unit, count = "second", seconds
     for name, size in (("day", 86400), ("hour", 3600)):
         if seconds % size == 0:
@@ -193,35 +162,17 @@ def _seconds(value: float | None, setting: str) -> str:
 
 
 def _plain(value: float) -> str:
-    """A duration in seconds as ``1209600s``.
-
-    Fifteen significant digits rather than ``:g``'s six, which writes a
-    fortnight - the delay a scheduled reminder is likeliest to have - as
-    ``1.2096e+06s``. Still the shortest form for the rest: ``0.5s``, ``60s``
-    (test_a_duration_of_a_million_seconds_or_more_is_written_out).
-    """
+    """A duration in seconds as ``1209600s``: fifteen significant digits, not six."""
     return f"{value:.15g}s"
 
 
 def _cell(value: str) -> str:
-    """Escape a pipe so it stays inside its table cell.
-
-    A GitHub-flavoured table is split on pipes *before* inline parsing, so
-    backticks do not protect one: ``str | None`` - the commonest annotation
-    there is - silently becomes two cells, shifting every later column and
-    reporting an optional field as required. The escape survives inside a code
-    span, and Python-Markdown tolerates it too, which is why a mkdocs preview
-    cannot catch the unescaped version.
-    """
+    """Escape a pipe so it stays in its table cell; the split happens before inline parsing."""
     return value.replace("|", "\\|")
 
 
 def _joined(lines: list[str]) -> str:
-    """One trailing newline, never two.
-
-    Every section appends a blank separator, so the last one leaves a blank
-    line at the end of the file.
-    """
+    """One trailing newline, never two: every section appends a blank separator."""
     while lines and not lines[-1]:
         lines.pop()
     return "\n".join(lines) + "\n"
