@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/outbox_health.py``."""
-
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -43,8 +41,7 @@ def test_an_empty_outbox_is_all_zeroes_and_no_timestamp() -> None:
 
 
 def test_owed_counts_what_the_relay_will_pick_up(order: OrderPlaced, record: list[str]) -> None:
-    """Owed means not terminal, the same definition the relay claims by, so
-    this cannot say the queue is empty while the relay still has work."""
+    """Owed means not terminal, the same definition the relay claims by."""
     with transaction.atomic():
         fire(order)
     assert outbox_health().owed == 2
@@ -74,9 +71,7 @@ def test_the_oldest_owed_timestamp_is_when_the_work_arrived(
 def test_a_failing_receiver_does_not_produce_a_negative_age(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The backoff pushes available_at into the future on every failed
-    attempt, so an age read off that column goes negative exactly while a
-    receiver is failing - which is when the alert has to fire."""
+    """An age read off available_at goes negative while a receiver fails."""
     with transaction.atomic():
         fire(order)
     recorded = EventRecord.objects.get().recorded_at
@@ -103,8 +98,7 @@ def test_a_settled_row_does_not_hold_the_oldest_timestamp_open(
 
 
 def test_dead_is_counted_but_not_owed(order: OrderPlaced, record: list[str]) -> None:
-    """A dead letter is not work the relay will do. Counting it as owed would
-    make a backlog alert fire forever after one bad deploy."""
+    """A dead letter is not work the relay will do."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(status=DeliveryStatus.DEAD, attempts=5)
@@ -113,8 +107,7 @@ def test_dead_is_counted_but_not_owed(order: OrderPlaced, record: list[str]) -> 
 
 
 def test_a_lapsed_lease_is_visible(order: OrderPlaced, record: list[str]) -> None:
-    """Steady non-zero means workers are dying mid-delivery, or a receiver
-    outruns its lease and has its work thrown away every time."""
+    """Steady non-zero means workers die mid-delivery, or a lease is outrun every time."""
     now = django_timezone.now()
     with transaction.atomic():
         fire(order)
@@ -150,10 +143,7 @@ def test_the_per_receiver_split_names_who_is_behind(order: OrderPlaced, record: 
 def test_the_per_receiver_split_says_who_holds_the_claims(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The total says rows are claimed; only the split says whose. A receiver
-    whose rows are all claimed and none finishing is a wedged receiver or a
-    queue holding its tasks, where the same total spread evenly is a relay at
-    work. The counts add up to the total, so the split loses nothing."""
+    """The total says rows are claimed; only the split says whose."""
     with transaction.atomic():
         fire(order)
         fire(order)
@@ -170,8 +160,7 @@ def test_the_per_receiver_split_says_who_holds_the_claims(
 def test_receivers_with_nothing_owed_or_dead_are_left_out(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """A list naming every declared receiver every time is a list nobody
-    reads."""
+    """A list naming every declared receiver every time is a list nobody reads."""
     with transaction.atomic():
         fire(order)
     drain_outbox()
@@ -179,14 +168,10 @@ def test_receivers_with_nothing_owed_or_dead_are_left_out(
 
 
 def test_the_worst_backlog_comes_first(order: OrderPlaced, record: list[str]) -> None:
-    """An operator scanning the output reads the top line first, so it has to
-    be the receiver furthest behind."""
+    """An operator reads the top line first, so it must be the receiver furthest behind."""
     with transaction.atomic():
         fire(order)
         fire(replace(order, order_id=8))
-    # The receiver registered *second* is made the worst one, so the expected
-    # order differs from the order the rows come back in. Starving the first
-    # instead passes with no sort at all.
     DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").order_by(
         "pk"
     ).first().delete()
@@ -221,9 +206,7 @@ def _scheduled(due: datetime, **fields: object) -> None:
 def test_a_scheduled_row_is_not_owed_and_does_not_age_before_its_due_time(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """A row due in fourteen days is work that has not arrived. Counting it
-    owed and aging it from the event would trip a five-minute backlog alert
-    five minutes after the event and hold it for the fortnight."""
+    """A row due in fourteen days is work that has not arrived."""
     with transaction.atomic():
         fire(order)
     now = django_timezone.now()
@@ -248,10 +231,7 @@ def test_a_scheduled_row_is_not_owed_and_does_not_age_before_its_due_time(
 def test_a_scheduled_row_failing_after_its_due_time_ages_from_its_due_time(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Work arrives when it becomes due, so that is what its age counts from -
-    not the event three days earlier, which would read as a three-day backlog
-    the moment the row came due, and not ``available_at``, which the backoff
-    pushes ahead into a negative age."""
+    """Age counts from when work became due, not the event and not available_at."""
     with transaction.atomic():
         fire(order)
     now = django_timezone.now()
@@ -268,9 +248,7 @@ def test_a_scheduled_row_failing_after_its_due_time_ages_from_its_due_time(
 
 
 def test_a_row_becomes_owed_at_exactly_its_due_time(order: OrderPlaced, record: list[str]) -> None:
-    """The claim takes a row once ``available_at <= now``, so health has to call
-    it owed at the same instant, or a row the relay could already take would be
-    reported as not having arrived."""
+    """Health uses the claim's instant: a row the relay could take is owed."""
     with transaction.atomic():
         fire(order)
     due = django_timezone.now() + timedelta(hours=1)
@@ -285,11 +263,7 @@ def test_a_row_becomes_owed_at_exactly_its_due_time(order: OrderPlaced, record: 
 def test_a_settled_row_is_never_scheduled_whatever_its_due_time(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """A settled row keeps the due time it was written with, and a row settled
-    before that time came - dead-lettered by hand, or any terminal status a
-    later release adds - is not work waiting for it. The per-receiver split
-    reads owed and dead rows in one query, so its scheduled count has to be
-    narrowed to the owed ones as well as to the not yet due."""
+    """A row settled before its due time is not work waiting for it."""
     with transaction.atomic():
         fire(order)
     _scheduled(django_timezone.now() + timedelta(days=1), status=DeliveryStatus.DEAD)
@@ -303,8 +277,7 @@ def test_a_settled_row_is_never_scheduled_whatever_its_due_time(
 def test_a_receiver_with_only_scheduled_work_is_listed(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Listed after every receiver that is behind, but listed: the per-receiver
-    split is also where an operator sees which reactions are waiting."""
+    """Listed after every behind receiver, so reactions still waiting show."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.filter(receiver_key="testapp.with_context").update(
@@ -324,11 +297,7 @@ def test_a_receiver_with_only_scheduled_work_is_listed(
 
 
 def test_every_status_is_counted_owed_or_settled_exactly_once() -> None:
-    """Owed is phrased as the partial indexes' own predicates, which lists the
-    owed statuses where ``exclude(status__in=TERMINAL)`` could not miss one.
-    So this is what goes red if a status is added and the phrasing is not: one
-    row in every status there is, and the owed count must be every status that
-    is not terminal."""
+    """Owed uses the partial indexes' own predicates, so no owed status can be missed."""
     event = EventRecord.objects.create(
         name="testapp.OrderPlaced",
         version=1,
@@ -360,21 +329,13 @@ postgres_only = pytest.mark.skipif(
 def test_no_query_outbox_health_sends_scans_the_delivery_table(
     plans_without_seqscan: Plans,
 ) -> None:
-    """Each predicate is the partial indexes' own, so each query reads only
-    the owed and dead rows however much delivered history the table holds.
-    A ``status NOT IN (terminal)`` predicate would match none of the owed or
-    dead indexes and read the whole table on every scrape."""
+    """Each predicate is the partial index's own, so only owed rows are read."""
     owed = {"dde_owed_by_available_at", "dde_claimed_by_lease"}
     dead = {"dde_dead_by_receiver"}
     plans = plans_without_seqscan(outbox_health)
     access = [delivery_table_access(plan) for plan in plans]
     assert access[:2] == [owed, dead], plans
-    # Owed-or-dead implies "not succeeded", so the prune's index of unfinished
-    # rows serves the per-receiver split too, in one scan where the three
-    # above take a bitmap OR; it holds no succeeded row either.
     assert access[2] in (owed | dead, {"dde_unfinished_by_event"}), plans
-    # The pause table is read fourth and last, which is what keeps the three
-    # above describing the delivery table's queries.
     assert len(plans) == 4, plans
     assert LanePauseRecord._meta.db_table in plans[3], plans
 
@@ -382,8 +343,7 @@ def test_no_query_outbox_health_sends_scans_the_delivery_table(
 def test_a_receiver_with_only_scheduled_work_sorts_after_one_that_is_behind(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Whatever the keys: here the scheduled receiver's key sorts first, so
-    only ranking by what is owed puts it last."""
+    """Whatever the keys, ranking by what is owed is the only thing that puts it last."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.filter(receiver_key="testapp.durable_receiver").update(
@@ -398,8 +358,7 @@ def test_a_receiver_with_only_scheduled_work_sorts_after_one_that_is_behind(
 
 
 def test_a_consumer_constructing_outbox_health_positionally_keeps_working() -> None:
-    """``lanes`` is defaulted and comes after ``scheduled``, so a call written
-    before it existed still lands each value in the field it meant."""
+    """lanes is defaulted and follows scheduled, so older calls still land each value."""
     health = OutboxHealth(0, 0, 0, None, 0, (), 5)
     assert health.scheduled == 5
     assert health.lanes == ()
@@ -465,8 +424,7 @@ def _pause(lane: str, worker_id: str, until: datetime) -> None:
 
 
 def test_an_empty_outbox_still_lists_the_default_lane() -> None:
-    """A lane is listed whether or not anything is owed in it, so a dashboard
-    has a series per lane rather than one that vanishes when it drains."""
+    """A lane is listed whether or not anything is owed, so its series never vanishes."""
     (default,) = outbox_health().lanes
     assert (default.lane, default.owed, default.scheduled, default.claimed, default.dead) == (
         "default",
@@ -489,9 +447,7 @@ def test_every_declared_lane_is_listed_with_zeros(lanes: None) -> None:
 def test_a_lane_sums_its_receivers_and_carries_the_oldest_of_them(
     order: OrderPlaced, record: list[str], lanes: None
 ) -> None:
-    """Both test-app receivers are in the default lane. The older owed row is
-    made the one of the receiver that ranks *second*, so a rollup taking the
-    first receiver's age rather than the minimum reads the wrong one."""
+    """Both test-app receivers are in the default lane."""
     _fire(order, replace(order, order_id=8))
     now = django_timezone.now()
     stuck = now - timedelta(hours=5)
@@ -513,7 +469,6 @@ def test_a_lane_sums_its_receivers_and_carries_the_oldest_of_them(
     ]
     assert _counts(health)[0] == ("default", 2, 1, 1, 1)
     assert health.lanes[0].oldest_owed_at == stuck
-    # Nothing is lost or counted twice in the rollup.
     assert sum(b.owed for b in health.lanes) == health.owed
     assert sum(b.scheduled for b in health.lanes) == health.scheduled
     assert sum(b.claimed for b in health.lanes) == health.claimed
@@ -538,10 +493,7 @@ def test_a_named_lane_counts_its_own_receivers_and_no_others(
 def test_a_deleted_receivers_rows_are_counted_in_the_default_lane(
     order: OrderPlaced, record: list[str], lanes: None
 ) -> None:
-    """A key no receiver holds drains through the default lane, so that is
-    where its backlog shows - not in the lane it was declared in, and not
-    nowhere. With the receiver gone ``zulu`` is declared by nobody, so it is
-    not listed either."""
+    """A key no receiver holds drains through the default lane."""
     _fire(Zulu(value=1), Zulu(value=2))
     with receiver_deleted("tests.zulu"):
         health = outbox_health()
@@ -549,11 +501,7 @@ def test_a_deleted_receivers_rows_are_counted_in_the_default_lane(
 
 
 def test_lanes_are_ranked_by_owed_then_dead_then_name(lanes: None) -> None:
-    """The receivers' ranking. ``zulu`` is owed the most and sorts last by
-    name; ``mike`` owes nothing but has a dead row, so it comes before the
-    default lane, which sorts before it by name; and ``alpha``, a paused lane
-    nobody declares, ties the default lane on both counts and is put first by
-    its name alone."""
+    """The receivers' ranking."""
     now = django_timezone.now()
     _fire(Zulu(value=1), Zulu(value=2), Mike(value=1))
     DeliveryRecord.objects.filter(receiver_key="tests.mike").update(status=DeliveryStatus.DEAD)
@@ -568,9 +516,7 @@ def test_lanes_are_ranked_by_owed_then_dead_then_name(lanes: None) -> None:
 
 
 def test_a_lanes_unexpired_pauses_are_shown_and_expired_ones_are_not(lanes: None) -> None:
-    """A pause ends at its ``until`` exactly, as the relay reads it, so a row
-    whose ``until`` is now is over. Two relays pausing one lane are two
-    pauses, ordered by worker, which here is not the order of their ends."""
+    """A pause ends at its until exactly, as the relay reads it."""
     now = django_timezone.now()
     _pause("zulu", "host:2", now + timedelta(hours=1))
     _pause("zulu", "host:1", now + timedelta(hours=2))
@@ -588,9 +534,7 @@ def test_a_lanes_unexpired_pauses_are_shown_and_expired_ones_are_not(lanes: None
 
 
 def test_a_paused_lane_nobody_declares_is_listed_with_zero_counts() -> None:
-    """A lane renamed while a relay of the old name still runs: its pause is
-    real and an operator needs to see it, though no receiver is in it any
-    more. Once the pause has passed, the lane is gone."""
+    """A renamed lane's pause is real, though no receiver is in the lane."""
     now = django_timezone.now()
     _pause("renamed", "host:1", now + timedelta(minutes=5))
     _pause("retired", "host:2", now - timedelta(seconds=1))
@@ -603,11 +547,7 @@ def test_a_paused_lane_nobody_declares_is_listed_with_zero_counts() -> None:
 
 
 def test_the_pause_table_is_read_last_and_the_rollup_costs_no_query() -> None:
-    """Four queries: the three over the delivery table, and the pause table
-    after them. The lane counts come from the per-receiver split already
-    read, never a query of their own; and the order is what keeps
-    ``test_no_query_outbox_health_sends_scans_the_delivery_table``, which
-    reads the first three plans, about the delivery table."""
+    """Four queries: the three over the delivery table, and the pause table after them."""
     pause_table = LanePauseRecord._meta.db_table
     with CaptureQueriesContext(connection) as captured:
         outbox_health()

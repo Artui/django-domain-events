@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/render_catalogue.py``."""
-
 from __future__ import annotations
 
 import dataclasses
@@ -24,8 +22,7 @@ def test_markdown_names_every_event_and_its_receivers() -> None:
 
 
 def test_markdown_says_when_nothing_listens() -> None:
-    """An event with no receivers is a finding, and the usual reason to read a
-    catalogue at all. An empty section would read as a rendering bug."""
+    """An event with no receivers is a finding, and the usual reason to read a catalogue at all."""
     document = render_catalogue(catalogue())
     section = document.split("## `testapp.Unheard`")[1].split("## ")[0]
     assert "Nothing listens to this event." in section
@@ -62,8 +59,7 @@ def test_an_unknown_format_is_refused_by_name() -> None:
 
 
 def test_every_document_ends_with_exactly_one_newline() -> None:
-    """It is written to a file, and a file that does not end in a newline is a
-    diff that reports a change on the last line forever."""
+    """A file without a trailing newline reports a change on its last line forever."""
     for form in ("markdown", "json"):
         document = render_catalogue(catalogue(), format=form)
         assert document.endswith("\n")
@@ -71,27 +67,20 @@ def test_every_document_ends_with_exactly_one_newline() -> None:
 
 
 def _cells(row: str) -> list[str]:
-    """Split a row the way a GitHub-flavoured table parser does.
-
-    On pipes that are not escaped, and before any inline parsing - which is
-    exactly why a backtick does not protect one.
-    """
+    """Split a row the way a GitHub-flavoured table parser does."""
     parts = re.split(r"(?<!\\)\|", row)
     return [p.strip() for p in parts[1:-1]]
 
 
 def test_a_union_type_stays_inside_its_cell() -> None:
-    """``str | None`` is the commonest annotation there is, and an unescaped
-    pipe shifts every later column - reporting an optional field as required,
-    in the artefact whose whole purpose is being read and diffed."""
+    """An unescaped pipe in str | None shifts every later column in the table."""
     document = render_catalogue(catalogue())
     row = next(line for line in document.splitlines() if line.startswith("| `note`"))
     assert _cells(row) == ["`note`", "`str \\| None`", "no", "`None`"]
 
 
 def test_every_table_row_has_the_width_of_its_header() -> None:
-    """The failure this guards is silent: a shifted column still renders, it
-    just says something false."""
+    """A shifted column still renders, it just says something false."""
     width = None
     for line in render_catalogue(catalogue()).splitlines():
         if not line.startswith("|"):
@@ -109,8 +98,7 @@ def test_the_declared_lease_is_rendered() -> None:
 
 
 def test_knobs_that_do_not_apply_to_the_mode_are_blanked() -> None:
-    """The declaration carries defaults nobody chose, and `5` beside an INLINE
-    receiver reads as a retry budget it will never have."""
+    """A 5 beside an INLINE receiver reads as a retry budget it never has."""
     document = render_catalogue(catalogue())
     row = next(line for line in document.splitlines() if "`testapp.inline_receiver`" in line)
     assert _cells(row) == ["`testapp.inline_receiver`", "inline", "-", "-", "-", "-"]
@@ -256,8 +244,7 @@ def test_a_retention_of_its_own_is_called_out_in_prose(event: CatalogueEvent, pr
 
 
 def test_the_ordinary_window_is_not_mentioned() -> None:
-    """Every event has it unless it says otherwise, and a line saying so under
-    each would bury the ones that do."""
+    """Every event has it unless it says otherwise, so only exceptions are listed."""
     document = render_catalogue(Catalogue(events=(_kept(),)))
     assert "Kept for" not in document
     assert "Deleted once" not in document
@@ -276,9 +263,7 @@ def _with(**fields: object) -> str:
 
 
 def test_a_named_lane_is_said_in_prose_under_the_table() -> None:
-    """Prose rather than a column, for the reason the targets line gives: a
-    column would change every committed catalogue for a property most receivers
-    do not have."""
+    """Prose, not a column, so committed catalogues do not all change."""
     assert "`shop.mail` is served by relays started with `--lane mail`." in _with(lane="mail")
     assert "--lane" not in _with()
 
@@ -326,8 +311,7 @@ def test_json_carries_give_up_after_in_seconds() -> None:
 
 
 def test_a_due_time_is_said_in_prose_under_the_table() -> None:
-    """Either spelling, and nothing for a receiver that runs at once. Each arm
-    of the rendering has its own case, so deleting either goes red."""
+    """Either spelling, and nothing for a receiver that runs at once."""
     assert "`shop.mail` is due 172800s after the event occurred." in _with(due_seconds=172800.0)
     assert "`shop.mail` is due at the time `shop.when` returns for the event." in _with(
         due_callable="shop.when"
@@ -336,9 +320,7 @@ def test_a_due_time_is_said_in_prose_under_the_table() -> None:
 
 
 def test_a_duration_of_a_million_seconds_or_more_is_written_out() -> None:
-    """A fortnight is 1209600 seconds, and the shortest float formatting writes
-    that as 1.2096e+06 - for the delay a scheduled reminder is most likely to
-    have. Every duration line reads the same way, so each is checked."""
+    """A fortnight is 1209600 seconds, which float formatting writes as 1.2096e+06."""
     fortnight = 14 * 86400.0
     assert "is due 1209600s after the event occurred." in _with(due_seconds=fortnight)
     assert "been owed for 1209600s." in _with(give_up_after_seconds=fortnight)
