@@ -106,7 +106,7 @@ Non-negotiable. They keep the package navigable.
    does not raise there - it yields a model name no registered model matches, and
    fails later pointing at the relation rather than at the edit.
 
-9. **A concern subpackage re-exports nothing.** Its `__init__.py` is a docstring.
+9. **A concern subpackage re-exports nothing.** Its `__init__.py` is empty.
    These are internal groupings and the package root is the public surface, so a
    re-export buys nothing and costs a class of circular import: a leaf import
    runs the parent first, so an eager `declaration/__init__` makes
@@ -210,6 +210,22 @@ field rather than suppressing the rule: the annotation supplies a real type, so
 Never a mypy-style `# type: ignore` in the package - a pre-commit hook rejects
 it, because nothing here reads that pragma and leaving one implies a checker
 that is not running.
+
+## Comment budget
+
+`#` comments and docstrings both count, in the package and in the tests:
+
+- A class: at most three lines (its docstring plus comments in its body outside its methods).
+- A function or method: at most one line (docstring plus comments inside it, or directly
+  above it).
+- A module: nothing before the first import (no module docstring, no header comment); a
+  package `__init__.py` with nothing to export is empty.
+- Exempt: directives (`# noqa`, `# ty:`, `# vX.Y.Z` pins), migrations, and a docstring
+  the code or a test reads through `__doc__`, which is data.
+
+Condense rather than move: a reason that does not fit is cut, not relocated to prose
+elsewhere. A body left empty by a removed docstring takes `...`. The workbench's
+`bin/comment-budget.py` lists the violations.
 
 ## Linting and formatting
 
