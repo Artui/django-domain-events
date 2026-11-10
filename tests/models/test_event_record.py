@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/models/event_record.py``."""
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -13,8 +11,7 @@ pytestmark = pytest.mark.django_db
 
 
 def test_it_identifies_itself_by_name_and_id() -> None:
-    """What an operator sees in the admin and in a shell, where the name matters
-    more than the primary key."""
+    """What an operator sees in the admin and a shell, where the name matters."""
     row = EventRecord.objects.create(
         name="testapp.OrderPlaced",
         version=1,
@@ -25,8 +22,7 @@ def test_it_identifies_itself_by_name_and_id() -> None:
 
 
 def test_the_actor_is_optional() -> None:
-    """Plenty of things that fire events are not users: a relay, a cron, a
-    management command, a peer service."""
+    """Plenty of things that fire events are not users: relays, crons, peers."""
     row = EventRecord.objects.create(
         name="testapp.OrderPlaced",
         version=1,
@@ -40,9 +36,7 @@ def test_the_actor_is_optional() -> None:
 
 
 def test_a_new_event_follows_the_ordinary_retention_window() -> None:
-    """Both retention columns default to "no policy of its own", so an event
-    recorded before they existed, and one fired by a declaration that says
-    nothing about retention, are pruned by RETENTION_DAYS alone."""
+    """Both retention columns default to no policy: RETENTION_DAYS alone applies."""
     row = EventRecord.objects.create(
         name="testapp.OrderPlaced",
         version=1,
@@ -55,8 +49,7 @@ def test_a_new_event_follows_the_ordinary_retention_window() -> None:
 
 
 def test_only_events_carrying_a_policy_of_their_own_are_in_the_retention_indexes() -> None:
-    """Partial, so the ordinary event - nearly every row - costs either index
-    nothing, and one per kind, so each sweep reads only its own kind."""
+    """Partial, so an ordinary event costs these indexes nothing."""
     indexes = {i.name: i for i in EventRecord._meta.indexes}
     window = indexes["dde_own_window"]
     assert tuple(window.fields) == ("recorded_at",)

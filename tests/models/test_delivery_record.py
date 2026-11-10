@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/models/delivery_record.py``."""
-
 from __future__ import annotations
 
 import hashlib
@@ -35,8 +33,7 @@ def test_it_identifies_the_pair_it_represents() -> None:
 
 
 def test_one_delivery_per_event_and_receiver() -> None:
-    """The unique constraint is the delivered-log the at-least-once promise owes
-    people, rather than a separate table."""
+    """The unique constraint is the delivered log the at-least-once promise owes."""
     event = _event()
     DeliveryRecord.objects.create(
         event=event, receiver_key="testapp.durable_receiver", available_at=event.recorded_at
@@ -50,8 +47,7 @@ def test_one_delivery_per_event_and_receiver() -> None:
 
 
 def test_deleting_an_event_takes_its_deliveries() -> None:
-    """Cascade, so retention stays a single delete rather than an ordering
-    problem."""
+    """Cascade, so retention stays a single delete rather than an ordering problem."""
     event = _event()
     DeliveryRecord.objects.create(
         event=event, receiver_key="testapp.durable_receiver", available_at=event.recorded_at
@@ -71,8 +67,7 @@ def test_one_event_may_owe_one_receiver_several_targets() -> None:
 
 @pytest.mark.parametrize("target", ["a", ""])
 def test_two_rows_for_one_event_receiver_and_target_are_refused(target: str) -> None:
-    """Including the blank target, which is every receiver without targets=:
-    for those this is still the constraint it replaced."""
+    """Including the blank target: receivers without targets= keep this constraint."""
     event = _event()
     DeliveryRecord.objects.create(
         event=event, receiver_key="probe.fan", target=target, available_at=event.recorded_at
@@ -84,8 +79,7 @@ def test_two_rows_for_one_event_receiver_and_target_are_refused(target: str) -> 
 
 
 def test_a_row_written_without_a_target_has_the_blank_one() -> None:
-    """What every row that predates the column holds, and what a receiver
-    without targets= writes forever."""
+    """What rows predating the column hold, and receivers without targets= write."""
     event = _event()
     row = DeliveryRecord.objects.create(
         event=event, receiver_key="testapp.durable_receiver", available_at=event.recorded_at
@@ -112,9 +106,7 @@ def test_two_rows_with_the_same_long_target_are_refused() -> None:
 
 
 def test_targets_that_differ_only_past_any_prefix_are_two_deliveries() -> None:
-    """Identical for their first 3000 characters - past 255, and past the 2704
-    bytes a Postgres index entry holds - and different after. A constraint that
-    compared a prefix would refuse the second; the digest covers the whole text."""
+    """Identical for 3000 characters, past 255 and past Postgres's index-entry limit."""
     event = _event()
     shared = secrets.token_urlsafe(3000)[:3000]
     for tail in ("-first", "-second"):
@@ -157,9 +149,7 @@ def test_saving_a_changed_target_rewrites_the_digest() -> None:
 
 
 def test_a_digest_set_by_hand_cannot_disagree_with_the_target() -> None:
-    """The case a model default would have let through silently: a write that
-    names a target and supplies some other digest, or none. The digest is
-    derived at write time, so what is stored is always the target's."""
+    """A write naming a target but supplying some other digest, or none."""
     event = _event()
     row = DeliveryRecord.objects.create(
         event=event,
@@ -173,12 +163,7 @@ def test_a_digest_set_by_hand_cannot_disagree_with_the_target() -> None:
 
 
 def test_the_unique_constraint_covers_the_digest_and_no_index_holds_the_text() -> None:
-    """Backend-neutral half of the long-target tests.
-
-    Those only go red on Postgres, where an index entry has a size limit; on
-    SQLite a constraint on the text itself would pass them. This is what fails
-    everywhere if the constraint moves back onto the text.
-    """
+    """Backend-neutral half of the long-target tests."""
     [constraint] = DeliveryRecord._meta.constraints
     assert tuple(constraint.fields) == ("event", "receiver_key", "target_digest")
     assert not any("target" in index.fields for index in DeliveryRecord._meta.indexes)
@@ -186,13 +171,7 @@ def test_the_unique_constraint_covers_the_digest_and_no_index_holds_the_text() -
 
 
 def test_a_stored_digest_is_found_by_the_one_target_digest_computes() -> None:
-    """Replay keys a dict by ``target_digest(target)`` and looks the stored
-    values up in it, so a stored value has to hash and compare equal to the
-    computed one once replay has normalised it with ``bytes()``. Asserted
-    through a dict rather than ``==`` because that is the operation replay
-    performs. The ``bytes()`` is load-bearing: psycopg2 returns a
-    ``memoryview`` of format ``c`` for a binary column, which hashes as its
-    bytes and compares unequal to them, so the lookup misses without it."""
+    """Stored digests must hash and compare equal to computed ones after bytes()."""
     event = _event()
     DeliveryRecord.objects.create(
         event=event, receiver_key="probe.fan", target="endpoint-42", available_at=event.recorded_at
@@ -208,11 +187,7 @@ def test_the_digest_column_is_binary_and_holds_exactly_a_sha256() -> None:
 
 
 def test_mysql_gets_a_bounded_binary_column_it_can_index() -> None:
-    """MySQL maps a ``BinaryField`` to ``longblob``, which it refuses in a
-    unique index without a prefix length. A stub connection reaches the branch
-    on every backend; on the MySQL job the real connection asks the same
-    question, and the test database built through the migrations is the
-    unique index it lets MySQL create."""
+    """MySQL maps BinaryField to longblob, which a unique index refuses."""
     field = DeliveryRecord._meta.get_field("target_digest")
     assert field.db_type(SimpleNamespace(vendor="mysql")) == "varbinary(32)"
     expected = (
@@ -222,8 +197,7 @@ def test_mysql_gets_a_bounded_binary_column_it_can_index() -> None:
 
 
 def test_a_new_row_has_no_due_time_of_its_own() -> None:
-    """NULL is read as the event's ``recorded_at``, which is what lets the
-    column arrive on a populated table with nothing to backfill."""
+    """NULL reads as recorded_at, so the column needs no backfill."""
     event = _event()
     row = DeliveryRecord.objects.create(
         event=event, receiver_key="probe.fan", available_at=event.recorded_at
@@ -234,18 +208,14 @@ def test_a_new_row_has_no_due_time_of_its_own() -> None:
 
 
 def test_no_index_duplicates_the_unique_constraint_on_its_leading_column() -> None:
-    """The unique index leads with ``event_id``, which is what the cascade from
-    an event and every per-event lookup filter on, so a second index on that
-    column alone is written on every insert and read by nothing."""
+    """The unique index leads with event_id, so no second index is needed on it."""
     [constraint] = DeliveryRecord._meta.constraints
     assert constraint.fields[0] == "event"
     assert DeliveryRecord._meta.get_field("event").db_index is False
 
 
 def test_the_receiver_key_is_indexed_only_as_the_lead_of_the_last_success_index() -> None:
-    """No single-column index and no pattern-ops copy on Postgres: equality and
-    ``IN`` on the key are served by the composite, and the admin's search is
-    ``icontains``, which neither kind of btree can serve."""
+    """No single-column or pattern-ops index: the composite serves equality and IN."""
     assert DeliveryRecord._meta.get_field("receiver_key").db_index is False
     [index] = [i for i in DeliveryRecord._meta.indexes if i.name == "dde_last_success"]
     assert tuple(index.fields) == ("receiver_key", "succeeded_at")
@@ -259,10 +229,7 @@ def test_dead_letters_have_a_partial_index_of_their_own() -> None:
 
 
 def test_the_unfinished_rows_of_each_event_have_a_partial_index() -> None:
-    """Not the duplicate the unique constraint makes of ``event_id`` alone:
-    it holds no succeeded row, so it stays as small as the owed rows and the
-    dead letters, and it is what the prune's per-event probes read. Its
-    condition is the weaker of the two they ask, so it serves both."""
+    """It holds no succeeded row, so it stays as small as the owed rows."""
     [index] = [i for i in DeliveryRecord._meta.indexes if i.name == "dde_unfinished_by_event"]
     assert tuple(index.fields) == ("event",)
     assert index.condition == ~models.Q(status=DeliveryStatus.SUCCEEDED)
