@@ -41,24 +41,10 @@ class DataclassCodec:
             raise _unencodable(event, fields, exc) from exc
 
     def unsupported_fields(self, event_class: type) -> list[tuple[str, Any]]:
-        """The declared fields this codec could not rebuild, as (name, annotation).
-
-        Optional, and read by the ``declared events are decodable`` system
-        check. It exists because the failure it prevents is silent and late:
-        encoding accepts an annotation the decoder refuses, so the event commits
-        inside the caller's transaction, and every durable delivery of it then
-        dead-letters in the relay -- in another process, possibly hours later.
-        Asking the question at startup is the only place the answer is cheap.
-
-        A codec that does not implement this is not interrogated rather than
-        assumed broken, which is the safe direction for a codec this package
-        did not write.
-        """
+        """The declared fields this codec could not rebuild, as (name, annotation)."""
         try:
             hints = typing.get_type_hints(event_class)
         except NameError:
-            # Unresolvable annotations are their own decode-time refusal with a
-            # better message than this check could give; not this check's job.
             return []
         return [
             (field.name, hints[field.name])
@@ -67,12 +53,7 @@ class DataclassCodec:
         ]
 
     def supported_annotation(self, annotation: Any) -> bool:
-        """Whether this codec can rebuild a value of this annotation.
-
-        A method so a subclass can widen it -- which is exactly what
-        :class:`~django_domain_events.codecs.dacite_codec.DaciteCodec` does for
-        nested dataclasses.
-        """
+        """Whether this codec can rebuild a value of this annotation; subclasses may widen it."""
         return supported_annotation(annotation)
 
     def decode(self, event_class: type[E], payload: dict[str, Any], version: int) -> E:
@@ -87,9 +68,7 @@ class DataclassCodec:
 
         kwargs: dict[str, Any] = {}
         for field in dataclasses.fields(typing.cast(Any, event_class)):
-            # Absent is not an error: a field added with a default is the
-            # additive change the schema rule permits, and the constructor
-            # supplies it. One added without a default raises below, named.
+            # Absent is fine: a field added with a default is the constructor's to supply.
             if field.name in payload:
                 kwargs[field.name] = _coerce(
                     payload[field.name], hints[field.name], event_class, field.name, version
@@ -98,15 +77,7 @@ class DataclassCodec:
 
 
 def supported_annotation(annotation: Any) -> bool:
-    """Whether :func:`_coerce` can rebuild a value of this annotation.
-
-    The dispatch below deliberately mirrors ``_coerce``'s, and the pair is
-    pinned by a test that walks one table through both: a predicate that
-    disagrees with the coercion is worse than no predicate, because it would
-    let a startup check pass an event that dead-letters on delivery. Keeping
-    them as two functions rather than one is what lets the question be asked
-    with no value in hand, which is the whole point of asking it at startup.
-    """
+    """Whether :func:`_coerce` can rebuild a value of this annotation, pinned to it by a test."""
     origin = typing.get_origin(annotation)
 
     if origin is typing.Literal:
@@ -155,17 +126,11 @@ def _coerce(value: Any, annotation: Any, event_class: type, field_name: str, ver
         return [_coerce(item, item_annotation, event_class, field_name, version) for item in value]
 
     if origin is tuple:
-        # An event is a frozen dataclass, so a tuple is the sequence type that
-        # belongs in one -- a list field is a mutable field in an immutable
-        # object. JSON has no tuple, so the encoder already wrote a list and
-        # only the decoder had to learn the type back.
+        # A tuple, not a list: a frozen event should not hold a mutable sequence.
         args = typing.get_args(annotation)
         if len(args) == 2 and args[1] is Ellipsis:
             return tuple(_coerce(item, args[0], event_class, field_name, version) for item in value)
         if len(args) != len(value):
-            # Refused rather than truncated or padded: a payload of the wrong
-            # shape is a defect, and quietly dropping the extra would leave the
-            # decoded event disagreeing with the row it came from.
             raise UnsupportedPayloadType(
                 f"{event_class.__name__}.{field_name} (version {version}) is annotated "
                 f"{annotation}, which expects {len(args)} item(s), but the payload has "
@@ -201,12 +166,7 @@ def _refuse(
 
 
 def _unencodable(event: object, fields: dict[str, Any], exc: Exception) -> UnsupportedPayloadType:
-    """Name the field that could not be written.
-
-    The raw error from ``json`` names a type and no field, and it surfaces
-    inside the caller's transaction - so it takes the business change down with
-    it and says only that some object was not serializable.
-    """
+    """Name the field that could not be written: the raw json error names no field."""
     for name, value in fields.items():
         try:
             json.dumps({name: value}, cls=PayloadEncoder)
