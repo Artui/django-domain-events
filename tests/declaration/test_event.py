@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/event.py``."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -18,15 +16,13 @@ def test_the_bare_form_registers_under_the_app_label() -> None:
 
 
 def test_the_called_form_takes_a_name_and_a_version() -> None:
-    """Pinning the name is what lets a class be renamed without stranding the
-    rows already written under the old one."""
+    """Pinning the name lets a class be renamed without stranding its written rows."""
     entry = registry.event_for_class(PinnedName)
     assert (entry.name, entry.version) == ("testapp.pinned", 3)
 
 
 def test_the_decorator_returns_the_class_unchanged() -> None:
-    """Decorating must not wrap: consumers construct these directly, and a
-    wrapper would break isinstance and the constructor signature alike."""
+    """Decorating must not wrap: a wrapper would break isinstance and the signature."""
 
     @dataclass(frozen=True)
     class Local:
@@ -72,8 +68,7 @@ def test_a_window_of_its_own_is_kept_on_the_registration() -> None:
 
 @pytest.mark.parametrize("retention", [3600, "succeeded", True, 7.0])
 def test_a_retention_that_is_neither_a_window_nor_a_policy_is_refused(retention: object) -> None:
-    """A bare number means seconds to one reader and days to the next, so it is
-    refused rather than guessed at."""
+    """A bare number means seconds to one reader and days to the next: refused."""
     with pytest.raises(TypeError, match="retention="):
         _declared(retention=retention)
 
@@ -90,8 +85,7 @@ def test_a_retention_that_is_neither_a_window_nor_a_policy_is_refused(retention:
     ids=["zero", "negative", "half-a-second", "a-second-and-a-half", "past-the-column"],
 )
 def test_a_window_the_column_cannot_hold_is_refused(retention: timedelta) -> None:
-    """Half a second would be stored as zero, which deletes at once; past 2**31
-    seconds passes on SQLite and fails every fire() on Postgres."""
+    """Half a second stores as zero and deletes at once; huge values fail on Postgres."""
     with pytest.raises(ValueError, match="retention="):
         _declared(retention=retention)
 

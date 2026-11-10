@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/registry.py``."""
-
 from __future__ import annotations
 
 import dataclasses
@@ -46,8 +44,7 @@ def _receiver(key: str, cls: type, func) -> RegisteredReceiver:
 
 
 def test_lookup_by_class_and_by_name() -> None:
-    """Both directions are indexed because both are hot: firing looks up by
-    class, and the relay looks up by the name written on the row."""
+    """Both directions are indexed because both are hot paths."""
     r = Registry()
     r.register_event(_entry(Alpha, "app.Alpha"))
 
@@ -66,8 +63,7 @@ def test_re_registering_the_same_class_is_allowed() -> None:
 
 
 def test_two_classes_cannot_share_an_event_name() -> None:
-    """Rows of one would decode as the other, which is silent data corruption
-    rather than a mix-up someone notices."""
+    """Rows of one would decode as the other: silent data corruption."""
     r = Registry()
     r.register_event(_entry(Alpha, "app.Shared"))
     with pytest.raises(ValueError, match="already registered"):
@@ -133,8 +129,7 @@ def test_a_wildcard_is_returned_for_every_class_in_declaration_order() -> None:
 
 
 def test_a_wildcard_is_matched_when_asked_not_when_declared() -> None:
-    """A class the registry has never heard of still gets the wildcard: nothing
-    is expanded at declaration, so nothing can be missed by declaring early."""
+    """A class the registry has never heard of still gets the wildcard."""
 
     @dataclass(frozen=True)
     class DeclaredLater:
@@ -164,8 +159,7 @@ def test_a_named_lane_is_the_receivers_declared_in_it() -> None:
 
 
 def test_the_default_lane_is_defined_by_what_the_named_lanes_take() -> None:
-    """Every key in a named lane, so the default lane can be phrased as
-    everything else - which is what reaches a row whose receiver was deleted."""
+    """Every key in a named lane, so the default lane reaches a deleted receiver's rows."""
     r = _laned(Registry())
 
     assert r.receiver_keys_in_named_lanes() == ["app.a", "app.b", "app.d"]
@@ -178,8 +172,7 @@ def test_the_declared_lanes_are_listed() -> None:
 
 
 def test_a_lane_nobody_declared_is_refused() -> None:
-    """A relay started for a misspelt lane would claim nothing, forever, and
-    look healthy doing it."""
+    """A relay on a misspelt lane would claim nothing, forever, and look healthy."""
     r = _laned(Registry())
 
     with pytest.raises(ValueError, match=r"No receiver is declared in lane 'mial'.*mail, search"):
@@ -188,8 +181,7 @@ def test_a_lane_nobody_declared_is_refused() -> None:
 
 @pytest.mark.parametrize("lane", ["mail", "default", None])
 def test_a_declared_lane_the_default_and_every_lane_are_accepted(lane: str | None) -> None:
-    """The default lane exists with no receiver in it - it is where a deleted
-    receiver's rows drain - and None is every lane at once."""
+    """The default lane exists with no receiver: it drains a deleted receiver's rows."""
     _laned(Registry()).require_lane(lane)
     Registry().require_lane("default")
 
@@ -203,8 +195,7 @@ def test_a_key_is_in_its_receivers_lane() -> None:
 
 
 def test_a_key_with_no_receiver_is_in_the_default_lane() -> None:
-    """A receiver deleted since its rows were written leaves them in no named
-    lane, and the default lane is every row no named lane takes."""
+    """A deleted receiver's rows fall into the default lane: the key is read now."""
     assert _laned(Registry()).lane_for_key("app.deleted") == "default"
 
 
@@ -215,9 +206,7 @@ _NAME_LIMIT = EventRecord._meta.get_field("name").max_length
 
 
 def test_the_registry_limits_are_the_widths_of_the_columns_that_store_them() -> None:
-    """The registry cannot read the fields: a decorator reaches it while apps are
-    still loading, and importing a model there raises ``AppRegistryNotReady``. So
-    it carries the numbers, and this holds them to every column that stores them."""
+    """The registry cannot read fields while apps load: AppRegistryNotReady."""
     assert _KEY_LIMIT == _NAME_LIMIT == 255
     assert ReceiverLastSuccess._meta.get_field("receiver_key").max_length == _KEY_LIMIT
     assert registry_module.MAX_KEY_LENGTH == _KEY_LIMIT
@@ -225,8 +214,7 @@ def test_the_registry_limits_are_the_widths_of_the_columns_that_store_them() -> 
 
 
 def test_a_receiver_key_of_exactly_the_limit_is_registered_directly() -> None:
-    """Holds the comparison: ``>=`` instead of ``>`` refuses this key. Passes on a
-    tree without the check, as it must; it is here for the mutant."""
+    """Holds the comparison: ``>=`` instead of ``>`` refuses this key."""
     r = Registry()
     key = "k" * _KEY_LIMIT
     r.register_receiver(_receiver(key, Alpha, lambda e: None))
@@ -246,8 +234,7 @@ def test_a_receiver_key_over_the_limit_is_refused_by_the_registry_itself() -> No
 
 
 def test_an_over_long_receiver_key_is_refused_before_the_clash_check() -> None:
-    """The length is checked first, so a clashing key that is also too long says
-    so rather than naming the other registration."""
+    """The length is checked first, so a clashing and too-long key says so."""
     r = Registry()
     key = "k" * (_KEY_LIMIT + 1)
     r._receivers[key] = _receiver(key, Beta, lambda e: None)
@@ -279,9 +266,7 @@ def test_an_event_name_over_the_limit_is_refused_by_the_registry_itself() -> Non
 
 
 def test_an_over_long_event_name_is_refused_before_the_clash_check() -> None:
-    """The length is checked first, so a clashing name that is also too long says
-    so rather than naming the other registration. Holds the order: the check placed
-    after the clash ``raise`` fails this."""
+    """The length is checked first, so a clashing and too-long name says so."""
     r = Registry()
     name = "n" * (_NAME_LIMIT + 1)
     r._events_by_name[name] = _entry(Beta, name)
@@ -291,9 +276,7 @@ def test_an_over_long_event_name_is_refused_before_the_clash_check() -> None:
 
 
 def test_a_deleted_receivers_row_is_in_the_default_lane() -> None:
-    """A row written for a receiver in a named lane, whose receiver has since
-    been deleted, drains through the default lane: the key is read against the
-    receivers as they are now, not as they were when the row was written."""
+    """A row for a since-deleted receiver drains through the default lane."""
     r = _laned(Registry())
     assert r.lane_for_key("app.a") == "mail"
 
