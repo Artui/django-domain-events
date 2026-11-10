@@ -12,12 +12,7 @@ from django_domain_events import checks
 
 
 def test_every_check_the_package_defines_is_registered() -> None:
-    """A check is registered by hand in ``AppConfig.ready``, one line each, and a
-    check written and tested but never registered is one Django never runs:
-    every test of it calls the function directly and passes. That is how the
-    psycopg2 warning first went in. So the registration is held here against
-    the module rather than check by check, and a new ``check_*`` function fails
-    this until its line is added."""
+    """A check written but not registered in AppConfig.ready never runs."""
     defined = {
         function
         for name, function in inspect.getmembers(checks, inspect.isfunction)
@@ -40,11 +35,6 @@ def test_every_check_the_package_defines_is_registered() -> None:
 def test_a_check_that_queries_the_database_is_registered_under_its_tag(
     check: Callable[..., Any],
 ) -> None:
-    """Django runs a check under the database tag only where it is asked about
-    a database, as ``migrate`` and ``check --database`` ask, so a plain
-    ``check`` on a host with no database reachable still runs. Registered
-    without the tag, the check would be run by every ``check`` and these
-    functions' own ``databases`` guards would be all that kept it quiet:
-    every test calling the function directly would pass either way."""
+    """Django runs database-tagged checks only where a database is asked about."""
     assert check in check_registry.get_checks(include_deployment_checks=True)
     assert Tags.database in check.tags

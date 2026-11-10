@@ -1,10 +1,3 @@
-"""The four findings the first outside consumer reported, pinned.
-
-Grouped in one file because they were one report and because two of them are
-the same shape: a declaration that is accepted, recorded, and only refused
-somewhere the caller is no longer watching.
-"""
-
 from __future__ import annotations
 
 import dataclasses
@@ -105,8 +98,7 @@ _UNSUPPORTED: list[tuple[typing.Any, object]] = [
 def test_the_predicate_agrees_with_the_coercion_on_what_it_takes(
     annotation: typing.Any, value: object
 ) -> None:
-    """A predicate that said yes where the coercion says no would let the
-    startup check pass an event that dead-letters on delivery."""
+    """A predicate that says yes where coercion says no passes a dead-lettering event."""
     assert DataclassCodec().supported_annotation(annotation) is True
 
     _coerce(value, annotation, Seat, "field", 1)
@@ -116,8 +108,7 @@ def test_the_predicate_agrees_with_the_coercion_on_what_it_takes(
 def test_the_predicate_agrees_with_the_coercion_on_what_it_refuses(
     annotation: typing.Any, value: object
 ) -> None:
-    """And one that said no where the coercion says yes would refuse a working
-    project at startup, which is the more visible failure and still wrong."""
+    """One saying no where coercion says yes would refuse a working project at startup."""
     assert DataclassCodec().supported_annotation(annotation) is False
 
     with pytest.raises(UnsupportedPayloadType):
@@ -247,12 +238,7 @@ def test_the_inline_context_carries_the_actor_label(order: OrderPlaced) -> None:
 
 @pytest.mark.django_db
 def test_the_durable_context_carries_the_actor_label(order: OrderPlaced) -> None:
-    """The relay construction site, which reads the row rather than the scope.
-
-    Both sites matter and they are different code: a durable delivery can run
-    hours later, in another process, with the firing scope long gone -- so the
-    label has to come off the event row, and this is what proves it does.
-    """
+    """The relay construction site, which reads the row rather than the scope."""
     seen: list[str] = []
 
     with _capturing_label(seen, mode="durable"):

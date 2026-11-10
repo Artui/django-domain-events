@@ -1,11 +1,3 @@
-"""Tests for the ``upgrade`` hook, across ``utils.decode_payload``.
-
-The hook is the escape from the two payload changes the schema rule calls
-breaking: a field added without a default, and a type changed incompatibly.
-Without it, a row written before that change dead-letters with no forward path
-except editing JSON by hand.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -41,8 +33,7 @@ class Migrated:
 
 
 def test_an_older_row_is_migrated_before_it_is_decoded() -> None:
-    """A required field added in v2 makes every v1 row undecodable. This is the
-    only forward path that does not involve editing JSON by hand."""
+    """A required field added in v2 makes every v1 row undecodable."""
     with event_registered(Migrated, "tests.migrated", version=2):
         rebuilt = decode_payload(Migrated, {"order_id": 7}, 1)
     assert rebuilt == Migrated(order_id=7, currency="EUR")
@@ -66,8 +57,7 @@ def test_a_current_row_skips_the_hook() -> None:
 
 
 def test_a_row_from_the_future_skips_it_too() -> None:
-    """A rollback, and no forward migration helps: the code that would know how
-    to read that row is the code that was just removed."""
+    """A rollback: the code that could read that row was just removed."""
     called = []
 
     @dataclass(frozen=True)
@@ -102,8 +92,7 @@ def test_the_hook_is_told_which_version_it_is_reading() -> None:
 
 
 def test_a_failing_hook_says_so_by_name() -> None:
-    """It lands in last_error, and an operator reading it needs to know the
-    hook ran rather than that something went wrong between row and receiver."""
+    """It lands in last_error, so an operator knows the hook ran."""
 
     @dataclass(frozen=True)
     class Broken:
@@ -121,8 +110,7 @@ def test_a_failing_hook_says_so_by_name() -> None:
 
 
 def test_an_ordinary_method_is_refused_at_the_decorator() -> None:
-    """Reached through the class it is unbound, so the payload would silently
-    arrive as ``self`` - and it would arrive there in the relay, hours later."""
+    """Reached through the class, it is unbound: the payload arrives as self."""
     with pytest.raises(TypeError, match="staticmethod or a classmethod"):
 
         @event(name="tests.bad_hook")
@@ -171,8 +159,7 @@ def test_an_event_without_a_hook_is_untouched() -> None:
 
 
 def test_an_unregistered_class_decodes_without_a_version_to_compare() -> None:
-    """decode_payload is reachable for a class the registry does not know, and
-    there is then no declared version to say whether the row is old."""
+    """decode_payload is reachable for an unregistered class, with no version."""
     assert decode_payload(Migrated, {"order_id": 1, "currency": "USD"}, 1) == Migrated(
         order_id=1, currency="USD"
     )
@@ -191,8 +178,7 @@ class Evolved:
 
 @pytest.mark.django_db
 def test_the_relay_delivers_a_row_written_before_the_field_existed(record: list[str]) -> None:
-    """End to end: without the hook this dead-letters, because the codec cannot
-    build a required field the row never carried."""
+    """End to end, without the hook a required field the row lacks dead-letters."""
     seen = []
 
     entry = RegisteredReceiver(
@@ -208,7 +194,6 @@ def test_the_relay_delivers_a_row_written_before_the_field_existed(record: list[
     with receiver_registered(entry):
         with transaction.atomic():
             fire(Evolved(order_id=7, currency="USD"))
-        # Rewrite the row as the previous deploy would have left it.
         EventRecord.objects.update(version=1, payload={"order_id": 7})
 
         counts = drain_outbox()
@@ -219,8 +204,7 @@ def test_the_relay_delivers_a_row_written_before_the_field_existed(record: list[
 
 @pytest.mark.django_db
 def test_assert_fired_reads_the_same_row_the_relay_would(record: list[str]) -> None:
-    """A test helper that decodes a payload the relay would reject is how a
-    suite comes to agree with a bug."""
+    """A helper decoding what the relay rejects lets a suite agree with a bug."""
     with transaction.atomic():
         fire(Evolved(order_id=7, currency="USD"))
     EventRecord.objects.update(version=1, payload={"order_id": 7})
@@ -229,10 +213,7 @@ def test_assert_fired_reads_the_same_row_the_relay_would(record: list[str]) -> N
 
 
 def test_a_hook_that_forgets_to_return_says_so() -> None:
-    """The commonest way to write it wrong is to mutate in place. Without a
-    check the delivery dead-letters with "argument of type 'NoneType' is not
-    iterable", which is the unspecified failure the exception exists to
-    prevent."""
+    """The commonest way to write it wrong is to mutate in place."""
 
     @dataclass(frozen=True)
     class Mutating:
@@ -250,9 +231,7 @@ def test_a_hook_that_forgets_to_return_says_so() -> None:
 
 
 def test_the_codec_is_told_the_version_the_payload_now_is() -> None:
-    """A codec is handed the version so it can branch on it. Telling it the
-    row's old version after the hook has migrated the payload asks for the old
-    treatment of new-shaped data."""
+    """A codec is handed the version so it can branch on it."""
     seen: list[int] = []
 
     class RecordingCodec:
@@ -263,8 +242,6 @@ def test_the_codec_is_told_the_version_the_payload_now_is() -> None:
             seen.append(version)
             return event_class(**payload)
 
-    # Patched at its source: decode_payload imports it inside the function to
-    # break a cycle, so it is not an attribute of utils to patch.
     import django_domain_events.settings as settings_module
 
     with (

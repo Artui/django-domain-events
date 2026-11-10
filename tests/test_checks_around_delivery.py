@@ -1,10 +1,3 @@
-"""The system check on ``AROUND_DELIVERY``.
-
-Beside ``test_checks.py`` rather than in it, so the lanes adding settings in one
-release do not edit one file. Every case goes through the public
-``check_settings_keys_are_known``, which is where the check is folded in.
-"""
-
 from __future__ import annotations
 
 from contextlib import nullcontext
@@ -43,10 +36,7 @@ def test_a_hook_that_imports_and_is_callable_is_clean(settings: Any) -> None:
     ids=["missing-attribute", "missing-module", "not-callable", "not-a-string"],
 )
 def test_a_hook_that_cannot_be_used_is_an_error(settings: Any, value: object, says: str) -> None:
-    """One case per arm of the check: the import, the callable test, and the
-    type test, without which ``import_string`` would raise out of the check
-    itself rather than report. The callable itself is the likeliest mistake,
-    since every other collaborator in a settings file is an object."""
+    """One case per arm of the check: the import, the callable test, and the type test."""
     settings.DJANGO_DOMAIN_EVENTS = {"AROUND_DELIVERY": value}
 
     problems = checks.check_settings_keys_are_known()

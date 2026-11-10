@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/utils.py``."""
-
 from __future__ import annotations
 
 import hashlib
@@ -23,8 +21,7 @@ def test_label_comes_from_the_app_label_not_the_import_path() -> None:
 
 
 def test_a_module_outside_any_installed_app_refuses() -> None:
-    """A made-up label would be written onto rows and only surface later, as a
-    mismatch nobody can trace back to this moment."""
+    """A made-up label would be written onto rows and surface later as a mismatch."""
     with pytest.raises(LookupError, match="not inside an installed app"):
         label_for("some.unrelated.module", "Thing")
 
@@ -38,8 +35,7 @@ def test_a_non_dataclass_is_rejected() -> None:
 
 
 def test_a_mutable_dataclass_is_rejected() -> None:
-    """At-least-once delivery hands a different instance to every attempt, so a
-    receiver mutating one is writing to a copy it is about to discard."""
+    """Each attempt gets a fresh instance, so mutating one is wasted."""
 
     @dataclass
     class Mutable:
@@ -58,13 +54,7 @@ def test_a_frozen_dataclass_passes() -> None:
 
 
 def test_a_datetime_parses_from_exactly_what_the_encoder_writes() -> None:
-    """Pinned against the encoder's real output rather than a hand-typed string.
-
-    A round trip proves the two halves agree; it does not prove either is right.
-    This asserts the shape actually written, because the bug it guards was a
-    disagreement between them that only appeared on Python 3.10 to 3.12, where
-    ``datetime.fromisoformat`` cannot read the trailing Z the encoder emits.
-    """
+    """Pinned against the encoder's real output rather than a hand-typed string."""
     import json
     from datetime import datetime, timezone
 
@@ -104,9 +94,7 @@ def test_targets_come_back_in_the_order_the_callable_gave_them() -> None:
 
 
 def test_a_target_returned_twice_is_delivered_once() -> None:
-    """One delivery per target is the promise, and the unique constraint would
-    otherwise turn a callable that reached one destination twice into a failed
-    transaction."""
+    """One delivery per target: the unique constraint would fail a repeat."""
     assert _resolve("a", "b", "a") == ["a", "b"]
 
 
@@ -118,8 +106,7 @@ def test_any_iterable_will_do() -> None:
 
 
 def test_a_target_that_is_not_a_string_is_refused_by_receiver() -> None:
-    """The column would store ``str(42)`` while a replay compared ``42``, and the
-    two would never match."""
+    """The column would store str(42) while replay compares 42: never equal."""
     with pytest.raises(TypeError, match=r"targets for receiver 'probe.fan' returned 42, a int"):
         _resolve("a", 42)
 
@@ -131,8 +118,7 @@ def test_a_blank_target_is_refused() -> None:
 
 
 def test_a_target_digest_is_the_32_raw_bytes_of_its_sha256() -> None:
-    """Raw rather than hex: the unique index holds one per delivery row, and hex
-    doubled its width for nothing a byte comparison needs."""
+    """Raw rather than hex: hex doubles the index width for nothing."""
     digest = target_digest("endpoint-42")
     assert digest == hashlib.sha256(b"endpoint-42").digest()
     assert isinstance(digest, bytes)
