@@ -50,8 +50,7 @@ def test_a_delivered_event_can_be_made_owed_again(order: OrderPlaced, record: li
 
 
 def test_reopening_clears_the_previous_attempt(order: OrderPlaced, record: list[str]) -> None:
-    """A row carrying its old attempt count and error would dead-letter on the
-    first failure and tell an operator nothing new."""
+    """A row with its old attempt count would dead-letter on the first failure."""
     with transaction.atomic():
         event_id = fire(order)
     DeliveryRecord.objects.update(
@@ -66,8 +65,7 @@ def test_reopening_clears_the_previous_attempt(order: OrderPlaced, record: list[
 def test_a_receiver_registered_later_can_be_given_the_backlog(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The other half of freezing the receiver set at fire time: a deploy does
-    not hand a new receiver a week of events, and this is how you choose to."""
+    """A deploy does not hand a new receiver a week of events."""
     with receiver_deleted("testapp.with_context"):
         with transaction.atomic():
             event_id = fire(order)
@@ -78,8 +76,7 @@ def test_a_receiver_registered_later_can_be_given_the_backlog(
 
 
 def test_a_delivery_in_flight_is_left_alone(order: OrderPlaced, record: list[str]) -> None:
-    """Reopening a claimed row would hand the same work to two receivers, which
-    is the one thing the lease exists to prevent."""
+    """Reopening a claimed row would hand the same work to two receivers."""
     with transaction.atomic():
         event_id = fire(order)
     DeliveryRecord.objects.update(status=DeliveryStatus.CLAIMED)
@@ -90,10 +87,7 @@ def test_a_delivery_in_flight_is_left_alone(order: OrderPlaced, record: list[str
 def test_a_cancelled_delivery_is_reopened_like_any_settled_one(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """A cancel is not forever, any more than a dead letter is: replay is the
-    operator saying the work is wanted after all. Without cancelled among the
-    statuses replay reopens, the row has an existing status and is not missing
-    either, so it is neither reopened nor added and the replay does nothing."""
+    """A cancel is not forever: replay says the work is wanted after all."""
     with transaction.atomic():
         event_id = fire(order)
     DeliveryRecord.objects.update(
@@ -116,8 +110,7 @@ def test_it_can_be_narrowed_to_one_receiver(order: OrderPlaced, record: list[str
 
 
 def test_an_event_whose_class_is_gone_is_skipped(order: OrderPlaced, record: list[str]) -> None:
-    """Nothing can be replayed for a name the registry no longer has, and
-    failing the whole batch over one of them helps nobody."""
+    """A name the registry no longer has cannot replay, nor fail the batch."""
     with transaction.atomic():
         event_id = fire(order)
     from django_domain_events.models.event_record import EventRecord
@@ -128,13 +121,7 @@ def test_an_event_whose_class_is_gone_is_skipped(order: OrderPlaced, record: lis
 
 
 def test_it_will_not_wipe_a_live_claim(order: OrderPlaced, record: list[str]) -> None:
-    """The status predicate on the update, not only on the read.
-
-    Interleaved for real: an earlier version claimed the row before calling, so
-    the read already saw CLAIMED and the update never targeted it - it passed
-    with the predicate removed. The membership test that decides what to reopen
-    runs between the read and the write, so the steal is hooked there.
-    """
+    """The status predicate on the update, not only on the read."""
     module = importlib.import_module("django_domain_events.operations.replay_events")
 
     with transaction.atomic():
@@ -161,8 +148,7 @@ def test_it_will_not_wipe_a_live_claim(order: OrderPlaced, record: list[str]) ->
 def test_one_events_collision_does_not_discard_the_others(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """One transaction for the whole call meant a conflict on any single event
-    threw away the reopens for every other event the operator named."""
+    """One transaction for the call let one conflict discard every other reopen."""
     with transaction.atomic():
         first = fire(order)
         second = fire(order)
@@ -173,12 +159,7 @@ def test_one_events_collision_does_not_discard_the_others(
 
 
 def test_it_wakes_a_waiting_relay(order: OrderPlaced, record: list[str]) -> None:
-    """Replay makes rows owed exactly as fire() does, so it has to reach the same
-    low-latency path; otherwise replayed work sits until the next poll."""
-    # Patched on the module object, not by dotted path: `__init__` re-exports
-    # `replay_events`, so the package attribute of that name is the function and
-    # `mock.patch("django_domain_events.operations.replay_events.notify_relay")` walks into
-    # the function rather than the module.
+    """Replay makes rows owed as fire() does, so it reaches the same low-latency path."""
     module = importlib.import_module("django_domain_events.operations.replay_events")
     with transaction.atomic():
         event_id = fire(order)
@@ -227,11 +208,7 @@ def _fan_rows() -> list[tuple[str, str, int]]:
 def test_a_digest_read_back_as_a_memoryview_is_still_found(
     order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """psycopg2 reads ``bytea`` back as a ``memoryview`` of format ``c``, which
-    hashes like the digest replay computes and compares unequal to it. Looked up
-    as read, every row that exists reads as missing: ``added`` counts them all,
-    and a replay that changed nothing wakes the relay. The column's read is
-    stood in here so the shape is asserted on every backend and driver."""
+    """psycopg2 reads bytea back as a memoryview, which compares unequal to the digest."""
     module = importlib.import_module("django_domain_events.operations.replay_events")
     monkeypatch.setattr(
         TargetDigestField,
@@ -248,9 +225,7 @@ def test_a_digest_read_back_as_a_memoryview_is_still_found(
 
 
 def test_a_fan_out_replay_goes_to_the_targets_that_exist_now(owed_targets: list[str]) -> None:
-    """Re-derived rather than re-run: ``b`` is still owed and is reopened, ``c``
-    is new and is added, and ``a`` - no longer returned - is left exactly as it
-    was, neither reopened nor counted."""
+    """Re-derived, not re-run: a no longer returned is left exactly as it was."""
     with transaction.atomic():
         event_id = fire(Unheard(value=1))
     drain_outbox()
@@ -275,10 +250,7 @@ def test_a_fan_out_replay_goes_to_the_targets_that_exist_now(owed_targets: list[
 def test_the_targets_a_replay_adds_are_written_by_one_unnest_insert_on_postgres(
     owed_targets: list[str],
 ) -> None:
-    """Replay's own insert, with ``ignore_conflicts`` and the due time it
-    computes: a value the compiler had to render as SQL, or a field with a
-    placeholder hook, would send it back to a VALUES tuple per row. Three
-    missing targets, since one row is VALUES whatever the fields."""
+    """Replay's insert sends back to one VALUES tuple per row on a placeholder hook."""
     with transaction.atomic():
         event_id = fire(Unheard(value=1))
     owed_targets[:] = ["a", "b", "c", "d", "e"]
@@ -302,11 +274,7 @@ def test_the_targets_a_replay_adds_are_written_by_one_unnest_insert_on_postgres(
 
 
 def test_a_blank_row_from_before_the_receiver_fanned_out_is_left_alone() -> None:
-    """The row every receiver had before ``targets=`` existed.
-
-    A receiver that gains a callable has said the event is owed to what the
-    callable returns, and the blank row is not among it.
-    """
+    """The row every receiver had before ``targets=`` existed."""
     receiver(Unheard, key="probe.fan")(lambda event: None)
     try:
         with transaction.atomic():
@@ -365,8 +333,7 @@ def test_a_fan_out_replay_of_a_payload_that_no_longer_decodes_raises(
 def test_a_plain_receiver_replay_never_rebuilds_the_event(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The rebuild is for the callable, so only a fan-out pays for it. A plain
-    receiver's reopened row dead-letters in the relay, as it always has."""
+    """The rebuild is for the callable, so only a fan-out pays for it."""
     with transaction.atomic():
         event_id = fire(order)
     drain_outbox()
@@ -402,8 +369,7 @@ def test_a_long_target_already_delivered_is_reopened_not_duplicated(
 def test_replay_finds_existing_rows_by_the_indexed_digest_not_the_text(
     owed_targets: list[str],
 ) -> None:
-    """The digest is what the unique index covers; the text is in no index, so
-    a lookup by it scans every delivery of the event."""
+    """The digest is what the unique index covers; the text is in no index."""
     with transaction.atomic():
         event_id = fire(Unheard(value=1))
     drain_outbox()
@@ -453,9 +419,7 @@ def _a_month_old(event_id: int) -> None:
 
 
 def test_a_replayed_old_event_is_not_dead_lettered_on_its_first_deferral(throttled: str) -> None:
-    """Reopening makes the row owed now. Measured from the event's own
-    timestamp, a month-old event replayed into a throttled destination would be
-    past a one-day bound before its first attempt had run."""
+    """Reopening makes the row owed now."""
     with transaction.atomic():
         event_id = fire(Unheard(value=1))
     DeliveryRecord.objects.filter(receiver_key=throttled).update(status=DeliveryStatus.DEAD)
@@ -469,8 +433,7 @@ def test_a_replayed_old_event_is_not_dead_lettered_on_its_first_deferral(throttl
 
 
 def test_a_row_a_replay_adds_is_owed_from_the_replay_too(throttled: str) -> None:
-    """The other half of a replay: a receiver declared after the event was
-    fired gets a row written now, and that row is measured from now as well."""
+    """A receiver declared after firing gets a row written now, from now."""
     with receiver_deleted(throttled), transaction.atomic():
         event_id = fire(Unheard(value=1))
     _a_month_old(event_id)
@@ -502,8 +465,7 @@ def _when(key: str) -> tuple[datetime, datetime | None]:
 def test_a_replay_reopens_a_scheduled_row_at_its_due_time_when_that_is_ahead(
     expiry: list[int],
 ) -> None:
-    """Replay is also how a scheduled receiver is adopted: declare the expiry,
-    replay the recent offers - and every open offer must not expire at once."""
+    """Replay also adopts a scheduled receiver: open offers must not all expire at once."""
     occurred = django_timezone.now() - timedelta(hours=1)
     with transaction.atomic():
         event_id = fire(Unheard(value=1), occurred_at=occurred)
@@ -517,8 +479,7 @@ def test_a_replay_reopens_a_scheduled_row_at_its_due_time_when_that_is_ahead(
 
 
 def test_a_cancelled_scheduled_row_is_reopened_at_its_due_time(expiry: list[int]) -> None:
-    """The way back from a cancel made by mistake: the reopened row is due when
-    the schedule says, not at once, as any reopened scheduled row is."""
+    """The way back from a mistaken cancel: a reopened row is due on schedule."""
     occurred = django_timezone.now() - timedelta(hours=1)
     with transaction.atomic():
         event_id = fire(Unheard(value=1), occurred_at=occurred)
@@ -548,8 +509,7 @@ def test_a_replay_adds_a_scheduled_row_at_its_due_time_when_that_is_ahead(
 def test_a_replay_of_a_scheduled_row_whose_due_time_has_passed_runs_it_now(
     expiry: list[int],
 ) -> None:
-    """The later of the due time and the replay: an offer whose 48 hours ran
-    out last week is expired by the replay, owed from the replay."""
+    """The later of the due time and the replay: an expired offer is owed from replay."""
     occurred = django_timezone.now() - timedelta(days=7)
     with receiver_deleted(EXPIRE), transaction.atomic():
         event_id = fire(Unheard(value=1), occurred_at=occurred)
@@ -565,8 +525,7 @@ def test_a_replay_of_a_scheduled_row_whose_due_time_has_passed_runs_it_now(
 
 
 def test_a_replay_asks_a_due_callable_again() -> None:
-    """Resolved at replay time, as targets are: the event is rebuilt from its
-    payload and handed to the callable."""
+    """Resolved at replay time, as targets are: the event is rebuilt from its payload."""
     asked: list[Unheard] = []
     when = django_timezone.now() + timedelta(days=2)
 

@@ -46,8 +46,7 @@ def _statuses(event_id: int) -> dict[str, str]:
 
 
 def test_unclaimed_rows_are_settled_and_never_run(order: OrderPlaced, record: list[str]) -> None:
-    """The point of the operation: work withdrawn before it ran never runs,
-    not now and not when the relay is told a time far beyond its due time."""
+    """Work withdrawn before it ran never runs, not even under a far time."""
     event_id = _fired(order)
     record.clear()
 
@@ -62,9 +61,7 @@ def test_unclaimed_rows_are_settled_and_never_run(order: OrderPlaced, record: li
 def test_a_cancelled_row_records_when_it_was_settled_and_no_success(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """``completed_at`` is when it was settled, as for any terminal row, and
-    ``succeeded_at`` stays empty: the receiver never ran, so a receiver whose
-    work is all cancelled is one that has not been seen to work."""
+    """completed_at is set, and succeeded_at stays empty: the receiver never ran."""
     event_id = _fired(order)
     before = django_timezone.now()
 
@@ -78,9 +75,7 @@ def test_a_cancelled_row_records_when_it_was_settled_and_no_success(
 def test_a_failed_row_awaiting_its_retry_is_cancelled_too(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """A scheduled row that came due and failed waits out its backoff as
-    FAILED, and "never runs" has to cover its retries. Held separately from
-    PENDING because membership in the status list is one branch arc."""
+    """Never-runs must cover the retries of a due row that failed."""
     event_id = _fired(order)
     DeliveryRecord.objects.filter(receiver_key=DURABLE).update(
         status=DeliveryStatus.FAILED,
@@ -97,10 +92,7 @@ def test_a_failed_row_awaiting_its_retry_is_cancelled_too(
 
 
 def test_a_claimed_row_is_left_alone_and_counted(order: OrderPlaced, record: list[str]) -> None:
-    """A worker holds it, and may be running the receiver right now: settling it
-    under the worker would record an outcome the receiver contradicts. It is
-    left to run, and the receiver re-checks as it always did; the count tells
-    the caller how many it could not stop."""
+    """A worker may be running the receiver now, so the row is not settled under it."""
     event_id = _fired(order)
     DeliveryRecord.objects.filter(receiver_key=DURABLE).update(
         status=DeliveryStatus.CLAIMED, claimed_by="relay-a"
@@ -123,9 +115,7 @@ def test_a_claimed_row_is_left_alone_and_counted(order: OrderPlaced, record: lis
 def test_a_settled_row_keeps_its_outcome(
     order: OrderPlaced, record: list[str], settled: DeliveryStatus
 ) -> None:
-    """Only owed work can be withdrawn. A dead letter cancelled would vanish
-    from the dead-letter counts without anyone requeueing or reading it, and a
-    success would lose the record that it ran."""
+    """Only owed work can be withdrawn."""
     event_id = _fired(order)
     finished = datetime(2026, 10, 1, tzinfo=timezone.utc)
     DeliveryRecord.objects.update(status=settled, completed_at=finished)
@@ -144,8 +134,7 @@ def test_only_the_named_events_are_touched(order: OrderPlaced, record: list[str]
 
 
 def test_it_can_be_narrowed_to_one_receiver(order: OrderPlaced, record: list[str]) -> None:
-    """One event usually drives an immediate reaction and a scheduled one, and
-    only the scheduled one became moot."""
+    """One event can drive an immediate and a scheduled reaction; only the latter goes."""
     event_id = _fired(order)
 
     assert cancel_deliveries([event_id], receiver_key=DURABLE) == {
@@ -161,8 +150,7 @@ def test_it_can_be_narrowed_to_one_receiver(order: OrderPlaced, record: list[str
 def test_the_claimed_count_is_narrowed_like_the_cancel(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """A row held by a worker under another receiver is not one this call
-    tried to stop, so it is not reported as left running."""
+    """A row held by another receiver is not reported as left running."""
     event_id = _fired(order)
     DeliveryRecord.objects.filter(receiver_key=CONTEXT).update(status=DeliveryStatus.CLAIMED)
 
@@ -190,8 +178,7 @@ def test_it_can_be_narrowed_to_named_rows(order: OrderPlaced, record: list[str])
 def test_a_named_row_of_an_event_not_named_is_left_alone(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The scopes intersect: naming a row does not widen the call past the
-    events it was given, so a stale id list cannot reach another event's work."""
+    """The scopes intersect: a stale id list cannot reach another event's work."""
     named = _fired(order)
     other = _fired(order)
     stray = DeliveryRecord.objects.get(event=other, receiver_key=DURABLE).pk
@@ -229,9 +216,7 @@ def test_no_events_and_unknown_events_cancel_nothing(order: OrderPlaced, record:
 
 
 def test_it_joins_the_caller_s_transaction(order: OrderPlaced, record: list[str]) -> None:
-    """Called where the change that made the work moot is written, the cancel
-    commits with that change or not at all: an order whose cancellation rolled
-    back keeps its reminder."""
+    """Called where the change is written, so the cancel commits with it or not at all."""
     event_id = _fired(order)
 
     with pytest.raises(RuntimeError), transaction.atomic():
@@ -242,8 +227,7 @@ def test_it_joins_the_caller_s_transaction(order: OrderPlaced, record: list[str]
 
 
 def test_it_chunks_the_events(order: OrderPlaced, record: list[str], settings: Any) -> None:
-    """One transaction per ``BATCH_SIZE`` events: SQLite refuses an unbounded
-    parameter list, and a long one would hold every event lock at once."""
+    """One transaction per BATCH_SIZE events: SQLite refuses an unbounded parameter list."""
     settings.DJANGO_DOMAIN_EVENTS = {"BATCH_SIZE": 2}
     events = [_fired(order) for _ in range(3)]
 
@@ -255,9 +239,7 @@ def test_it_chunks_the_events(order: OrderPlaced, record: list[str], settings: A
 
 
 def test_it_chunks_the_named_rows(order: OrderPlaced, record: list[str], settings: Any) -> None:
-    """The named rows are read and written ``BATCH_SIZE`` at a time, so an
-    admin select-all past SQLite's parameter ceiling is several statements
-    rather than an OperationalError."""
+    """Named rows go BATCH_SIZE at a time, under SQLite's parameter ceiling."""
     settings.DJANGO_DOMAIN_EVENTS = {"BATCH_SIZE": 2}
     event_id = _fired(order)
     ids = list(DeliveryRecord.objects.values_list("pk", flat=True)) + [10_000, 10_001]
@@ -275,10 +257,7 @@ def test_it_chunks_the_named_rows(order: OrderPlaced, record: list[str], setting
 def test_it_will_not_cancel_a_row_claimed_after_the_lock(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The status predicate on the write. A relay's claim never takes the event
-    lock, so between this call locking the event and writing, a row can still
-    be claimed - hooked here onto the clock read that sits between the two.
-    Settling it would record an outcome under a worker about to run it."""
+    """The status predicate on the write."""
     module = importlib.import_module("django_domain_events.operations.cancel_deliveries")
     event_id = _fired(order)
     stolen_id = DeliveryRecord.objects.get(event=event_id, receiver_key=DURABLE).pk
@@ -302,8 +281,7 @@ def test_it_will_not_cancel_a_row_claimed_after_the_lock(
 def test_a_cancelled_scheduled_event_is_pruned_once_consumed(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """End to end: cancelling the last owed row is what lets an event under a
-    retention policy go at the next sweep, rather than waiting for the work."""
+    """Cancelling the last owed row lets a retained event go at the next sweep."""
     event_id = _fired(order)
     EventRecord.objects.filter(pk=event_id).update(delete_when="settled")
     assert prune_events() == 0
@@ -320,12 +298,7 @@ postgres_only = pytest.mark.skipif(
 
 
 def _in_thread(target: Any) -> tuple[threading.Thread, threading.Event, threading.Event]:
-    """Run ``target`` in a transaction on its own connection, holding it open.
-
-    ``target`` runs, then ``inside`` is set and the transaction stays open
-    until ``release`` is set, so the main thread acts while this one holds
-    every lock it took.
-    """
+    """Run ``target`` in a transaction on its own connection, holding it open."""
     inside, release = threading.Event(), threading.Event()
 
     def run() -> None:
@@ -347,11 +320,7 @@ def _in_thread(target: Any) -> tuple[threading.Thread, threading.Event, threadin
 def test_a_cancel_waits_for_a_claim_in_flight_and_leaves_the_row_claimed(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Two connections. A relay has claimed the row and not committed, so the
-    cancel still reads it as pending; its write queues behind the claim's row
-    lock and, once the claim commits, re-checks the status and leaves the row
-    to the relay. Without the status predicate on the write, the queued write
-    lands on the claimed row and settles it under a worker about to run it."""
+    """Two connections."""
     event_id = _fired(order)
     claimed: list[int] = []
 
@@ -377,8 +346,6 @@ def test_a_cancel_waits_for_a_claim_in_flight_and_leaves_the_row_claimed(
         thread.join(10)
         timer.cancel()
 
-    # It queued behind the claim rather than reading the row after it: the
-    # interleaving under test happened, not merely the outcome.
     assert waited >= 0.4
     assert counts == {"cancelled": 1, "in_flight": 1}
     row = DeliveryRecord.objects.get(pk=claimed[0])
@@ -389,9 +356,7 @@ def test_a_cancel_waits_for_a_claim_in_flight_and_leaves_the_row_claimed(
 def test_a_relay_skips_a_row_a_cancel_holds_and_never_claims_it_after(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The other order: the cancel has written and not committed. The relay's
-    claim skips the locked row rather than waiting, and once the cancel commits
-    the row is settled, so no later claim takes it either."""
+    """The other order: the cancel has written and not committed."""
     event_id = _fired(order)
 
     thread, _, release = _in_thread(lambda: cancel_deliveries([event_id]))
@@ -416,11 +381,7 @@ def test_a_relay_skips_a_row_a_cancel_holds_and_never_claims_it_after(
 def test_a_cancel_issued_during_a_replay_is_not_overtaken_by_it(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The event lock, observed. A replay holds the event row for its
-    transaction, so a cancel issued while it is open waits for it and then
-    cancels what it reopened. Without the lock the cancel reads the rows as
-    settled, cancels nothing, and the replay commits them owed: the operator is
-    told nothing was there to cancel and the work they withdrew runs."""
+    """The event lock, observed."""
     from django_domain_events.operations import replay_events as replay_module
 
     event_id = _fired(order)
@@ -432,8 +393,7 @@ def test_a_cancel_issued_during_a_replay_is_not_overtaken_by_it(
 
     def slow(*args: Any, **kwargs: Any) -> Any:
         inside.set()
-        # Long enough for the cancel below to reach the event while the
-        # replay's transaction is open.
+        # Long enough for a cancel to reach the event while replay is open.
         threading.Event().wait(0.7)
         return real(*args, **kwargs)
 
@@ -460,15 +420,7 @@ def test_a_cancel_issued_during_a_replay_is_not_overtaken_by_it(
 def test_a_prune_during_a_cancel_loses_nothing_and_takes_the_event_after(
     order: OrderPlaced, record: list[str], batch_size: int | None
 ) -> None:
-    """Two connections, the cancel open while a prune sweeps. The prune reads
-    the event as still owed, because the cancel has not committed, and leaves
-    it whole: nothing is lost, and the next sweep takes it.
-
-    This passes with the cancel's event lock removed too, and says so rather
-    than claiming to hold it: a prune deletes only an event with nothing owed,
-    and a cancel writes only owed rows, so the two never contend for one
-    delivery row. The lock is held by the replay test above and by the
-    statement-order test below."""
+    """Two connections, the cancel open while a prune sweeps."""
     event_id = _fired(order)
     EventRecord.objects.filter(pk=event_id).update(delete_when="settled")
 
@@ -488,9 +440,7 @@ def test_a_prune_during_a_cancel_loses_nothing_and_takes_the_event_after(
 def test_the_events_are_locked_before_their_rows_are_written(
     order: OrderPlaced, record: list[str], named: bool
 ) -> None:
-    """The lock a replay and a prune also take, taken before the write rather
-    than after: the statement order is what makes the wait mean anything. On
-    SQLite the lock is no statement at all, so there the order is moot."""
+    """Taken before the write: statement order is what makes the wait mean anything."""
     event_id = _fired(order)
     ids = list(DeliveryRecord.objects.values_list("pk", flat=True)) if named else None
 
@@ -502,9 +452,5 @@ def test_the_events_are_locked_before_their_rows_are_written(
     if connection.features.has_select_for_update:
         locked = next(i for i, sql in enumerate(statements) if "FOR UPDATE" in sql)
         assert locked < updated
-        # Ascending, so two cancels (and a replay or a prune) locking the same
-        # events take them in the same order and cannot deadlock; the backend
-        # spells it ``ORDER BY 1 ASC`` or ``ORDER BY "..."."id" ASC``, and a
-        # descending lock is the spelling this must not accept.
         assert re.search(r"ORDER BY .*\bASC\b", statements[locked]), statements[locked]
         assert "DESC" not in statements[locked]

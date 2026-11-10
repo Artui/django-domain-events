@@ -41,9 +41,7 @@ def test_it_deletes_settled_events_past_the_window(order: OrderPlaced, record: l
 def test_it_never_deletes_an_event_that_is_still_owed(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The rule the whole thing turns on. Deleting a row with work outstanding
-    drops an obligation nobody recorded as lost, which is the exact failure the
-    outbox exists to prevent."""
+    """The rule the whole thing turns on."""
     with transaction.atomic():
         fire(order)
     _age(365)
@@ -65,8 +63,7 @@ def test_a_delivery_in_flight_protects_its_event(order: OrderPlaced, record: lis
 
 
 def test_a_dead_delivery_is_settled(order: OrderPlaced, record: list[str]) -> None:
-    """Dead means the package has stopped trying. Holding the event forever
-    would make a permanent failure a permanent leak."""
+    """Dead means the package has stopped trying."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(status=DeliveryStatus.DEAD)
@@ -76,8 +73,7 @@ def test_a_dead_delivery_is_settled(order: OrderPlaced, record: list[str]) -> No
 
 
 def test_an_event_with_no_deliveries_is_settled(record: list[str]) -> None:
-    """A suppressed event, or one with no durable receivers, is settled by
-    definition - there is nothing that could still be owed."""
+    """A suppressed event, or one with no durable receivers, is settled by definition."""
     with transaction.atomic():
         fire(PinnedName(value=1))
     _age(365)
@@ -96,8 +92,7 @@ def test_events_inside_the_window_are_kept(order: OrderPlaced, record: list[str]
 
 
 def test_it_deletes_in_batches(order: OrderPlaced, record: list[str]) -> None:
-    """A single statement over a year of rows holds a lock for as long as it
-    runs, on the table the relay is trying to claim from."""
+    """One statement over a year of rows holds a lock the relay needs."""
     with transaction.atomic():
         for _ in range(7):
             fire(PinnedName(value=1))
@@ -119,9 +114,7 @@ def test_a_limit_stops_it_early(record: list[str]) -> None:
 def test_a_replay_between_the_select_and_the_delete_is_respected(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Settledness is re-checked at the delete. A replay landing in between makes
-    rows owed again, and the cascade would take them with no record that anything
-    was lost - after the operator had been told they were reopened."""
+    """Settledness is re-checked at the delete."""
     from django_domain_events.operations.replay_events import replay_events
 
     with transaction.atomic():
@@ -129,17 +122,13 @@ def test_a_replay_between_the_select_and_the_delete_is_respected(
     drain_outbox()
     _age(365)
 
-    # The interleaving, made deterministic: the event is settled when prune
-    # chooses it and owed again by the time prune writes.
     assert replay_events([event_id])["reopened"] == 2
     assert prune_events() == 0
     assert EventRecord.objects.filter(pk=event_id).exists()
 
 
 def test_it_counts_events_not_cascaded_rows(order: OrderPlaced, record: list[str]) -> None:
-    """delete() reports every object it removed, including the delivery rows the
-    cascade takes - so a caller asking how many events went would be told how
-    many rows went."""
+    """delete() counts cascaded delivery rows, not just events."""
     with transaction.atomic():
         fire(order)
     drain_outbox()
@@ -187,8 +176,7 @@ def _recorded(
 
 
 def test_a_fan_out_with_one_dead_row_is_kept_until_every_delivery_succeeded() -> None:
-    """``succeeded`` waits for success: the dead letter keeps its event, so it
-    stays inspectable and ``requeue_dead`` still has something to reopen."""
+    """Under succeeded the dead letter keeps its event, so requeue_dead can reopen it."""
     kept = _recorded(SUCCEEDED, SUCCEEDED, DEAD, delete_when="succeeded")
 
     assert prune_events() == 0
@@ -196,8 +184,7 @@ def test_a_fan_out_with_one_dead_row_is_kept_until_every_delivery_succeeded() ->
 
 
 def test_the_same_fan_out_is_deleted_once_settled() -> None:
-    """``settled`` waits only for every delivery to be terminal, dead letters
-    included, so the event goes without waiting out the window."""
+    """settled waits only for every delivery to be terminal, dead letters included."""
     _recorded(SUCCEEDED, SUCCEEDED, DEAD, delete_when="settled")
 
     assert prune_events() == 1
@@ -213,8 +200,7 @@ def test_every_delivery_succeeded_deletes_it_at_once() -> None:
 
 
 def test_an_orphaned_delivery_keeps_an_event_waiting_for_success() -> None:
-    """Orphaned is terminal but not a success: nothing ran, so the event has not
-    been consumed."""
+    """Orphaned is terminal but not a success: nothing ran, so the event has not been consumed."""
     _recorded(SUCCEEDED, DeliveryStatus.ORPHANED, delete_when="succeeded")
 
     assert prune_events() == 0
@@ -222,10 +208,7 @@ def test_an_orphaned_delivery_keeps_an_event_waiting_for_success() -> None:
 
 @pytest.mark.parametrize("delete_when", ["succeeded", "settled"])
 def test_a_cancelled_delivery_is_consumed_under_either_policy(delete_when: str) -> None:
-    """Cancelled is settled, and under ``succeeded`` it counts as consumed too:
-    the work was withdrawn on purpose, so nothing is left to inspect or requeue
-    and every row of the event is done. Without it in the success-only test,
-    an event whose reminder was cancelled would wait out the whole window."""
+    """Cancelled counts as consumed under succeeded: nothing is left to requeue."""
     _recorded(SUCCEEDED, DeliveryStatus.CANCELLED, delete_when=delete_when)
 
     assert prune_events() == 1
@@ -233,8 +216,7 @@ def test_a_cancelled_delivery_is_consumed_under_either_policy(delete_when: str) 
 
 
 def test_a_cancelled_delivery_is_settled_for_the_ordinary_window() -> None:
-    """An ordinary event goes at ``RETENTION_DAYS`` once settled, and a
-    cancelled row must not hold it there as though it were still owed."""
+    """An ordinary event goes at RETENTION_DAYS; a cancelled row must not hold it."""
     _recorded(SUCCEEDED, DeliveryStatus.CANCELLED, age=timedelta(days=120))
 
     assert prune_events() == 1
@@ -256,8 +238,7 @@ def test_an_owed_delivery_keeps_it_under_either_policy(
 def test_an_event_with_no_durable_deliveries_is_consumed_as_soon_as_it_commits(
     delete_when: str,
 ) -> None:
-    """Nothing is owed, so nothing is left to wait for. A suppressed event is
-    this case too: its row goes at the first sweep."""
+    """Nothing is owed, so nothing is left to wait for."""
     _recorded(delete_when=delete_when)
 
     assert prune_events() == 1
@@ -270,16 +251,14 @@ def test_an_ordinary_event_is_not_deleted_on_consumption() -> None:
 
 
 def test_an_event_kept_by_a_dead_letter_still_goes_at_the_ordinary_window() -> None:
-    """The dead letter keeps the event inspectable for RETENTION_DAYS, not
-    forever: without this the policy that deletes sooner would keep longer."""
+    """The dead letter keeps the event for RETENTION_DAYS, not forever."""
     _recorded(SUCCEEDED, DEAD, delete_when="succeeded", age=timedelta(days=120))
 
     assert prune_events() == 1
 
 
 def test_an_unknown_policy_falls_back_to_the_ordinary_window() -> None:
-    """A value no release writes - a hand edit, or a downgrade - is neither
-    consumed early nor kept forever."""
+    """A value no release writes is neither consumed early nor kept forever."""
     _recorded(SUCCEEDED, delete_when="bogus")
     _recorded(SUCCEEDED, delete_when="bogus", age=timedelta(days=120))
 
@@ -310,8 +289,7 @@ def test_an_event_with_a_longer_window_of_its_own_outlives_retention_days() -> N
 
 
 def test_older_than_overrides_only_the_default_window() -> None:
-    """``--days`` replaces RETENTION_DAYS. An event that declared its own window
-    keeps it."""
+    """``--days`` replaces RETENTION_DAYS."""
     _recorded(SUCCEEDED, retention_seconds=30 * 86400, age=timedelta(days=10))
 
     assert prune_events(timedelta(days=1)) == 0
@@ -320,8 +298,7 @@ def test_older_than_overrides_only_the_default_window() -> None:
 def test_the_fate_is_read_off_the_row_not_the_registry(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """An event recorded under the ordinary window keeps it whether or not its
-    class is still declared: the prune never asks the registry."""
+    """The window is fixed at record time, even if the class is undeclared."""
     with transaction.atomic():
         fire(order)
     drain_outbox()
@@ -349,10 +326,7 @@ class _DeleteLog:
 
 
 def test_a_batch_is_bounded_by_rows_not_events() -> None:
-    """Four events of three deliveries each, four rows a batch: one event per
-    transaction, because each costs its deliveries plus itself. Counted in
-    events, as batches used to be, the first would take all four and twelve
-    delivery rows with them."""
+    """Four events of three deliveries: one transaction per event."""
     for _ in range(4):
         _recorded(SUCCEEDED, SUCCEEDED, SUCCEEDED, delete_when="succeeded")
 
@@ -363,8 +337,7 @@ def test_a_batch_is_bounded_by_rows_not_events() -> None:
 
 
 def test_an_event_with_no_deliveries_still_counts_against_the_batch() -> None:
-    """The event row is a row. Otherwise a million suppressed events would be
-    one transaction."""
+    """The event row is a row."""
     for _ in range(5):
         _recorded(delete_when="settled")
 
@@ -375,8 +348,7 @@ def test_an_event_with_no_deliveries_still_counts_against_the_batch() -> None:
 
 
 def test_an_event_larger_than_the_batch_is_deleted_in_chunks() -> None:
-    """Its delivery rows go a batch at a time, each chunk its own transaction,
-    and the event row with the last of them."""
+    """Delivery rows go a batch at a time; the event row goes last."""
     _recorded(*[SUCCEEDED] * 10, delete_when="succeeded")
 
     log = _DeleteLog()
@@ -388,10 +360,7 @@ def test_an_event_larger_than_the_batch_is_deleted_in_chunks() -> None:
 
 @pytest.mark.parametrize("size", [0, -1, True, "2", 2.5])
 def test_a_batch_size_that_is_not_a_positive_count_is_refused(size: object) -> None:
-    """One case per condition of the guard: zero and a negative by the lower
-    bound (zero would delete nothing and report success), ``True`` by the bool
-    test (an int, so it would read as one), and a string and a float by the
-    type test (a setting read from the environment arrives as the first)."""
+    """One case per guard condition: zero, a negative, True, a string and a float."""
     with pytest.raises(ValueError, match="batch_size"):
         prune_events(batch_size=size)
 
@@ -412,11 +381,7 @@ def test_a_stale_selection_is_rechecked_at_the_delete(
     retention_seconds: int | None,
     age: timedelta,
 ) -> None:
-    """The selection handed to the delete names an event that a replay has
-    since made owed again. The delete must re-check, or the cascade takes the
-    reopened work with no record that anything was lost. The selection is
-    stubbed because a replay that lands before the prune starts is simply not
-    selected, and proves nothing about the delete."""
+    """The selection handed to the delete names an event that a replay has since made owed again."""
     event = _recorded(
         SUCCEEDED,
         DeliveryStatus.PENDING,
@@ -434,8 +399,7 @@ def test_a_stale_selection_is_rechecked_at_the_delete(
 def test_a_stale_selection_is_rechecked_before_a_chunk_too(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The same for an event too large for one batch, whose delivery rows go
-    before it does: a chunk is deleted only while its event is still due."""
+    """A chunk is deleted only while its event is still due."""
     event = _recorded(
         SUCCEEDED, SUCCEEDED, SUCCEEDED, DeliveryStatus.PENDING, delete_when="settled"
     )
@@ -451,8 +415,7 @@ def _successes() -> dict[str, datetime]:
 
 
 def test_each_receiver_s_last_success_outlives_its_deliveries() -> None:
-    """The newest success among what went, per receiver - and nothing for a
-    receiver whose deleted rows never succeeded."""
+    """The newest success among deleted rows, per receiver."""
     _recorded(SUCCEEDED, DEAD, delete_when="settled")
     newest = _recorded(SUCCEEDED, delete_when="settled")
     latest = django_timezone.now() + timedelta(minutes=5)
@@ -495,9 +458,7 @@ def test_a_chunk_records_its_last_successes_too() -> None:
 def test_the_last_success_is_written_in_the_delete_s_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A delete that fails takes the record of it back with it, so the table
-    never claims a success for rows that are still there - and, the other way
-    round, rows are never deleted without it being written."""
+    """A failed delete takes its record back with it."""
 
     def fail(ids: list[int]) -> int:
         raise RuntimeError("the delete failed")
@@ -511,10 +472,7 @@ def test_the_last_success_is_written_in_the_delete_s_transaction(
 
 
 def test_postgres_is_given_an_interval_for_the_window() -> None:
-    """Compiled here for the SQLite gate's sake, since the branch only runs on
-    Postgres; what it computes there is held by the window tests above, which
-    the Postgres job runs. Every other backend gets microseconds, the form its
-    datetime arithmetic expects."""
+    """Compiled here for the SQLite gate; it only runs on Postgres."""
     query = EventRecord.objects.all().query
     compiler = query.get_compiler(using="default")
     seconds = prune_module._Seconds(models.F("retention_seconds")).resolve_expression(query)
@@ -534,21 +492,7 @@ DELIVERY_TABLE = DeliveryRecord._meta.db_table
     reason="asserts Postgres query plans; SQLite's planner is not the one a sweep runs on",
 )
 def test_each_kind_of_due_is_one_index_range(plans_without_seqscan: Plans) -> None:
-    """With nothing due, a sweep is four selects, none reading history: each
-    policy through its own range of dde_consumed_by_policy, the windows of
-    their own through dde_own_window, the ordinary window through
-    ``recorded_at`` - and every one checks its events' deliveries through
-    dde_unfinished_by_event, which holds no succeeded row.
-
-    A partial index serves a query only if its WHERE clause implies the
-    index's condition, so this is what fails when a filter is phrased any
-    other way. Four plans, not three, is the policies' OR split in two: under
-    the OR, at 440,000 delivery rows, Postgres read the whole retention index
-    and hashed the entire delivery table on every sweep. The delivery access
-    is what fails without the unfinished index, the probe then walking every
-    row of the event through the unique one. The window arm's
-    ``retention_seconds IS NOT NULL`` is not held here: Postgres 17 infers it
-    from the strict arithmetic beside it."""
+    """With nothing due, a sweep is four selects, none reading history."""
     now = django_timezone.now()
     EventRecord.objects.bulk_create(
         EventRecord(name="testapp.OrderPlaced", payload={}, occurred_at=now) for _ in range(3000)
@@ -573,8 +517,6 @@ def test_each_kind_of_due_is_one_index_range(plans_without_seqscan: Plans) -> No
     assert "dde_own_window" in own_window and "dde_consumed_by_policy" not in own_window
     assert "recorded_at" in ordinary, ordinary
     assert "dde_own_window" not in ordinary and "dde_consumed_by_policy" not in ordinary
-    # The helper attributes a bitmap scan to the event table only by an index
-    # name carrying the table's, which these two named ones do not.
     event_side = {"dde_consumed_by_policy", "dde_own_window"}
     for plan in plans:
         assert f"Seq Scan on {EVENT_TABLE}" not in plan, plan
@@ -593,8 +535,7 @@ def test_the_batch_size_defaults_to_a_setting_of_its_own(settings: Any) -> None:
 
 
 def test_a_stop_ends_the_prune_between_batches() -> None:
-    """``stop`` is read before each batch: a relay asked to shut down waits for
-    one batch, not for a backlog. Without the check the whole backlog goes."""
+    """stop is read before each batch: a relay asked to shut down waits for one batch."""
     for _ in range(5):
         EventRecord.objects.create(
             name="testapp.OrderPlaced",
@@ -620,11 +561,7 @@ needs_row_locks = pytest.mark.skipif(
 def test_a_replay_in_flight_is_not_deleted_under(
     order: OrderPlaced, record: list[str], batch_size: int | None
 ) -> None:
-    """A prune that reaches an event while a replay of it is open waits for the
-    replay, then sees it owed again. Without the event-row lock the prune's
-    DELETE queued behind the replay's row locks, re-checked only the delivery
-    table's own conditions, and took the reopened rows: the operator was told
-    two were reopened and found none (chunked: one of the two)."""
+    """A prune under an open replay waits for it, then sees the event owed."""
     import threading
     from unittest import mock
 
@@ -641,8 +578,7 @@ def test_a_replay_in_flight_is_not_deleted_under(
 
     def slow(*args: Any, **kwargs: Any) -> Any:
         inside.set()
-        # Long enough for the prune below to reach the event while this
-        # transaction is open.
+        # Long enough for the prune below to reach the event while this transaction is open.
         threading.Event().wait(0.7)
         return real(*args, **kwargs)
 
@@ -668,8 +604,7 @@ def test_a_replay_in_flight_is_not_deleted_under(
 def test_a_replay_of_an_event_pruned_in_the_meantime_skips_it(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The event is read, then a prune deletes it before the replay locks it.
-    Nothing is left to reopen, and the replay says so rather than raising."""
+    """The event is read, then a prune deletes it before the replay locks it."""
     from django_domain_events.operations.replay_events import replay_events
 
     with transaction.atomic():
@@ -695,8 +630,7 @@ def test_a_replay_of_an_event_pruned_in_the_meantime_skips_it(
 def test_requeue_dead_locks_the_events_before_it_reopens_their_rows(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The lock a prune waits on, taken before the rows are reopened rather than
-    after: the statement order is what makes the wait mean anything."""
+    """The lock is taken before the rows are reopened: statement order matters."""
     from django.test.utils import CaptureQueriesContext
 
     from django_domain_events.operations.requeue_dead import requeue_dead
@@ -719,9 +653,7 @@ def test_requeue_dead_locks_the_events_before_it_reopens_their_rows(
 
 
 def test_a_limit_is_spent_across_the_policies_not_per_policy() -> None:
-    """Each policy is a query of its own; the limit is what remains of the
-    caller's after the arms before it, not the whole of it for every arm. Passing
-    ``limit`` unreduced deletes up to ``limit`` per arm: three here, not two."""
+    """Each policy is its own query; the limit is what remains after the earlier arms."""
     _recorded(SUCCEEDED, delete_when="succeeded")
     _recorded(SUCCEEDED, delete_when="succeeded")
     _recorded(SUCCEEDED, delete_when="settled")
