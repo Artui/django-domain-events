@@ -1,11 +1,3 @@
-"""The changelist's cost, and the filters that keep it down.
-
-An event log's admin is the page an operator opens during an incident, on the
-table this package tells them will become the largest in their database. A
-filter that builds its options with SELECT DISTINCT over that table is a full
-scan on every page load, and nothing about the rendered page says so.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -37,12 +29,7 @@ def _viewer(*codenames: str) -> Client:
 
 
 def _captured() -> CaptureQueriesContext:
-    """Capture around the request itself.
-
-    A ``django_assert_num_queries`` block that closes before the client call
-    records nothing, and every assertion over its captured queries then passes
-    for the wrong reason.
-    """
+    """Capture around the request itself."""
     return CaptureQueriesContext(connection)
 
 
@@ -66,8 +53,7 @@ def test_the_event_changelist_scans_nothing(order: OrderPlaced, record: list[str
 def test_the_delivery_changelist_does_not_touch_available_at(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The model keeps no plain index on that column on purpose: "a second full
-    index on it would be written on every insert and read never"."""
+    """The model keeps no plain index on that column on purpose."""
     with transaction.atomic():
         fire(order)
     client = _viewer("view_deliveryrecord")
@@ -82,8 +68,7 @@ def test_the_delivery_changelist_does_not_touch_available_at(
 
 
 def test_the_event_filter_lists_declarations_not_rows() -> None:
-    """A declared event nobody has fired appears, and selecting it shows the
-    empty result that is itself the finding."""
+    """A declared event nobody has fired appears as an empty result."""
     options = dict(EventNameFilter(None, {}, EventRecord, None).lookups(None, None))
     assert "testapp.Unheard" in options
     assert not EventRecord.objects.filter(name="testapp.Unheard").exists()

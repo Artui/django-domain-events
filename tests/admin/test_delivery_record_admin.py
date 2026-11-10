@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/admin/delivery_record_admin.py``."""
-
 from __future__ import annotations
 
 import hashlib
@@ -38,13 +36,11 @@ def test_django_autodiscovery_registers_our_model_admin() -> None:
 
 
 def test_deliveries_cannot_be_added_changed_or_deleted() -> None:
-    """Editing ``status`` by hand is how a claimed row gets handed to a second
-    worker."""
+    """Editing ``status`` by hand is how a claimed row gets handed to a second worker."""
     site, request = _admin(), _request()
     assert site.has_add_permission(request) is False
     assert site.has_change_permission(request) is False
     assert site.has_delete_permission(request) is False
-    # Every column, with the digest swapped for its hex rendering.
     columns = {f.name for f in DeliveryRecord._meta.fields}
     assert set(site.get_readonly_fields(request)) == columns - {"target_digest"} | {"digest"}
 
@@ -52,8 +48,7 @@ def test_deliveries_cannot_be_added_changed_or_deleted() -> None:
 def test_requeue_resets_the_budget_rather_than_only_the_status(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Through requeue_dead, not queryset.update(): a status flip alone leaves
-    rows that dead-letter again on the first failure."""
+    """Through requeue_dead: a status flip alone leaves rows that dead-letter again."""
     with transaction.atomic():
         fire(order)
     DeliveryRecord.objects.update(
@@ -76,9 +71,7 @@ def test_requeue_resets_the_budget_rather_than_only_the_status(
 def test_a_mixed_selection_reports_what_it_left_alone(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Counted from one list captured before the update. Asking the queryset
-    afterwards re-runs it against rows this call just moved to PENDING, and
-    reports every requeued row as skipped."""
+    """Counted from one list captured before the update."""
     with transaction.atomic():
         fire(order)
     dead = DeliveryRecord.objects.order_by("pk").first()
@@ -107,8 +100,7 @@ def test_a_selection_with_nothing_dead_says_so(order: OrderPlaced, record: list[
 def test_cancel_withdraws_the_selected_rows_and_reports(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Through cancel_deliveries, scoped to the selected rows' own events: a
-    selection spanning two events cancels in both."""
+    """Through cancel_deliveries, scoped to the selected rows' own events."""
     with transaction.atomic():
         fire(order)
         fire(order)
@@ -124,8 +116,7 @@ def test_cancel_withdraws_the_selected_rows_and_reports(
 def test_cancel_touches_only_the_selected_rows_of_an_event(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The rows are passed as ``delivery_ids``, not widened to their events:
-    selecting one delivery must not withdraw its sibling receiver's."""
+    """Passed as delivery_ids: a sibling receiver's delivery must not be withdrawn."""
     with transaction.atomic():
         fire(order)
     chosen = DeliveryRecord.objects.order_by("pk").first()
@@ -141,8 +132,7 @@ def test_cancel_touches_only_the_selected_rows_of_an_event(
 
 
 def test_cancel_reports_a_claimed_row_as_in_flight(order: OrderPlaced, record: list[str]) -> None:
-    """Three cancelled and one in flight, so the two counts cannot be read from
-    each other and still produce this message."""
+    """Three cancelled and one in flight: neither count can stand in for the other."""
     with transaction.atomic():
         fire(order)
         fire(order)
@@ -160,11 +150,7 @@ def test_cancel_reports_a_claimed_row_as_in_flight(order: OrderPlaced, record: l
 
 
 def test_cancel_reports_settled_rows_it_left_alone(order: OrderPlaced, record: list[str]) -> None:
-    """Counted from one list captured before the call, as requeue counts. The
-    selection is a filter the cancel changes the answer to - "not cancelled",
-    as a status filter in the changelist would be - so asking the queryset
-    afterwards would drop the row this call just cancelled and misreport the
-    settled count."""
+    """Counted from one list captured before the call, as requeue counts."""
     with transaction.atomic():
         fire(order)
     dead, claimed, done = DeliveryStatus.DEAD, DeliveryStatus.CLAIMED, DeliveryStatus.SUCCEEDED
@@ -186,8 +172,7 @@ def test_cancel_reports_settled_rows_it_left_alone(order: OrderPlaced, record: l
 
 
 def test_cancelled_rows_can_be_listed_on_their_own(admin_client) -> None:
-    """The status filter is the field's choices, so a cancelled row is one an
-    operator can list by itself, labelled as such, the way dead letters are."""
+    """The status filter is the field's choices, so cancelled rows list on their own."""
     event = EventRecord.objects.create(
         name="testapp.Unheard",
         version=1,
@@ -209,8 +194,7 @@ def test_cancelled_rows_can_be_listed_on_their_own(admin_client) -> None:
 
 
 def test_a_fan_out_delivery_can_be_found_by_its_target(admin_client) -> None:
-    """What an operator holds when a fan-out goes wrong is the target: "endpoint
-    42 says it never got it"."""
+    """What an operator holds when a fan-out goes wrong is the target."""
     event = EventRecord.objects.create(
         name="testapp.Unheard",
         version=1,
@@ -231,9 +215,7 @@ def test_a_fan_out_delivery_can_be_found_by_its_target(admin_client) -> None:
 
 
 def test_the_detail_page_shows_the_digest_as_hex(admin_client) -> None:
-    """Stored as raw bytes, which Django renders as a Python ``b'...'`` literal
-    full of escapes. Hex is what an operator can compare against a digest
-    computed anywhere else."""
+    """Stored as raw bytes, which Django renders as a Python ``b'...'`` literal full of escapes."""
     event = EventRecord.objects.create(
         name="testapp.Unheard",
         version=1,
@@ -255,9 +237,7 @@ def test_the_detail_page_shows_the_digest_as_hex(admin_client) -> None:
 def test_cancel_goes_through_the_operation(
     order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The action calls cancel_deliveries rather than updating the rows itself:
-    the operation's event lock is what makes a cancel wait for an open replay,
-    which no single-connection outcome here would notice missing."""
+    """Calls cancel_deliveries: its event lock makes a cancel wait for an open replay."""
     with transaction.atomic():
         event_id = fire(order)
     chosen = DeliveryRecord.objects.order_by("pk").first()
