@@ -19,22 +19,7 @@ def requeue_dead(
     delivery_ids: Iterable[int] | None = None,
     limit: int | None = None,
 ) -> int:
-    """Give dead-lettered deliveries their attempt budget back.
-
-    Dead is where a delivery stops on its own; it is not where it stops for
-    good. Attempts reset to zero rather than staying spent, because a row
-    requeued at its limit dead-letters again on the first failure and the
-    operator learns nothing they did not already know. ``due_at`` resets to now
-    for the same reason, applied to time: a receiver's ``give_up_after`` is
-    measured from it, and a dead letter requeued a month after its event would
-    otherwise be past a one-day bound on its first deferral
-    (``test_a_requeued_row_is_owed_from_the_requeue``).
-
-    Scoped by receiver, because the usual reason to requeue is that one
-    downstream was broken and now is not. Scoped by row as well, because the
-    other reason is an operator reading a dead-letter list and picking the four
-    they understand.
-    """
+    """Give dead-lettered deliveries their attempt budget back."""
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.models.event_record import EventRecord
 
@@ -50,13 +35,8 @@ def requeue_dead(
     ids = _owed_ids(dead, delivery_ids, chunk=chunk, limit=limit)
     requeued = 0
     for start in range(0, len(ids), chunk):
-        # Chunked: SQLite refuses more than 32,766 parameters in one statement,
-        # and a dead-letter table past that is an ordinary outcome of one bad
-        # deploy. Postgres would take every row lock in a single statement.
         batch = ids[start : start + chunk]
         with transaction.atomic(using=write_alias()):
-            # Lock the events first so a prune does not delete the rows being
-            # reopened; see replay_events. Primary key order, as the prune's.
             list(
                 EventRecord.objects.using(write_alias())
                 .select_for_update()
@@ -87,17 +67,7 @@ def requeue_dead(
 def _owed_ids(
     dead: QuerySet[Any], delivery_ids: Iterable[int] | None, *, chunk: int, limit: int | None
 ) -> list[int]:
-    """Which dead rows to requeue, without binding an unbounded IN list.
-
-    The UPDATE below chunks, and the SELECT has to for the same reason: passing
-    the whole id list in one statement is how an admin select-all over a
-    dead-letter queue larger than SQLite's 32,766-parameter ceiling turns a
-    routine requeue into an OperationalError.
-
-    ``limit is not None``, not truthiness: limit=0 is an operator asking for the
-    smallest possible blast radius, and reading it as "no limit" gives them the
-    largest one.
-    """
+    """Which dead rows to requeue, without binding an unbounded IN list."""
     if delivery_ids is None:
         owed = dead.values_list("pk", flat=True)
         return list(owed if limit is None else owed[:limit])

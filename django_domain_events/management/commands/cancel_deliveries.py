@@ -11,13 +11,8 @@ class Command(BaseCommand):
     help = "Withdraw the owed deliveries of events, so they never run."
 
     def add_arguments(self, parser: Any) -> None:
-        # One or more, as replay_events takes them: a cancel naming no events
-        # is refused by the parser rather than read as every event.
+        # A list only so a repeated flag is refused, not silently reduced to the last value.
         parser.add_argument("event_ids", nargs="+", type=int)
-        # Collected as a list only so a second one can be refused. The
-        # operation takes one key, and replay_events repeats this flag and uses
-        # every value, so a plain store would keep the last and silently drop
-        # the rest - leaving the dropped receivers' work owed.
         parser.add_argument(
             "--receiver",
             action="append",

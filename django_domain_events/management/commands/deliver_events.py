@@ -33,10 +33,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--lane",
             action="append",
-            # None rather than the default lane: an append adds to its default,
-            # so a default of the default lane would make ``--lane mail``
-            # serve ``default`` and ``mail``
-            # (test_one_lane_alone_is_passed_as_that_lane).
+            # None, not the default lane: an append would otherwise add to that default too.
             default=None,
             help=(
                 "Serve only the receivers declared with this lane=. Repeat it to "
@@ -65,14 +62,9 @@ class Command(BaseCommand):
     def handle(self, *args: Any, **options: Any) -> None:
         worker_id = options["worker_id"] or f"{socket.gethostname()}:{os.getpid()}"
         lanes: list[str] = options["lane"] or [DEFAULT_LANE]
-        # A lane given once goes through as the string it was, so its path is
-        # the one a single lane always took.
+        # The relay has no total to cap, so a --limit beside it would be read by nothing.
         lane: str | list[str] = lanes[0] if len(lanes) == 1 else lanes
         lane_batch_sizes = _lane_batch_sizes(options["lane_batch_size"])
-        # The relay has no total to cap: it claims batches until it is stopped
-        # or runs out of passes, so a --limit beside it would be accepted and
-        # read by nothing. Refused rather than ignored, as --limit beside a
-        # batch size is (test_the_relay_refuses_a_limit).
         if options["limit"] is not None and not options["once"]:
             raise CommandError(
                 "--limit caps a single pass and needs --once; the relay delivers until "
@@ -105,18 +97,7 @@ class Command(BaseCommand):
 
 
 def _lane_batch_sizes(values: list[str] | None) -> dict[str, int] | None:
-    """Each ``--lane-batch-size LANE=N``, as the mapping ``lane_batch_sizes`` takes.
-
-    None when none was given, rather than an empty mapping, because ``--once``
-    refuses ``--limit`` beside any ``lane_batch_sizes`` that is not None. Split
-    at the last ``=``: a lane name may contain one and N cannot, so ``a=b=5``
-    sizes the lane ``a=b``. A size below one, and a lane this process does not
-    serve, are left to ``run_relay`` and ``deliver_pending`` to refuse, so the
-    command line and Python refuse them alike. Refused here, each by its own
-    test: a value with no ``=``, an empty lane, an N that is not an integer,
-    and a lane sized twice, even with the same value twice, since two values
-    could conflict and the command should not pick one.
-    """
+    """Each ``--lane-batch-size LANE=N``, as the mapping ``lane_batch_sizes`` takes."""
     if values is None:
         return None
     sizes: dict[str, int] = {}
@@ -139,32 +120,7 @@ def _lane_batch_sizes(values: list[str] | None) -> dict[str, int] | None:
 
 
 class _StopOnSignal:
-    """SIGTERM and SIGINT ask the relay to stop; a second one ends it at once.
-
-    The first signal only sets a flag. The relay reads it between deliveries,
-    so the receiver running when it arrives finishes and commits, and the rest
-    of the claimed batch is handed back for another worker to take at once.
-    Nothing is logged from the handler itself: it runs between two bytecodes of
-    whatever the main thread was doing, and the relay reports the stop when it
-    acts on it.
-
-    A second signal raises ``SystemExit``, a ``BaseException``, because the
-    relay deliberately swallows every ``Exception`` a delivery raises and a
-    receiver may swallow them too. The receiver's transaction rolls back with
-    it, and its row is reclaimed when the lease lapses. An ``async def``
-    receiver's transaction rolls back too, but its coroutine runs on a loop in
-    another thread that no signal reaches, and interpreter exit waits for that
-    thread: the process leaves once the coroutine returns, or at a third signal.
-
-    The handlers that were installed before are put back on the way out,
-    however the relay ends, so a command run inside a larger process does not
-    leave that process's Ctrl-C rewired.
-
-    Python installs signal handlers from the main thread only, and raises
-    ``ValueError`` anywhere else. A relay started from another thread runs
-    without a stop, and says so, rather than refusing to run: whoever started
-    the thread owns stopping it.
-    """
+    """SIGTERM and SIGINT ask the relay to stop; a second one ends it at once."""
 
     def __init__(self, stderr: OutputWrapper) -> None:
         self.stderr = stderr
@@ -195,7 +151,5 @@ class _StopOnSignal:
         tb: TracebackType | None,
     ) -> None:
         for signum, previous in self.previous.items():
-            # ``getsignal`` reports None for a handler installed outside Python,
-            # which ``signal`` will not take back; the default is the nearest
-            # thing to restore. SIG_DFL is zero, so ``or`` keeps it as it is.
+            # A None handler from getsignal cannot be restored, so the default stands in for it.
             signal.signal(signum, previous or signal.SIG_DFL)

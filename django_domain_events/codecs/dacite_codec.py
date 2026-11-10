@@ -38,24 +38,10 @@ _CONFIG = dacite.Config(
 
 
 class DaciteCodec(DataclassCodec):
-    """Encode as the default codec does; decode with dacite.
-
-    The schema rule falls out of dacite's own behaviour: a field added with a
-    default decodes from an old row, a field removed decodes too, and the two
-    breaking changes fail naming the field - which is what lands in
-    ``last_error``.
-
-    The ``dacite`` import is bare rather than guarded; a missing extra is
-    reported at startup by the codec system check instead.
-    """
+    """Encode as the default codec does; decode with dacite, so additive changes still load."""
 
     def supported_annotation(self, annotation: Any) -> bool:
-        """Everything the flat codec takes, plus the nesting this codec exists for.
-
-        A dataclass is supported and its fields are checked in turn, so a
-        nested payload whose *leaf* is undecodable is still reported -- naming
-        the outer field, which is the one the declaration can change.
-        """
+        """Everything the flat codec takes, plus the nesting this codec exists for."""
         if dataclasses.is_dataclass(annotation) and isinstance(annotation, type):
             return all(
                 self.supported_annotation(hint)

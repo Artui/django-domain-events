@@ -34,7 +34,6 @@ class Command(BaseCommand):
         try:
             deleted = prune_events(window, limit=options["limit"], batch_size=options["batch_size"])
         except ValueError as exc:
-            # The operation's own refusal, as a command error: an exit status
-            # and one line, rather than a traceback in a cron mail.
+            # A command error, not a traceback: an exit status and one line for a cron mail.
             raise CommandError(str(exc)) from exc
         self.stdout.write(f"deleted: {deleted}")

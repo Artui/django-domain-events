@@ -12,13 +12,7 @@ the version matrix cannot see the difference."""
 
 @dataclass(frozen=True, slots=True)
 class Actor:
-    """Who acted, as one fact rather than three columns that can disagree.
-
-    Merged as a unit: a block that names an actor replaces all of it, and a
-    block that does not inherits all of it. Merging the parts independently lets
-    an inner ``actor_key="system:relay"`` sit beside an inherited ``pk`` of some
-    user, and the row then says two different things about who acted.
-    """
+    """Who acted, as one fact rather than three columns that can disagree."""
 
     key: str = ""
     label: str = ""
@@ -36,12 +30,7 @@ class Actor:
 
 @dataclass(frozen=True, slots=True)
 class Scope:
-    """The ambient facts captured onto every event fired inside a block.
-
-    Frozen, and nested blocks build a new one rather than mutating: a scope that
-    could be edited from inside would let a receiver rewrite the attribution of
-    events fired after it.
-    """
+    """The ambient facts captured onto every event fired inside a block."""
 
     actor: Actor = field(default_factory=Actor)
     correlation_id: UUID | None = None

@@ -26,52 +26,7 @@ from django_domain_events.utils import (
 def replay_events(
     event_ids: Iterable[int], *, receiver_keys: Iterable[str] | None = None
 ) -> dict[str, int]:
-    """Make these events owed again, and report what changed.
-
-    The receiver set freezes at fire time, so deploying a new receiver does not
-    hand it a backlog of week-old events. That is deliberate - and this is the
-    other half of it: replay is an operation somebody invokes, with a name, and
-    not an accident of a deploy.
-
-    Two things happen, and they are counted separately because they are
-    different decisions. A terminal delivery is *reopened*: it ran, and you want
-    it to run again. A receiver with no row for the event is *added*: it did not
-    exist when the event fired, and you are choosing to give it the backlog.
-
-    Both are owed *now*, so both get ``due_at`` set to the moment of the
-    replay. A receiver's ``give_up_after`` is measured from it, and measuring
-    from the event's own timestamp would dead-letter a replayed month-old event
-    on its first deferral
-    (``test_a_replayed_old_event_is_not_dead_lettered_on_its_first_deferral``
-    and ``test_a_row_a_replay_adds_is_owed_from_the_replay_too``).
-
-    A receiver declared with ``due=`` is the exception: its due time is
-    resolved again, through the resolver ``fire()`` uses, and both columns are
-    written with the later of that and now. Replay is how a scheduled receiver
-    is adopted - declare the expiry, replay the recent offers - and writing now
-    would expire every open offer at once; an offer whose time has already
-    passed is expired by the replay, owed from it. A ``due`` callable is called
-    again, as a ``targets`` callable is, and raises to the operator on the same
-    terms.
-
-    A delivery still in flight is left alone. Reopening a claimed row would hand
-    the same work to two receivers, which is the one thing the lease exists to
-    prevent.
-
-    A receiver declared with ``targets=`` has its callable **called again**, so
-    a replay goes to the targets that exist now: a target it still returns is
-    reopened or added exactly as a receiver is, and one it no longer returns is
-    left as it was - neither reopened nor counted - because the callable has
-    just said it is not owed this event. That includes a blank row written
-    before the receiver gained ``targets=``. A replay is a new delivery, not a
-    re-run of an old one, and a target registered after the event was fired
-    receiving it is the point rather than a side effect.
-
-    Calling the callable means rebuilding the event, so a fan-out receiver's
-    replay fails loudly on a payload that no longer decodes, where a plain
-    receiver's reopened row would dead-letter in the relay instead. Either is
-    raised to the operator who asked; only the second waits to be found.
-    """
+    """Make these events owed again, and report what changed."""
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.models.event_record import EventRecord
 
@@ -81,15 +36,7 @@ def replay_events(
     counts = {"reopened": 0, "added": 0}
 
     for record in EventRecord.objects.filter(pk__in=list(event_ids)).order_by("pk"):
-        # One transaction per event, not one for the whole call: a collision on
-        # any single event would otherwise discard the reopens for every other
-        # event the operator asked for.
         with transaction.atomic(using=alias):
-            # The event row is locked for the transaction, which is what a prune
-            # about to delete this event waits on: it then re-reads that the
-            # event is owed again. Gone already means a prune got there first,
-            # and there is nothing left to replay
-            # (test_a_replay_in_flight_is_not_deleted_under).
             if (
                 not EventRecord.objects.using(alias)
                 .select_for_update()
@@ -109,18 +56,10 @@ def replay_events(
                 key=lambda r: r.key,
             )
             for receiver in durable:
-                # Keyed by digest, because the digest is what the unique index
-                # covers. The text is in no index, so looking rows up by it
-                # would scan every delivery of the event.
                 targets = {
                     target_digest(target): target
                     for target in _targets_now(receiver, record, entry.event_class)
                 }
-                # ``bytes()`` because psycopg2 reads the column back as a
-                # ``memoryview`` of format ``c``, which hashes like the computed
-                # digest and compares unequal to it: every row that exists would
-                # read as missing, be counted as added, and wake the relay for
-                # nothing.
                 existing = {
                     bytes(digest): status
                     for digest, status in DeliveryRecord.objects.filter(
@@ -128,15 +67,7 @@ def replay_events(
                     ).values_list("target_digest", "status")
                 }
                 reopen = [d for d, status in existing.items() if status in TERMINAL]
-                # Now, or a scheduled receiver's due time where that is later:
-                # replaying a recent offer into its expiry must not expire it
-                # early, and one whose time has passed is owed from now.
                 when = _due_now(receiver, record, entry.event_class, now)
-                # The status predicate is what keeps this from wiping a live
-                # lease. Between reading the statuses above and this update, a
-                # relay can claim a row - and clearing claimed_by on it would
-                # hand the same work to two workers, which is the one thing the
-                # lease prevents.
                 counts["reopened"] += DeliveryRecord.objects.filter(
                     event=record,
                     receiver_key=receiver.key,
@@ -155,10 +86,6 @@ def replay_events(
                 )
                 missing = [digest for digest in targets if digest not in existing]
                 if missing:
-                    # ignore_conflicts, because a concurrent replay of the same
-                    # event races the unique constraint on (event, receiver_key,
-                    # target_digest) - and losing that race means the row exists,
-                    # which is what was wanted.
                     DeliveryRecord.objects.bulk_create(
                         [
                             DeliveryRecord(
@@ -173,29 +100,16 @@ def replay_events(
                         ],
                         ignore_conflicts=True,
                     )
-                    # Counted by asking what is there now rather than by what
-                    # bulk_create returned: with ignore_conflicts most backends
-                    # return no primary keys, and a row a concurrent replay
-                    # created is owed either way, which is what the operator
-                    # asked for.
                     counts["added"] += DeliveryRecord.objects.filter(
                         event=record, receiver_key=receiver.key, target_digest__in=missing
                     ).count()
     if counts["reopened"] or counts["added"]:
-        # The operations make rows owed just as fire() does, so they wake a
-        # waiting relay too; otherwise replayed work sits until the next poll.
         notify_relay()
     return counts
 
 
 def _targets_now(receiver: RegisteredReceiver, record: Any, event_class: type) -> list[str]:
-    """The targets one receiver is owed this event at replay time.
-
-    The blank target for a receiver without ``targets=``, which is the row it
-    has always had. For a fan-out receiver, whatever its callable returns now,
-    handed the same context ``fire()`` built - attempt one, because a replayed
-    delivery starts its budget again.
-    """
+    """The targets one receiver is owed this event at replay time."""
     if receiver.targets is None:
         return [""]
     context = DeliveryContext(
@@ -205,7 +119,6 @@ def _targets_now(receiver: RegisteredReceiver, record: Any, event_class: type) -
         actor_key=record.actor_key,
         actor_label=record.actor_label,
         scope=record.scope,
-        # As at fire time (test_replay_asks_a_targets_callable_with_its_key).
         receiver_key=receiver.key,
     )
     event = decode_payload(event_class, record.payload, record.version)
@@ -215,15 +128,7 @@ def _targets_now(receiver: RegisteredReceiver, record: Any, event_class: type) -
 def _due_now(
     receiver: RegisteredReceiver, record: Any, event_class: type, now: datetime
 ) -> datetime:
-    """When a row this replay reopens or adds for one receiver becomes due.
-
-    ``now`` for a receiver without ``due=``, as every replay always wrote. For a
-    scheduled receiver, its due time resolved again through the resolver
-    ``fire()`` uses, and never earlier than ``now``. Only a callable needs the
-    event, so only a callable rebuilds it: a delay is read off ``occurred_at``
-    and replays a payload that no longer decodes the way a plain receiver
-    does, leaving the relay to say so.
-    """
+    """When a row this replay reopens or adds for one receiver becomes due."""
     if receiver.due is None:
         return now
     event = (
