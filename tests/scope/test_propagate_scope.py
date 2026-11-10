@@ -10,8 +10,7 @@ from tests.testapp.events import OrderPlaced
 
 
 def test_a_bare_thread_loses_the_scope() -> None:
-    """Pinned because nothing fails when it happens: events simply arrive with
-    no actor. A thread starts with an empty context, not a copy of yours."""
+    """Pinned because nothing fails when it happens: events simply arrive with no actor."""
     seen: list[str] = []
     with attributed(actor_key="system:parent"):
         thread = threading.Thread(target=lambda: seen.append(current_scope().actor.key))
@@ -28,9 +27,7 @@ def test_it_carries_the_scope_into_a_worker() -> None:
 
 
 def test_one_wrapper_can_be_submitted_many_times() -> None:
-    """The natural fan-out shape. Capturing a contextvars.Context instead of the
-    values would raise on the second submit, because one Context cannot be
-    entered twice."""
+    """The natural fan-out shape."""
     seen: list[str] = []
     with attributed(actor_key="system:parent"), ThreadPoolExecutor(max_workers=3) as pool:
         wrapped = propagate_scope(lambda: seen.append(current_scope().actor.key))
@@ -40,8 +37,7 @@ def test_one_wrapper_can_be_submitted_many_times() -> None:
 
 
 def test_it_carries_suppression_too() -> None:
-    """A worker doing the same import as its parent should inherit the same
-    decision about what not to deliver."""
+    """A worker doing the same import inherits the same suppression decision."""
     seen: list[object] = []
     with suppressed(OrderPlaced, reason="import"), ThreadPoolExecutor(max_workers=1) as pool:
         pool.submit(propagate_scope(lambda: seen.append(suppression_for(OrderPlaced)))).result()

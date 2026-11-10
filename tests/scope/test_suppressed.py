@@ -15,8 +15,7 @@ pytestmark = pytest.mark.django_db(transaction=True)
 def test_a_suppressed_event_is_recorded_with_its_reason(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The default writes the row and marks it. A silently dropped event is
-    unauditable, which is the failure mode suppression is most likely to cause."""
+    """The default writes the row and marks it."""
     with suppressed(OrderPlaced, reason="historical import"), transaction.atomic():
         fire(order)
 
@@ -26,17 +25,14 @@ def test_a_suppressed_event_is_recorded_with_its_reason(
 
 
 def test_no_receiver_runs_at_any_execution_site(order: OrderPlaced, record: list[str]) -> None:
-    """Suppression is about the event, not about one execution site: inline and
-    on-commit receivers are skipped too."""
+    """Suppression covers the event, so inline and on-commit receivers are skipped too."""
     with suppressed(OrderPlaced, reason="import"), transaction.atomic():
         fire(order)
     assert record == []
 
 
 def test_record_false_discards_without_a_row(order: OrderPlaced, record: list[str]) -> None:
-    """The escape hatch for a bulk import, where writing a row per suppressed
-    event is the surprise. Named rather than defaulted, because it trades away
-    the audit trail the default exists for."""
+    """The escape hatch for a bulk import, where a row per event is the surprise."""
     with suppressed(OrderPlaced, reason="bulk", record=False), transaction.atomic():
         assert fire(order) is None
     assert not EventRecord.objects.exists()
@@ -74,9 +70,7 @@ def test_suppression_does_not_leak_past_the_block(order: OrderPlaced, record: li
 def test_nested_blocks_accumulate_rather_than_replace(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """A library suppressing its own event type inside your block must not
-    re-enable yours. Replacing the whole suppression is how a suppressed event
-    gets recorded as normal and delivered."""
+    """A library suppressing its own event type inside your block must not re-enable yours."""
     with suppressed(OrderPlaced, reason="outer"):  # noqa: SIM117 - the nesting is what this asserts
         with suppressed(PinnedName, reason="inner"), transaction.atomic():
             fire(order)
@@ -99,8 +93,7 @@ def test_the_innermost_matching_reason_is_the_one_recorded(
 def test_an_outer_record_false_is_not_undone_by_an_inner_block(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The safer half of the disagreement wins: a block that asked for no rows
-    should not get them because something nested inside it asked for rows."""
+    """A block asking for no rows wins over a nested block asking for rows."""
     with suppressed(OrderPlaced, reason="bulk", record=False):  # noqa: SIM117 - the nesting is what this asserts
         with suppressed(OrderPlaced, reason="inner"), transaction.atomic():
             assert fire(order) is None
@@ -108,8 +101,7 @@ def test_an_outer_record_false_is_not_undone_by_an_inner_block(
 
 
 def test_it_refuses_something_that_is_not_a_class() -> None:
-    """Passing a name or an instance otherwise fails much later, inside fire(),
-    with issubclass complaining about its second argument."""
+    """A name or instance fails much later inside fire(), with issubclass complaining."""
     with pytest.raises(TypeError, match="event classes"):  # noqa: SIM117 - the nesting is what this asserts
         with suppressed("testapp.OrderPlaced", reason="oops"):
             pass
@@ -123,8 +115,7 @@ _REASON_LIMIT = EventRecord._meta.get_field("suppressed_reason").max_length
 def test_a_reason_of_exactly_the_column_width_is_accepted_and_recorded(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Holds the comparison: ``>=`` instead of ``>`` refuses this reason. Passes on
-    a tree without the check, as it must; it is here for the mutant."""
+    """Holds the comparison: ``>=`` instead of ``>`` refuses this reason."""
     assert _REASON_LIMIT == 255
     with transaction.atomic(), suppressed(OrderPlaced, reason="r" * _REASON_LIMIT):
         fire(order)
@@ -141,16 +132,11 @@ def test_a_reason_one_over_the_column_width_is_refused_on_entry() -> None:
     assert f"limit is {_REASON_LIMIT}" in message
     # The reason is the caller's, so it is not echoed.
     assert reason[:20] not in message
-    # Sized to the width check, not the emptiness one.
     assert "needs a reason" not in message
 
 
 def test_a_reason_over_the_width_is_refused_even_when_nothing_is_recorded() -> None:
-    """``record=False`` writes no row, so the column cannot refuse anything, and
-    the refusal holds anyway: whether a block records can be decided by a code
-    path the caller's tests never take, and a reason that is fine there would
-    fail the first time the other path runs on Postgres. Fails if the check is
-    made conditional on ``record``."""
+    """The refusal holds even with record=False: tests may never take that path."""
     reason = "r" * (_REASON_LIMIT + 1)
     with (
         pytest.raises(ValueError, match="characters"),
