@@ -1,5 +1,3 @@
-"""Tests mirroring ``management/commands/quiet_receivers.py``."""
-
 from __future__ import annotations
 
 from io import StringIO
@@ -36,8 +34,7 @@ def test_a_receiver_that_has_run_drops_out(order: OrderPlaced, record: list[str]
 
 
 def test_the_window_can_be_narrowed(order: OrderPlaced, record: list[str]) -> None:
-    """Zero days is an operator asking "did anything run just now", and it must
-    not be read as "no window"."""
+    """Zero days means 'did anything run just now', and must not read as no window."""
     with transaction.atomic():
         fire(order)
         fire(Eagerly(value=1))

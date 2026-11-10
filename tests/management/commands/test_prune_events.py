@@ -36,9 +36,7 @@ def test_the_window_can_be_overridden(record: list[str]) -> None:
 
 
 def test_the_batch_size_is_counted_in_rows(record: list[str]) -> None:
-    """Three events of one delivery each, two rows a batch: each event costs
-    its delivery and itself, so three transactions. Read as an event count,
-    two would share the first."""
+    """Each event costs its delivery and itself, so three transactions."""
     with transaction.atomic():
         for _ in range(3):
             fire(PinnedName(value=1))

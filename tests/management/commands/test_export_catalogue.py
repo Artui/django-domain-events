@@ -1,5 +1,3 @@
-"""Tests mirroring ``management/commands/export_catalogue.py``."""
-
 from __future__ import annotations
 
 import json
@@ -31,8 +29,7 @@ def test_it_writes_json_when_asked() -> None:
 
 
 def test_stdout_is_byte_for_byte_the_rendered_document() -> None:
-    """The renderer already ends in a newline. A command that adds another
-    makes ``export_catalogue > catalogue.md`` differ from ``--output``."""
+    """The renderer already ends in a newline."""
     assert _run() == render_catalogue(catalogue())
     assert not _run().endswith("\n\n")
 
