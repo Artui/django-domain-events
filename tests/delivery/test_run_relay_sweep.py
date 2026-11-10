@@ -1,10 +1,3 @@
-"""The relay's idle prune sweep (``run_relay``'s ``RELAY_PRUNE`` path).
-
-A file of its own beside ``test_run_relay.py``: the sweep is a throttle and a
-setting pair around one call, and its tests share fixtures with nothing in the
-claim and delivery tests.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -55,9 +48,7 @@ def _mail() -> RegisteredReceiver:
 
 
 def _consumed_event() -> EventRecord:
-    """An event the prune deletes at its first sweep: it asks to go once
-    consumed and has no delivery rows, so it is consumed as it commits. Built
-    directly, because the prune reads only the row and never the registry."""
+    """An event the prune deletes at its first sweep: consumed with no delivery rows."""
     return EventRecord.objects.create(
         name="testapp.OrderPlaced",
         payload={},
@@ -67,8 +58,7 @@ def _consumed_event() -> EventRecord:
 
 
 def test_an_idle_relay_deletes_what_has_been_consumed(settings) -> None:
-    """End to end, with nothing spying on the sweep: a consumed event is gone
-    after the relay idles past the interval, with no cron line anywhere."""
+    """End to end, with no spy: a consumed event is gone after the idle interval."""
     settings.DJANGO_DOMAIN_EVENTS = {"RELAY_PRUNE_SECONDS": 0.001}
     _consumed_event()
 
@@ -78,12 +68,7 @@ def test_an_idle_relay_deletes_what_has_been_consumed(settings) -> None:
 
 
 class _Clock:
-    """The sweep's clock, which advances only when the relay waits.
-
-    Each idle pass waits once, so the n-th idle pass reads the sum of the first
-    n-1 steps. A pass that claimed work does not wait and the clock stands
-    still, which is what lets a test place a pass at an exact moment.
-    """
+    """The sweep's clock, which advances only when the relay waits."""
 
     def __init__(self, *steps: float, start: float = 0.0) -> None:
         self.t = start
@@ -100,12 +85,7 @@ class _Clock:
 
 
 class _Sweeps:
-    """The prune the relay calls, replaced by a record of when it was called.
-
-    Reads the clock of the run it is called in, so each entry is the moment a
-    sweep ran. The real prune is out of the picture: these tests ask only when
-    the relay sweeps, and the end-to-end ones above ask whether it works.
-    """
+    """The prune the relay calls, replaced by a record of when it was called."""
 
     def __init__(self, clock: _Clock) -> None:
         self.clock = clock
@@ -130,12 +110,7 @@ def _relay(
 
 
 def test_an_idle_relay_sweeps_once_per_interval(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Five idle passes at 0, 30, 60, 90 and 120 seconds, against 60. The 60 is
-    exactly one interval after the start, which holds ``>=`` against ``>``; the
-    30 and the 90 are inside an interval, which holds the throttle; and the 120
-    is a full interval after the 60 rather than after the 90, which holds that
-    only a sweep moves the clock (an idle pass that moved it would put the 60's
-    successor at 150)."""
+    """Five idle passes at 0, 30, 60, 90 and 120 seconds, against 60."""
     sweeps = _relay(monkeypatch, _Clock(30, 30, 30, 30), passes=5)
 
     assert sweeps.at == [60.0, 120.0]
@@ -144,17 +119,14 @@ def test_an_idle_relay_sweeps_once_per_interval(monkeypatch: pytest.MonkeyPatch)
 def test_the_first_sweep_is_an_interval_after_the_relay_starts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Not at the first idle pass: a relay run for a few passes, or restarted
-    more often than the interval, then never sweeps."""
+    """A relay restarted more often than the interval never sweeps."""
     sweeps = _relay(monkeypatch, _Clock(), passes=3)
 
     assert sweeps.at == []
 
 
 def _late_relay(monkeypatch: pytest.MonkeyPatch, passes: int = 1, **kwargs: object) -> _Sweeps:
-    """``passes`` passes of a relay whose clock reads zero at its start and 1000
-    seconds on every reading after, so any idle pass is long past the
-    interval."""
+    """Clock reads zero, then 1000 s, so every idle pass is past the interval."""
     clock = _Clock()
     sweeps = _Sweeps(clock)
     monkeypatch.setattr(run_relay_module, "prune_events", sweeps)
@@ -173,10 +145,7 @@ def _late_relay(monkeypatch: pytest.MonkeyPatch, passes: int = 1, **kwargs: obje
 def test_a_pass_that_claimed_work_does_not_sweep(
     monkeypatch: pytest.MonkeyPatch, order: OrderPlaced, record: list[str]
 ) -> None:
-    """A relay with work does not stop to prune: the sweep waits for a pass that
-    claimed nothing, however overdue it is. The second run is the control, the
-    same clock on the pass the work has left (``if not ids`` is what fails
-    here)."""
+    """A relay with work does not stop to prune: the sweep waits for an idle pass."""
     with transaction.atomic():
         fire(order)
 
@@ -187,24 +156,21 @@ def test_a_pass_that_claimed_work_does_not_sweep(
 def test_a_relay_with_the_sweep_turned_off_never_prunes(
     monkeypatch: pytest.MonkeyPatch, settings
 ) -> None:
-    """For a project that schedules ``prune_events`` itself (``sweep`` in the
-    idle branch's guard)."""
+    """For a project scheduling prune_events itself, sweep is skipped."""
     settings.DJANGO_DOMAIN_EVENTS = {"RELAY_PRUNE": False}
 
     assert _late_relay(monkeypatch).at == []
 
 
 def test_the_interval_is_the_setting(monkeypatch: pytest.MonkeyPatch, settings) -> None:
-    """Passes at 0, 5 and 10 seconds against an interval of 10: the interval
-    read is ``RELAY_PRUNE_SECONDS`` and not a constant."""
+    """Passes at 0, 5 and 10 s, interval 10: the setting is read, not a constant."""
     settings.DJANGO_DOMAIN_EVENTS = {"RELAY_PRUNE_SECONDS": 10}
 
     assert _relay(monkeypatch, _Clock(5, 5), passes=3).at == [10.0]
 
 
 def test_a_named_lane_sweeps_too(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Any relay sweeps: the interval is what keeps several cheap, and a
-    deployment running only lane relays would otherwise never prune."""
+    """Any relay sweeps, so lane-only deployments still prune."""
     with receiver_registered(_mail()):
         sweeps = _late_relay(monkeypatch, lane="mail")
 
@@ -212,8 +178,7 @@ def test_a_named_lane_sweeps_too(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _lane(lane: str, event_class: type, **options: object) -> RegisteredReceiver:
-    """A receiver in ``lane`` on an event the test app never listens to, so a
-    lane has rows only when a test fires that event."""
+    """A lane has rows only when a test fires an event no receiver listens to."""
     return RegisteredReceiver(
         key=f"tests.sweep_{lane}",
         event_class=event_class,
@@ -231,9 +196,7 @@ def _lane(lane: str, event_class: type, **options: object) -> RegisteredReceiver
 def test_a_lane_with_work_keeps_the_pass_from_idling(
     monkeypatch: pytest.MonkeyPatch, record: list[str]
 ) -> None:
-    """``push`` claims work and ``sms``, last, claims nothing: the pass is not
-    idle, so it neither sweeps nor waits, however overdue the sweep is. Idle
-    is every lane empty or paused, not the last one."""
+    """push claims work and sms, last, claims nothing: the pass is not idle."""
     with receiver_registered(_lane("push", Unheard)), receiver_registered(_lane("sms", PinnedName)):
         with transaction.atomic():
             fire(Unheard(value=1))
@@ -255,9 +218,7 @@ def test_a_pass_whose_every_lane_is_empty_is_idle(monkeypatch: pytest.MonkeyPatc
 def test_a_pass_whose_lanes_are_empty_or_paused_is_idle(
     monkeypatch: pytest.MonkeyPatch, record: list[str]
 ) -> None:
-    """The first pass claims SMS, which defers for an hour. In the second,
-    ``push`` is empty and ``sms`` paused, so that pass idles: one wait, and the
-    sweep it was owed."""
+    """The first pass claims SMS, which defers for an hour."""
 
     def deferring(evt: PinnedName) -> None:
         calls.append("sms")
@@ -276,9 +237,7 @@ def test_a_pass_whose_lanes_are_empty_or_paused_is_idle(
 
 
 def test_a_single_pass_never_sweeps(order: OrderPlaced, record: list[str]) -> None:
-    """``deliver_events --once`` is a cron's job, run from a schedule that can
-    carry ``prune_events`` itself. Real rows rather than a spy, so it fails if
-    the single pass ever grows a sweep by any route."""
+    """deliver_events --once belongs in a cron that can run prune_events."""
     _consumed_event()
 
     call_command("deliver_events", "--once", stdout=StringIO())
@@ -297,10 +256,7 @@ def test_a_sweep_that_fails_does_not_kill_the_relay_or_retry_early(
     error: Exception,
     closed: list[str],
 ) -> None:
-    """Passes at 0, 60, 90 and 120: the sweep due at 60 raises, the 90 is inside
-    the interval that attempt started and so does not try again, and the 120
-    does. The relay finishes all four passes. A database error closes the
-    connection, as a failed claim does; anything else leaves it alone."""
+    """Passes at 0, 60, 90 and 120: the sweep due at 60 raises, so 90 does not retry."""
     clock = _Clock(60, 30, 30)
     sweeps = _Sweeps(clock)
     sweeps.raises.append(error)
@@ -336,10 +292,7 @@ _EVENTS = 200
 
 
 def _fan_out_events(count: int) -> datetime:
-    """``count`` consumed events of four succeeded deliveries each, the nth
-    having succeeded n seconds after the base, so every batch moves every
-    receiver's recorded last success forward - the contended write. Returns the
-    newest success."""
+    """Consumed events with four successes each: every batch moves last-success."""
     base = django_timezone.now() - timedelta(hours=1)
     for n in range(count):
         event = EventRecord.objects.create(
@@ -362,11 +315,8 @@ def _fan_out_events(count: int) -> datetime:
 def _sweep(
     barrier: threading.Barrier, size: int, results: list[int], errors: list[BaseException]
 ) -> None:
-    """One relay's sweep, on this thread's own connection and in step with the
-    other, so both select the same due events and both delete them."""
+    """One relay's sweep, on its own connection, in step with the other."""
     try:
-        # Connected before the barrier, or the second thread spends the first
-        # one's whole sweep opening its connection and nothing overlaps.
         connection.ensure_connection()
         barrier.wait(timeout=10)
         results.append(prune_events(batch_size=size))
@@ -383,9 +333,7 @@ _NEEDS_A_LOCKING_SERVER = pytest.mark.skipif(
 
 
 def _race(sizes: tuple[int, int]) -> tuple[datetime, list[int], list[BaseException]]:
-    """Two sweeps over the same events at once, each with its own batch size.
-    Returns the newest success among the events, what each sweep deleted, and
-    what each raised."""
+    """Two sweeps over the same events at once, each with its own batch size."""
     newest = _fan_out_events(_EVENTS)
     results: list[int] = []
     errors: list[BaseException] = []
@@ -401,9 +349,7 @@ def _race(sizes: tuple[int, int]) -> tuple[datetime, list[int], list[BaseExcepti
 
 
 def _assert_everything_went_once(newest: datetime, deleted: int | None) -> None:
-    """The tables are empty and every receiver's success is the newest. With a
-    count, also that each event was counted once: ``None`` for a run in which a
-    sweep died, whose committed batches died uncounted with it."""
+    """The tables are empty and every receiver's success is the newest."""
     if deleted is not None:
         assert deleted == _EVENTS, f"{deleted}: an event was deleted twice or not at all"
     assert not EventRecord.objects.exists()
@@ -419,20 +365,7 @@ def _assert_everything_went_once(newest: datetime, deleted: int | None) -> None:
 def test_two_relays_sweeping_the_same_batches_neither_fail_nor_delete_twice(
     sizes: tuple[int, int],
 ) -> None:
-    """The reason N relays may each sweep: the prune re-checks at the delete that
-    an event is still due, and a delete of a row another sweep already took
-    removes nothing. Real connections, on every event at the same moment.
-
-    Asserts what a second sweep could get wrong - an error, the same event
-    counted by both, or a receiver's recorded success left behind - and would
-    still pass if the sweeps never overlapped. They do: started together on
-    connections already open, each makes up to 200 transactions over the same
-    200 events (a batch of five rows is one event; a batch of three is smaller
-    than an event, so those sweeps delete in chunks), and the loser of each
-    event trails the winner by one. Same-sized batches started together take the
-    receivers' last-success rows in the same order, so this lockstep case does
-    not deadlock; real relays are not in lockstep, and the test below is the
-    realistic one."""
+    """Relays may sweep together: the delete re-checks, so a repeat removes nothing."""
     newest, results, errors = _race(sizes)
 
     assert errors == []
@@ -447,13 +380,7 @@ def test_two_relays_sweeping_the_same_batches_neither_fail_nor_delete_twice(
 def test_two_relays_with_different_batches_never_deadlock(
     sizes: tuple[int, int],
 ) -> None:
-    """Sweeps whose batches differ finish the receivers' last-success rows in
-    different groupings, and two transactions taking the same rows in opposite
-    orders deadlock: about one run in two on the ``9x50`` case, on the insert of
-    a receiver's first row and on the update of a later one alike, while
-    ``_record_last_successes`` walked an unordered GROUP BY. It walks the keys
-    in sorted order in both of its loops now; without the sort in either loop
-    this fails with ``deadlock detected``."""
+    """Opposite-order last-success writes deadlock about half the time on 9x50."""
     newest, results, errors = _race(sizes)
 
     assert errors == []
@@ -462,9 +389,7 @@ def test_two_relays_with_different_batches_never_deadlock(
 
 
 def test_a_stop_request_waits_for_one_batch_of_the_sweep_not_all_of_it(settings) -> None:
-    """The relay hands its ``stop`` to the prune, which reads it between
-    batches. A relay that did not would finish a whole backlog of due events
-    before it noticed it was asked to stop."""
+    """The relay hands its ``stop`` to the prune, which reads it between batches."""
     settings.DJANGO_DOMAIN_EVENTS = {"RELAY_PRUNE_SECONDS": 0.001, "PRUNE_BATCH_ROWS": 1}
     for _ in range(5):
         _consumed_event()

@@ -1,14 +1,3 @@
-"""A relay serving several lanes beside a relay serving one of them.
-
-Moving a lane between a shared relay and one of its own is a deployment
-change, so during a rollout both run against the same rows. These hold that
-the two never take the same row and that a row the stopping one held is the
-other's at once. Each relay runs on a thread of its own with its own
-connection, as ``test_concurrent_claims.py`` does: skipped locks are about
-what a second session sees while the first holds a row lock, so these mean
-something only on a backend that has them.
-"""
-
 from __future__ import annotations
 
 import threading
@@ -85,15 +74,7 @@ def _fire(event_class: type, count: int) -> None:
 
 
 def _held_at_the_first_sms_claim(barrier: threading.Barrier) -> Callable[..., Any]:
-    """An execute wrapper that, once its SMS claim has selected its rows, waits
-    for the other relay's to have done the same before going on.
-
-    Inside the claim's transaction, after the select and before the update:
-    so the two claims have both chosen their rows before either has written
-    them, which is the moment a missing lock shows. Recognised as the select
-    ordered by ``available_at`` with the SMS receiver's key among its
-    parameters.
-    """
+    """An execute wrapper that waits for the other relay's claim to select too."""
     waited: list[bool] = []
 
     def wrapper(
@@ -119,8 +100,7 @@ def _on_a_thread(
     errors: list[BaseException],
     barrier: threading.Barrier | None = None,
 ) -> threading.Thread:
-    """Run ``relay`` on a thread of its own, which opens its own connection and
-    closes it when done."""
+    """Run relay on a thread of its own, with its own connection, closed when done."""
 
     def body() -> None:
         try:
@@ -142,11 +122,7 @@ def _on_a_thread(
 def test_a_shared_relay_and_a_lanes_own_relay_never_take_the_same_row(
     lanes: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Each relay's first SMS claim, having selected its rows, waits on a
-    barrier for the other's, so the two claims contend for the same rows
-    rather than happening to miss each other. Every row is delivered once, no
-    row is in both relays' claims, and every SMS claim, whichever relay made
-    it, stamps SMS's own lease."""
+    """Each relay's first SMS claim waits on a barrier, so the two contend."""
     _fire(SharedPush, 20)
     _fire(SharedSms, 40)
     barrier = threading.Barrier(2)
@@ -203,10 +179,7 @@ def test_a_shared_relay_and_a_lanes_own_relay_never_take_the_same_row(
 
 
 def test_a_row_a_stopping_shared_relay_held_is_the_other_relays_at_once(lanes: None) -> None:
-    """The shared relay is told to stop after the first row of its SMS batch,
-    and holds the rest until the SMS relay has found nothing it may claim and
-    gone idle. It then hands them back, and the SMS relay claims them on its
-    very next pass rather than when the 33-second lease lapses."""
+    """The shared relay stops after one SMS row and holds the rest until SMS is idle."""
     _fire(SharedSms, 5)
     holding = threading.Event()
     own_idle = threading.Event()

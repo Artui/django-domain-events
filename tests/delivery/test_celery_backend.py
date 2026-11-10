@@ -1,12 +1,3 @@
-"""Tests mirroring ``django_domain_events/delivery/celery_backend.py``.
-
-None of these needs a broker. Registration is checked on a fresh app's task
-registry, which is what a worker consults; the message is checked by capturing
-what ``apply_async`` was given and putting it through JSON, which is what the
-default serializer does to it on the way to a worker; and the whole path runs
-through a Celery app in eager mode, where ``apply_async`` executes in-process.
-"""
-
 from __future__ import annotations
 
 import json
@@ -80,17 +71,11 @@ def _claimed(order: OrderPlaced) -> int:
 
 
 def test_a_worker_app_has_the_task_registered_by_name() -> None:
-    """The trap this module's top-level import exists to avoid. A worker runs a
-    message by looking its name up in its own registry; a task built lazily in
-    the relay at enqueue time is never in that registry, and every eager test
-    still passes. A fresh app that has only imported this module is what a
-    worker with it in ``imports`` looks like."""
+    """The trap this module's top-level import exists to avoid."""
     app = Celery("worker", set_as_current=False)
     app.finalize()
 
     assert TASK_NAME in app.tasks
-    # Spelled out, because the docs promise this name to anyone routing by it,
-    # and a renamed constant would strand messages already on the broker.
     assert TASK_NAME == "django_domain_events.deliver_delivery"
     assert app.tasks[TASK_NAME].ignore_result is True
 
@@ -98,9 +83,7 @@ def test_a_worker_app_has_the_task_registered_by_name() -> None:
 def test_the_message_carries_the_claim_as_json(
     order: OrderPlaced, record: list[str], task_site: None
 ) -> None:
-    """What the relay hands Celery has to survive the default JSON serializer
-    unchanged, and running the task body on what comes out has to deliver the
-    row - exactly once, however many times the broker hands it over."""
+    """What the relay hands Celery survives JSON, and runs exactly once per message."""
     delivery_id = _claimed(order)
     with mock.patch("django_domain_events.delivery.celery_backend.deliver_delivery_task") as task:
         assert dispatch_one(delivery_id, worker_id="w1") is None
@@ -139,9 +122,7 @@ def test_a_configured_queue_is_named_on_the_message(settings) -> None:
 def test_a_hand_off_runs_through_celery(
     order: OrderPlaced, record: list[str], task_site: None, eager_app: Celery
 ) -> None:
-    """The whole path with no stand-in for Celery itself: the relay's hand-off,
-    ``apply_async`` on the shared task, the current app running it, the take,
-    and the delivery."""
+    """The whole path with no stand-in for Celery itself."""
     delivery_id = _claimed(order)
     record.clear()
 

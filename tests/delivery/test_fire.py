@@ -1,5 +1,3 @@
-"""Tests mirroring ``django_domain_events/fire.py``."""
-
 from __future__ import annotations
 
 import hashlib
@@ -74,9 +72,7 @@ def test_the_event_row_carries_the_registered_name_and_version(order: OrderPlace
 def test_one_delivery_row_per_durable_receiver_and_none_for_the_others(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Two of the four receivers are durable. INLINE and ON_COMMIT get no row,
-    which is the honest expression of what they promise: one cannot be owed
-    because it rolls back, the other is explicitly losable."""
+    """Two of the four receivers are durable."""
     with transaction.atomic():
         fire(order)
 
@@ -88,11 +84,9 @@ def test_one_delivery_row_per_durable_receiver_and_none_for_the_others(
 def test_inline_runs_before_fire_returns_and_on_commit_waits(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The distinction the two modes exist for, observed rather than asserted
-    from the declaration."""
+    """The distinction the two modes exist for, observed rather than asserted."""
     with transaction.atomic():
         fire(order)
-        # Both inline receivers have already run, and neither on_commit one has.
         assert record == ["inline:7", "inline_context:testapp.OrderPlaced:1"]
     assert record[-1] == "on_commit:7"
 
@@ -100,8 +94,7 @@ def test_inline_runs_before_fire_returns_and_on_commit_waits(
 def test_an_inline_receiver_raising_takes_the_event_row_with_it(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """The reason INLINE needs no durability: its failure mode is a rollback, so
-    the business change and the event both revert and nothing is owed."""
+    """INLINE needs no durability: its failure rolls back the change and event."""
     from django_domain_events.declaration.registry import registry
 
     receiver = registry.receiver_for_key("testapp.inline_receiver")
@@ -122,16 +115,13 @@ def test_an_inline_receiver_raising_takes_the_event_row_with_it(
 
 
 def test_firing_outside_a_transaction_warns(order: OrderPlaced, record: list[str]) -> None:
-    """In autocommit the event insert is its own transaction, so the dual-write
-    gap is back and DURABLE is quietly no better than ON_COMMIT. Warn rather
-    than pretend."""
+    """In autocommit the event insert commits alone, so the dual-write gap returns."""
     with pytest.warns(UserWarning, match="outside a transaction"):
         fire(order)
 
 
 def test_the_warning_can_be_turned_off(order: OrderPlaced, record: list[str], settings) -> None:
-    """A project that fires outside a transaction knowingly should not have to
-    read the same warning forever."""
+    """Firing outside a transaction on purpose should not warn forever."""
     settings.DJANGO_DOMAIN_EVENTS = {"WARN_OUTSIDE_ATOMIC": False}
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -140,8 +130,7 @@ def test_the_warning_can_be_turned_off(order: OrderPlaced, record: list[str], se
 
 
 def test_dedupe_key_and_occurred_at_are_recorded(order: OrderPlaced, record: list[str]) -> None:
-    """occurred_at is domain time and differs from recorded_at on a backfill,
-    which is exactly the case the two columns exist for."""
+    """occurred_at is domain time, which differs from recorded_at on a backfill."""
     happened = datetime(2020, 1, 1, tzinfo=timezone.utc)
     with transaction.atomic():
         fire(order, dedupe_key="order-7", occurred_at=happened)
@@ -152,19 +141,14 @@ def test_dedupe_key_and_occurred_at_are_recorded(order: OrderPlaced, record: lis
 
 
 def test_max_attempts_is_copied_onto_the_row(order: OrderPlaced, record: list[str]) -> None:
-    """Read off the row rather than the live declaration, so lowering the limit
-    later cannot retroactively dead-letter work already in flight."""
+    """Read off the row, so lowering the limit cannot dead-letter work in flight."""
     with transaction.atomic():
         fire(order)
     assert set(DeliveryRecord.objects.values_list("max_attempts", flat=True)) == {5}
 
 
 def test_an_eager_receiver_delivers_at_commit_without_a_relay(record: list[str]) -> None:
-    """What stops DURABLE feeling slow: outbox durability at on-commit latency.
-
-    The row is still written in the transaction, so what this buys is only the
-    attempt - anything a crash loses is still owed and the relay reclaims it.
-    """
+    """What stops DURABLE feeling slow: outbox durability at on-commit latency."""
     with transaction.atomic():
         fire(Eagerly(value=3))
     assert "eager:3" in record
@@ -176,9 +160,7 @@ def test_an_eager_receiver_delivers_at_commit_without_a_relay(record: list[str])
 def test_the_eager_attempt_leaves_a_non_eager_receiver_of_the_same_event_to_the_relay(
     record: list[str],
 ) -> None:
-    """The attempt at commit finds its rows by event and receiver, so the
-    receiver half of that is what keeps a non-eager receiver of the same event
-    off it."""
+    """The attempt at commit finds rows by event and receiver."""
     with transaction.atomic():
         fire(Eagerly(value=4))
 
@@ -191,9 +173,7 @@ def test_the_eager_attempt_leaves_a_non_eager_receiver_of_the_same_event_to_the_
 def test_the_eager_attempt_leaves_an_earlier_event_owed_the_same_receiver_alone(
     record: list[str],
 ) -> None:
-    """The event half of the same lookup: an earlier event's row still owed to
-    the eager receiver - its own attempt lost, say - is the relay's, and a
-    later fire does not pick it up."""
+    """An earlier event's row owed to the eager receiver is the relay's to finish."""
     with transaction.atomic():
         earlier = fire(Eagerly(value=5))
     DeliveryRecord.objects.filter(event=earlier).update(status=DeliveryStatus.PENDING)
@@ -218,8 +198,7 @@ def test_a_non_eager_receiver_waits_for_the_relay(order: OrderPlaced, record: li
 
 
 def test_an_eager_receiver_raising_leaves_the_row_owed(record: list[str]) -> None:
-    """The relay is the fallback, so an eager failure is a retry rather than a
-    loss. robust=True also keeps it from cancelling the other callbacks."""
+    """The relay is the fallback, so an eager failure is a retry rather than a loss."""
     from django_domain_events.declaration.registry import registry
 
     entry = registry.receiver_for_key("testapp.eager")
@@ -250,12 +229,7 @@ def _rows(key: str) -> list[tuple[str, str, int]]:
 
 
 def test_a_fan_out_writes_one_row_per_target_each_with_its_own_attempts() -> None:
-    """Three targets, three rows, and a failing one does not drag the others.
-
-    One claim of all three, so each is attempted exactly once, then the relay
-    left to spend the failing target's whole budget: the two that succeeded
-    must still read one attempt each at the end.
-    """
+    """Three targets, three rows, and a failing one does not drag the others."""
     delivered: list[str] = []
     failures: list[DeliveryFailure] = []
 
@@ -294,7 +268,6 @@ def test_a_fan_out_writes_one_row_per_target_each_with_its_own_attempts() -> Non
         ("b", DeliveryStatus.DEAD, 5),
         ("c", DeliveryStatus.SUCCEEDED, 1),
     ]
-    # The failure hook can say which target failed, not only which receiver.
     assert {failure.target for failure in failures} == {"b"}
 
 
@@ -307,13 +280,11 @@ def test_no_targets_writes_no_rows_and_raises_nothing() -> None:
 
     assert EventRecord.objects.filter(pk=event_id).exists()
     assert DeliveryRecord.objects.filter(event_id=event_id).count() == 0
-    # Nothing owed, so nothing to wake a relay for.
     notify.assert_not_called()
 
 
 def test_one_target_is_enough_to_wake_the_relay() -> None:
-    """The control for the test above: the patch reaches the call, so its
-    silence there is a finding rather than a patch that missed."""
+    """The control for the test above: the patch reaches the call."""
     receiver(Unheard, key="probe.one", targets=lambda event, context: ["x"])(lambda event: None)
 
     with mock.patch.object(_fire_module, "notify_relay") as notify, transaction.atomic():
@@ -331,10 +302,7 @@ def test_one_target_is_enough_to_wake_the_relay() -> None:
     ),
 )
 def test_a_fan_out_is_written_by_one_unnest_insert_on_postgres() -> None:
-    """The rows fire writes, not only a bare ``bulk_create``: any value the
-    compiler has to render as SQL, such as an expression for a due time, would
-    send the whole insert back to one VALUES tuple per row, and so would a
-    field with a placeholder hook."""
+    """A value rendered as SQL drops a bulk insert to one VALUES tuple per row."""
     targets = [f"endpoint-{n}" for n in range(5)]
     receiver(Unheard, key="probe.unnest", targets=lambda event, context: targets)(
         lambda event: None
@@ -358,8 +326,7 @@ def test_a_fan_out_is_written_by_one_unnest_insert_on_postgres() -> None:
 
 
 def test_the_callable_is_handed_the_event_and_the_fire_time_context() -> None:
-    """Everything a data-driven lookup needs: the event, its name, and the scope
-    it was fired under."""
+    """Everything a data-driven lookup needs: the event, its name and its scope."""
     seen: list[tuple[object, DeliveryContext]] = []
 
     def targets(event: Unheard, context: DeliveryContext) -> list[str]:
@@ -382,13 +349,11 @@ def test_the_callable_is_handed_the_event_and_the_fire_time_context() -> None:
         {"tenant": "acme"},
         "",
     )
-    # No row exists yet: the callable is what decides which rows to write.
     assert context.delivery_id is None
 
 
 def test_an_eager_receiver_in_a_named_lane_is_still_attempted_at_commit() -> None:
-    """The lane decides which relay picks up what the eager attempt did not
-    finish; it does not move the eager attempt out of the firing process."""
+    """The lane decides which relay finishes what the eager attempt left."""
     ran: list[int] = []
     receiver(Unheard, key="probe.eager_mail", eager=True, lane="mail")(
         lambda event: ran.append(event.value)
@@ -402,8 +367,7 @@ def test_an_eager_receiver_in_a_named_lane_is_still_attempted_at_commit() -> Non
 
 
 def test_receivers_without_a_row_are_given_no_delivery_id(order: OrderPlaced) -> None:
-    """INLINE and ON_COMMIT receivers are handed the fire-time context, and
-    there is no delivery row behind either of them to name."""
+    """INLINE and ON_COMMIT receivers get the fire-time context, with no row."""
     seen: list[DeliveryContext] = []
     for mode in (DeliveryMode.INLINE, DeliveryMode.ON_COMMIT):
         receiver(Unheard, mode=mode, takes_context=True, key=f"probe.{mode.value}")(
@@ -417,15 +381,7 @@ def test_receivers_without_a_row_are_given_no_delivery_id(order: OrderPlaced) ->
 
 
 def test_a_target_is_written_as_long_as_it_was_returned() -> None:
-    """Ten thousand incompressible characters, written and read back.
-
-    Backend-dependent, and the Postgres half is the point. A btree index entry
-    there holds at most 2704 bytes, so a target the unique constraint indexed
-    directly would be refused inside the caller's transaction; the constraint
-    indexes the target's digest instead, and the text sits in no index at all.
-    SQLite imposes neither limit, so there this pins only that nothing in
-    Python refuses the length.
-    """
+    """Ten thousand incompressible characters, written and read back."""
     long_target = secrets.token_urlsafe(7500)[:10_000]
     receiver(Unheard, key="probe.long", targets=lambda event, context: [long_target])(
         lambda event: None
@@ -438,9 +394,7 @@ def test_a_target_is_written_as_long_as_it_was_returned() -> None:
 
 
 def test_every_row_fire_writes_carries_the_digest_of_its_target() -> None:
-    """Both kinds of row: a fan-out target, and the blank one a plain receiver
-    writes, whose digest is the digest of the empty string rather than a
-    special case."""
+    """Both a fan-out target and the blank row a plain receiver writes."""
     receiver(Unheard, key="probe.fan", targets=lambda event, context: ["a", "b" * 3000])(
         lambda event: None
     )
@@ -460,11 +414,7 @@ def test_every_row_fire_writes_carries_the_digest_of_its_target() -> None:
 
 
 def test_a_raising_callable_fails_the_callers_transaction() -> None:
-    """The business change, the event and the deliveries roll back together.
-
-    A fan-out that swallowed this and delivered to nobody would leave a
-    committed change whose consequences silently never happened.
-    """
+    """The business change, the event and the deliveries roll back together."""
 
     def broken(event: Unheard, context: DeliveryContext) -> list[str]:
         raise RuntimeError("the endpoint table is locked")
@@ -550,8 +500,7 @@ def _declared(retention: timedelta | Retention | None) -> Iterator[type]:
 def test_the_retention_is_copied_onto_the_row(
     retention: timedelta | Retention | None, columns: tuple[int | None, str]
 ) -> None:
-    """At most one of the two columns, because the prune reads them as one
-    knob: a row carrying both would be a window and a policy at once."""
+    """At most one of the two columns, because the prune reads them as one knob."""
     with _declared(retention) as cls, transaction.atomic():
         event_id = fire(cls(value=1))
     row = EventRecord.objects.get(pk=event_id)
@@ -560,9 +509,7 @@ def test_the_retention_is_copied_onto_the_row(
 
 @pytest.mark.parametrize("policy", [Retention.SUCCEEDED, Retention.SETTLED])
 def test_a_dedupe_key_is_refused_for_an_event_deleted_on_consumption(policy: Retention) -> None:
-    """The key is unique on the event row, so it protects only while the row
-    exists - minutes, here - and a re-fired duplicate would be accepted the
-    moment the first was pruned."""
+    """The key is unique on the event row, so it protects only while that row exists."""
     with (
         _declared(policy) as cls,
         transaction.atomic(),
@@ -579,8 +526,7 @@ def test_a_dedupe_key_is_accepted_with_a_window_of_its_own() -> None:
 
 
 def test_a_redeclared_event_does_not_change_the_fate_of_one_already_recorded() -> None:
-    """Copied at fire time, as max_attempts is onto a delivery: what the class
-    says later reaches the next event, not this one."""
+    """Copied at fire time, as max_attempts is: later changes miss this event."""
     with _declared(Retention.SUCCEEDED) as cls, transaction.atomic():
         before = fire(cls(value=1))
     with _declared(None) as cls, transaction.atomic():
@@ -598,8 +544,7 @@ def _row(key: str) -> DeliveryRecord:
 def test_a_fixed_delay_writes_the_row_due_that_long_after_the_event_occurred(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Counted from ``occurred_at``, the domain's time: an offer made at noon
-    expires 48 hours after noon, whenever the row happened to be written."""
+    """Counted from occurred_at, the domain's time, whenever the row was written."""
 
     @receiver(OrderPlaced, key="probe.expire", due=timedelta(hours=48))
     def expire(evt: OrderPlaced) -> None: ...
@@ -611,8 +556,6 @@ def test_a_fixed_delay_writes_the_row_due_that_long_after_the_event_occurred(
     row = _row("probe.expire")
     assert (row.available_at, row.due_at) == (occurred + timedelta(hours=48),) * 2
     assert row.status == DeliveryStatus.PENDING
-    # Every other receiver is written as it always was: available at once,
-    # with no due time of its own.
     plain = _row("testapp.durable_receiver")
     assert (plain.available_at, plain.due_at) == (plain.event.recorded_at, None)
 
@@ -641,10 +584,7 @@ def test_a_callable_is_handed_the_event_and_its_answer_is_the_due_time(
 def test_a_due_time_already_past_is_due_when_the_row_is_written(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """A backfilled event can be due before it is recorded. Its row is due at
-    once, and owed from the moment it was written: a due time in the past
-    would read as a backlog that old the instant the row existed, and a
-    ``give_up_after`` measured from it would dead-letter its first deferral."""
+    """A backfilled event can be due before it is recorded."""
 
     @receiver(OrderPlaced, key="probe.late", due=timedelta(hours=1))
     def late(evt: OrderPlaced) -> None: ...
@@ -667,11 +607,7 @@ def test_a_due_time_already_past_is_due_when_the_row_is_written(
 def test_a_callable_answering_anything_but_an_aware_datetime_fails_the_change(
     order: OrderPlaced, record: list[str], answer: object, error: type, message: str, settings
 ) -> None:
-    """Raised, never skipped, because the alternative is a reaction that
-    silently never happens. A naive datetime is refused rather than guessed
-    at under ``USE_TZ = True``: read as UTC or as local time, it is wrong for
-    somebody by hours. Under ``False`` it is local time and accepted
-    (``tests/test_naive_datetimes.py``)."""
+    """Raised, never skipped, because the alternative is a reaction that silently never happens."""
     settings.USE_TZ = True
 
     @receiver(OrderPlaced, key="probe.bad_due", due=lambda evt: answer)
@@ -684,8 +620,7 @@ def test_a_callable_answering_anything_but_an_aware_datetime_fails_the_change(
 
 
 def test_a_scheduled_receiver_is_given_its_due_time(order: OrderPlaced, record: list[str]) -> None:
-    """So it can recompute the due time from current state and compare: the
-    offer extended since this row was written is still open."""
+    """The due time is recomputed from current state, so an extended offer stays open."""
     seen: list[DeliveryContext] = []
 
     @receiver(OrderPlaced, key="probe.ctx", takes_context=True, due=timedelta(hours=1))
@@ -703,9 +638,7 @@ def test_a_scheduled_receiver_is_given_its_due_time(order: OrderPlaced, record: 
 def test_an_unscheduled_delivery_is_due_from_when_its_event_was_recorded(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """A NULL ``due_at`` is read as the event's ``recorded_at`` everywhere else,
-    so the context reads it the same way rather than handing a receiver None
-    for every row nobody scheduled."""
+    """A NULL due_at reads as recorded_at, as everywhere else."""
     seen: list[DeliveryContext] = []
 
     @receiver(OrderPlaced, key="probe.plain_ctx", takes_context=True)
@@ -725,8 +658,7 @@ _DEDUPE_LIMIT = EventRecord._meta.get_field("dedupe_key").max_length
 
 
 def test_a_dedupe_key_of_exactly_the_column_width_is_recorded(order: OrderPlaced) -> None:
-    """Holds the comparison: ``>=`` instead of ``>`` refuses this key. Passes on a
-    tree without the check, as it must; it is here for the mutant."""
+    """Holds the comparison: ``>=`` instead of ``>`` refuses this key."""
     assert _DEDUPE_LIMIT == 255
     with transaction.atomic():
         event_id = fire(order, dedupe_key="k" * _DEDUPE_LIMIT)
@@ -743,7 +675,6 @@ def test_a_dedupe_key_one_over_the_column_width_is_refused_before_writing(
     assert "dedupe_key" in message
     assert f"{_DEDUPE_LIMIT + 1} characters" in message
     assert f"limit is {_DEDUPE_LIMIT}" in message
-    # The key is the caller's, so it is not echoed.
     assert key[:20] not in message
     # Sized to the width check, not the refusal for an event deleted on consumption.
     assert "deleted once consumed" not in message
@@ -754,8 +685,7 @@ def test_a_dedupe_key_one_over_the_column_width_is_refused_before_writing(
 def test_an_over_long_dedupe_key_is_refused_for_a_suppressed_event_that_is_recorded(
     order: OrderPlaced,
 ) -> None:
-    """A recorded suppressed event writes the same row, so it is held to the same
-    width."""
+    """A recorded suppressed event writes the same row, so it is held to the same width."""
     with (
         transaction.atomic(),
         suppressed(OrderPlaced, reason="backfill"),
@@ -766,10 +696,7 @@ def test_an_over_long_dedupe_key_is_refused_for_a_suppressed_event_that_is_recor
 
 
 def test_an_over_long_actor_is_stored_truncated_rather_than_refused(order: OrderPlaced) -> None:
-    """The actor's key and label never reach ``fire()`` longer than their columns:
-    ``Actor`` truncates them at capture, so the length refusals ``fire()`` makes
-    cover the dedupe key alone. Pins that, so a change to the truncation shows up
-    here as the decision it is."""
+    """Actor truncates key and label at capture, so only the dedupe key needs refusal."""
     with transaction.atomic(), attributed(actor_key="x" * 300, actor_label="y" * 300):
         event_id = fire(order)
     row = EventRecord.objects.get(pk=event_id)

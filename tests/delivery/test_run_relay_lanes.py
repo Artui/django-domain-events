@@ -1,13 +1,3 @@
-"""A relay serving several lanes: one claim per lane, in turn, each just in time.
-
-A file of its own beside ``test_run_relay.py``, because every test here needs
-two lanes with rows of their own. The test app's receivers all listen to
-``OrderPlaced`` and sit in the default lane, so these declare two events that
-nothing else listens to, ``Push`` and ``Sms``, with one receiver each in the
-lanes ``push`` and ``sms``. Sorted, ``push`` comes first, which is why a test
-asserting what a later lane is spared acts in ``push``.
-"""
-
 from __future__ import annotations
 
 import re
@@ -134,8 +124,7 @@ def _claims(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[dict[str, Any]]]:
 
 
 def _deferring(clock: _Clock, seen: list[datetime], *, times: int = 10) -> Callable[[Sms], None]:
-    """An SMS receiver whose destination asks for an hour's pause on each of its
-    first ``times`` calls and accepts the rest, noting the clock at each call."""
+    """An SMS receiver pausing an hour on each of its first calls, then accepting."""
 
     def sms(evt: Sms) -> None:
         seen.append(clock())
@@ -171,9 +160,7 @@ def closes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 def test_a_burst_in_one_lane_does_not_hold_back_another_under_every_lane(lanes: None) -> None:
-    """Sixty push rows owed before one SMS row. One claim across every lane, in
-    ``available_at`` order, would spend the whole pass on push; one claim per
-    lane delivers the SMS row in the first pass."""
+    """Sixty push rows owed before one SMS row."""
     _fire(Push, 60)
     _fire(Sms)
 
@@ -193,8 +180,7 @@ def test_a_set_of_lanes_delivers_each_lane_within_one_batch_of_the_others(lanes:
 
 
 def test_a_lanes_wait_is_one_batch_of_each_other_lane_not_their_backlog(lanes: None) -> None:
-    """A thousand push rows owed, and ``push`` sized at three: every SMS row
-    waits for three push deliveries, not for the thousand."""
+    """push sized at three: SMS waits for three push deliveries, not a thousand."""
     _fire(Push, 1000)
     _fire(Sms, 3)
 
@@ -210,8 +196,7 @@ def test_a_lanes_wait_is_one_batch_of_each_other_lane_not_their_backlog(lanes: N
 
 
 def test_each_lane_is_claimed_just_before_it_is_delivered(lanes: None) -> None:
-    """While ``push`` delivers, no SMS row is claimed: a batch claimed early would
-    burn its lease waiting for the other lanes to finish."""
+    """While push delivers, no SMS row is claimed: an early batch would burn its lease."""
     claimed_meanwhile: list[int] = []
 
     def push(evt: Push) -> None:
@@ -234,8 +219,7 @@ def test_each_lane_is_claimed_just_before_it_is_delivered(lanes: None) -> None:
 def test_every_lane_is_claimed_under_its_own_lease(
     lanes: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``push`` declares 60 seconds and ``sms`` 30. Under one claim across every
-    lane the two differ, and both would be claimed under ``LEASE_SECONDS``."""
+    """``push`` declares 60 seconds and ``sms`` 30."""
     _fire(Push)
     _fire(Sms)
 
@@ -250,8 +234,7 @@ def test_every_lane_is_claimed_under_its_own_lease(
 def test_a_set_is_served_once_per_lane_in_sorted_order(
     lanes: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Duplicates name the same work, so a manifest assembled by concatenation
-    serves each lane once rather than failing."""
+    """Duplicates name the same work, so a concatenated manifest serves each lane once."""
     with _claims(monkeypatch) as made:
         run_relay(
             worker_id="w1", passes=1, lane=["sms", "push", "sms"], wait=lambda _: False, **UNSAFE
@@ -286,8 +269,7 @@ def test_every_lane_is_reread_at_each_pass(lanes: None, monkeypatch: pytest.Monk
 
 
 def test_a_string_is_one_lane_not_its_letters(lanes: None) -> None:
-    """A ``str`` is a collection of its characters too, and iterating ``"sms"``
-    would serve the lanes ``s`` and ``m``, which nobody declared."""
+    """A str is a collection of characters, so 'sms' would serve the lanes s and m."""
     _fire(Sms)
 
     assert run_relay(worker_id="w1", passes=1, lane="sms", **UNSAFE) == {
@@ -337,8 +319,7 @@ def test_an_undeclared_member_is_refused_by_name(lanes: None) -> None:
 
 
 def test_an_empty_set_of_lanes_is_refused(lanes: None) -> None:
-    """It is neither every lane nor any lane: a relay given one would claim
-    nothing and look healthy doing it."""
+    """Neither every lane nor any lane: such a relay would claim nothing."""
     with pytest.raises(ValueError, match="empty collection"):
         run_relay(worker_id="w1", passes=1, lane=[], **UNSAFE)
 
@@ -349,8 +330,7 @@ def test_a_lane_that_is_not_a_string_is_refused(lanes: None) -> None:
 
 
 def test_a_size_for_a_lane_not_served_is_refused(lanes: None) -> None:
-    """Declared, but not served by this relay: a manifest sizing work nothing
-    here will claim."""
+    """Declared, but not served by this relay: a manifest sizing work nothing here will claim."""
     with pytest.raises(ValueError, match="lane_batch_sizes names lane 'sms', which is not served"):
         run_relay(worker_id="w1", passes=1, lane="push", lane_batch_sizes={"sms": 2}, **UNSAFE)
 
@@ -372,8 +352,7 @@ def test_a_lane_size_below_one_is_refused(lanes: None, size: int) -> None:
 
 
 def test_a_stop_during_one_lanes_batch_hands_it_back_and_claims_no_other(lanes: None) -> None:
-    """Only the batch in hand is held, so only it is handed back, and the lane
-    after it was never claimed at all."""
+    """Only the batch in hand is handed back; the lane after it was never claimed."""
     _fire(Push, 3)
     _fire(Sms, 2)
 
@@ -413,8 +392,7 @@ def test_a_stop_between_lanes_claims_no_further_lane(lanes: None) -> None:
 
 
 def test_a_failed_claim_ends_the_pass(lanes: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A database refusing one lane's claim is refusing them all: the rest of the
-    pass is not tried, and the backoff is its only wait."""
+    """A database refusing one lane's claim refuses them all: the rest is not tried."""
     tried: list[str] = []
 
     def failing(**kwargs: Any) -> list[int]:
@@ -443,10 +421,7 @@ def test_a_failed_claim_ends_the_pass(lanes: None, monkeypatch: pytest.MonkeyPat
 
 
 def test_a_paused_lane_is_not_queried_while_the_others_go_on(lanes: None) -> None:
-    """SMS defers for an hour at its first row. Its other two rows go straight
-    back, push goes on being delivered in the same pass and the ones after,
-    and SMS is not claimed again - not even asked - until the injected clock
-    reaches the hour. Each idle wait moves the clock half an hour."""
+    """SMS defers for an hour at its first row."""
     seen: list[datetime] = []
     _fire(Push, 6)
     _fire(Sms, 3)
@@ -475,9 +450,7 @@ def test_a_paused_lane_is_not_queried_while_the_others_go_on(lanes: None) -> Non
 
 
 def test_a_deferral_asks_nothing_about_the_rows_it_hands_back(lanes: None) -> None:
-    """Every row of the batch is in the lane that deferred, because the batch was
-    claimed for that lane alone, so there is no split to query for. The split
-    would select each row's ``receiver_key`` by its id, over the whole batch."""
+    """Every row in the batch is in the deferring lane, so there is no split."""
     _fire(Sms, 3)
     clock = _Clock()
 
@@ -506,8 +479,7 @@ def _pauses() -> list[tuple[str, str, datetime, datetime]]:
 
 
 def test_a_deferral_records_the_pause_where_operators_can_see_it(lanes: None) -> None:
-    """Read from the idle wait the pause leaves the relay in, since the relay
-    deletes its records when it returns."""
+    """Read from the idle wait, since the relay deletes its records on return."""
     _fire(Sms)
     clock = _Clock()
     during: list[list[tuple[str, str, datetime, datetime]]] = []
@@ -525,8 +497,7 @@ def test_a_deferral_records_the_pause_where_operators_can_see_it(lanes: None) ->
 
 
 def test_a_pause_that_ends_deletes_its_record(lanes: None) -> None:
-    """The first wait sees the record; the clock then passes the hour, the pause
-    ends at the lane's next turn, and the next wait sees none."""
+    """The record is seen once, then the pause ends and the next wait sees none."""
     _fire(Sms, 2)
     clock = _Clock(step=3600)
     during: list[list[tuple[str, str, datetime, datetime]]] = []
@@ -545,10 +516,7 @@ def test_a_pause_that_ends_deletes_its_record(lanes: None) -> None:
 
 
 def test_a_pause_that_ends_deletes_only_its_own_lanes_record() -> None:
-    """Push pauses for an hour and SMS for five. When push's pause ends at its
-    turn, its record goes and SMS's stays, because SMS is still paused: a delete
-    keyed on the relay alone would clear a pause still in force from what
-    ``outbox_health`` reports."""
+    """Push pauses for an hour and SMS for five."""
 
     def deferring_once(lane: str, hours: int) -> Callable[[Any], None]:
         calls: list[None] = []
@@ -582,7 +550,6 @@ def test_a_pause_that_ends_deletes_only_its_own_lanes_record() -> None:
     ):
         _fire(Push)
         _fire(Sms)
-        # Read after the rows are written, so they are due on the first pass.
         clocks.append(_Clock(step=3600))
         run_relay(
             worker_id="w1", passes=4, lane=["push", "sms"], now=clocks[0], wait=wait, **UNSAFE
@@ -613,8 +580,7 @@ def test_a_stop_deletes_the_records_of_lanes_still_paused(lanes: None) -> None:
 
 
 def test_a_stop_mid_batch_deletes_the_records_of_lanes_still_paused(lanes: None) -> None:
-    """SMS paused in the first pass; the stop comes in the middle of a later
-    push batch, and the SMS record goes with the relay."""
+    """A stop mid-batch takes the pause record with the relay."""
     _fire(Sms)
     _fire(Push, 4)
     clock = _Clock()
@@ -635,8 +601,7 @@ def test_a_stop_mid_batch_deletes_the_records_of_lanes_still_paused(lanes: None)
 
 
 def test_a_relay_deletes_only_its_own_records(lanes: None) -> None:
-    """Another relay's unexpired record of the same lane is that relay's pause,
-    which this one did not hear and must not clear."""
+    """Another relay's unexpired record of the same lane is not this relay's to clear."""
     _fire(Sms)
     clock = _Clock()
     other = LanePauseRecord.objects.create(
@@ -653,9 +618,7 @@ def test_a_relay_deletes_only_its_own_records(lanes: None) -> None:
 
 
 def test_a_write_deletes_every_record_whose_pause_has_passed(lanes: None) -> None:
-    """A relay that died without returning leaves its record, and nobody else
-    owns it. One that ended a second ago and one that ends this instant have
-    both passed; one ending a second from now has not."""
+    """A relay that died without returning leaves its record, and nobody else owns it."""
     _fire(Sms)
     clock = _Clock()
     at = in_project_time(clock.at)
@@ -680,9 +643,7 @@ def test_a_write_deletes_every_record_whose_pause_has_passed(lanes: None) -> Non
 
 
 def test_a_relay_restarted_under_its_worker_id_moves_its_old_record(lanes: None) -> None:
-    """A relay given a fixed ``--worker-id`` that died paused left a record under
-    that id. Its successor's first deferral writes over it, one record per lane
-    per relay, rather than failing on the pair being taken."""
+    """A relay given a fixed ``--worker-id`` that died paused left a record under that id."""
     _fire(Sms)
     clock = _Clock()
     at = in_project_time(clock.at)
@@ -707,9 +668,7 @@ def test_a_pause_record_that_cannot_be_written_does_not_stop_the_relay(
     closes: list[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The record is for operators to see; the pause in this process is what
-    governs the relay, and it still holds: the lane's handed-back rows are not
-    attempted on the passes that follow."""
+    """The record is for operators; the in-process pause still governs the relay."""
     seen: list[datetime] = []
     _fire(Sms, 3)
     clock = _Clock()
@@ -735,8 +694,7 @@ def test_a_pause_record_that_cannot_be_deleted_does_not_stop_the_relay(
     closes: list[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The record then stays until its ``until`` passes, and the next write by
-    any relay deletes it."""
+    """The record stays until its until passes, and any relay's next write deletes it."""
     _fire(Sms)
     clock = _Clock()
     real_filter = LanePauseRecord.objects.filter
@@ -761,12 +719,7 @@ def test_a_pause_record_that_cannot_be_deleted_does_not_stop_the_relay(
 
 @contextmanager
 def _statements() -> Iterator[list[str]]:
-    """The SQL sent on the write connection, as templates with placeholders.
-
-    Templates rather than the interpolated text ``CaptureQueriesContext``
-    keeps: primary keys keep counting across tests and timestamps move, so the
-    interpolated text of two identical passes never matches.
-    """
+    """The SQL sent on the write connection, as templates with placeholders."""
     sent: list[str] = []
 
     def capture(
@@ -780,10 +733,7 @@ def _statements() -> Iterator[list[str]]:
 
 
 def _the_pass_without_lanes(*, lane: str | None, clock: _Clock) -> None:
-    """One pass as a relay serving one claim made it before a relay served
-    several lanes: one ``claim_batch`` for the lane, then a delivery per row.
-    Captured from that relay's ``run_relay`` and found equal to this, which is
-    why the two tests below can compare against it on any backend and Django."""
+    """One pass as a single-lane relay ran: one claim_batch, then a delivery per row."""
     ids = claim_batch(
         worker_id="w1",
         now=clock(),
@@ -799,10 +749,7 @@ def _the_pass_without_lanes(*, lane: str | None, clock: _Clock) -> None:
 
 
 def test_a_relay_that_never_deferred_sends_what_it_always_sent(lanes: None) -> None:
-    """A single lane given as a ``str``, with no deferral: the same statements,
-    in the same order and number, as the one claim and the deliveries that
-    were the whole of a pass before. A relay that never defers never touches
-    the pause table."""
+    """A single str lane, with no deferral: the same statements as before lanes."""
     _fire(Sms, 3)
     with _statements() as relayed:
         run_relay(worker_id="w1", passes=1, lane="sms", now=_Clock(), **UNSAFE)
@@ -818,11 +765,7 @@ def test_a_relay_that_never_deferred_sends_what_it_always_sent(lanes: None) -> N
 def test_with_no_named_lanes_every_lane_sends_what_it_always_sent(
     order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``lane=None`` in a project that names no lane is the default lane alone,
-    whose condition compiles to no filter at all and whose lease is every
-    receiver's: the claim, and the pass, are the one claim across every lane
-    that None always made. The statements are compared as templates, so the
-    lease, a parameter, is compared on its own."""
+    """lane=None in a lane-less project claims exactly as None always did."""
     assert registry.lanes() == ["default"]
     for _ in range(2):
         with transaction.atomic():
