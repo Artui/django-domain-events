@@ -666,7 +666,7 @@ def deliver_pending(
                     if outcome is DeliveryStatus.PENDING:
                         set_aside.add(delivery_id)
                     elif outcome is None and _left_unfinished(delivery_id):
-                        # Read back only where no outcome came back, so a row run in place costs no query.
+                        # Read back only if no outcome came back: a row run in place costs no query.
                         set_aside.add(delivery_id)
                 if outcome is not None:
                     counts[outcome] = counts.get(outcome, 0) + 1

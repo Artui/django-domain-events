@@ -257,7 +257,10 @@ def _relay_prune_setting_problems() -> list[Any]:
             Error(
                 f"RELAY_PRUNE_SECONDS is {interval!r}, which is not a finite number of "
                 "seconds above zero.",
-                hint="Set RELAY_PRUNE to False to stop the relay pruning rather than a long interval.",
+                hint=(
+                    "Set RELAY_PRUNE to False to stop the relay pruning rather than a long "
+                    "interval."
+                ),
                 id="django_domain_events.E009",
             )
         )
@@ -271,7 +274,9 @@ def _prune_batch_problems() -> list[Any]:
         return [
             Error(
                 f"PRUNE_BATCH_ROWS is {size!r}, which is not a positive whole number of rows.",
-                hint="Use the number of rows one prune transaction may delete; the default is 5000.",
+                hint=(
+                    "Use the number of rows one prune transaction may delete; the default is 5000."
+                ),
                 id="django_domain_events.E010",
             )
         ]
