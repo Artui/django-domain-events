@@ -37,44 +37,7 @@ from django_domain_events.utils import (
 def fire(
     event: object, *, dedupe_key: str | None = None, occurred_at: datetime | None = None
 ) -> int | None:
-    """Record an event and owe it to its durable receivers. Returns its id.
-
-    Returns the event id, or ``None`` when suppression discarded it without
-    recording.
-
-    This does not call durable receivers; it records intent. The event row and
-    one delivery row per durable receiver are written inside the caller's
-    transaction, so the obligation exists if and only if the business change
-    committed. A durable receiver therefore cannot signal failure back here -
-    only ``INLINE`` receivers can, by raising.
-
-    A durable receiver declared with ``targets=`` gets one row per target
-    instead, and **its callable runs here, inside the caller's transaction**.
-    If it raises, this raises, and the caller's change rolls back with the event:
-    a fan-out that delivered to nobody would be a committed change whose
-    consequences silently never happened. It also costs whatever the callable
-    costs, on every event it is owed - one query per fired event per fan-out
-    receiver, for one that reads a table.
-
-    A durable receiver declared with ``due=`` has its row written due later:
-    ``available_at`` and ``due_at`` at its due time, never earlier than now. A
-    ``due`` callable runs here too, on the same terms as ``targets``: if it
-    raises, or answers with anything but an aware datetime, this raises.
-
-    The event's declared ``retention`` is copied onto the row. A ``dedupe_key``
-    is refused, with ``ValueError``, for an event declared to delete on
-    consumption: the key is unique on the row, so it would protect only until
-    the prune deleted it. A ``dedupe_key`` longer than the column that stores it
-    is refused with ``ValueError`` before anything is written.
-    """
-    # Imported here, not at module level: Django imports an app's package before
-    # the app registry is ready, and this package's __init__ re-exports fire().
-    #
-    # Re-checked after the 2026-09-10 regroup, because moving a module is exactly
-    # the kind of change that quietly makes a workaround obsolete and nobody goes
-    # back to look. It is still required: __init__ imports delivery.fire at
-    # package-import time, so hoisting these two raises ImproperlyConfigured on a
-    # bare `import django_domain_events`. Verified by doing it, not by reading.
+    """Record an event and owe it to its durable receivers."""
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.models.event_record import EventRecord
 
@@ -97,11 +60,6 @@ def fire(
             stacklevel=2,
         )
 
-    # Captured here, at fire time, in the firing process. Everything downstream
-    # reads attribution off the row: a durable delivery can run in another
-    # process hours later, and on_commit callbacks run at commit, which can be
-    # after the `with attributed(...)` block has already exited. Reading a
-    # ContextVar there returns a stale answer or None, silently.
     scope = current_scope()
     suppression = suppression_for(type(event))
     if suppression is not None and not suppression[1]:
@@ -109,10 +67,6 @@ def fire(
 
     retention_seconds, delete_when = entry.retention_columns
     if delete_when and dedupe_key is not None:
-        # Refused here because it is a call argument, so the declaration
-        # cannot see it. The key is unique on the event row, so it protects
-        # only while the row exists, and this row goes minutes after it is
-        # consumed: a duplicate fired after that would be accepted.
         raise ValueError(
             f"fire({entry.name}) was given a dedupe_key, but {entry.name} is deleted "
             f"once consumed ({entry.retention}), and the key protects only while the "
@@ -120,22 +74,8 @@ def fire(
             f"known window, or drop the key."
         )
 
-    # Postgres raises DataError from the insert for a key longer than its column,
-    # inside the caller's transaction, and SQLite stores any length, so a key that
-    # works in the tests fails in production. The limit is read off the field so a
-    # widened column moves the refusal with it. After the early returns above: an
-    # event discarded by suppression writes nothing, so there is nothing to overflow.
-    # The value is not echoed, being the caller's. The other caller-supplied strings
-    # that land in 255-character columns are the actor's, which ``Actor`` truncates
-    # at capture, so they cannot arrive here longer than their columns. Two
-    # conjuncts the coverage gate cannot tell apart: ``is not None`` -
-    # test_dedupe_key_and_occurred_at_are_recorded and every fire without a key reach
-    # here with None, which ``len`` would raise on; and the comparison -
-    # test_a_dedupe_key_of_exactly_the_column_width_is_recorded fails on ``>=``,
-    # test_a_dedupe_key_one_over_the_column_width_is_refused_before_writing fails
-    # without the check.
     dedupe_limit = EventRecord.dedupe_key.field.max_length
-    assert dedupe_limit is not None  # a CharField always has one; narrows it for the checker
+    assert dedupe_limit is not None
     if dedupe_key is not None and len(dedupe_key) > dedupe_limit:
         raise ValueError(
             f"fire({entry.name}) was given a dedupe_key of {len(dedupe_key)} characters; "
@@ -150,30 +90,18 @@ def fire(
         version=entry.version,
         payload=get_codec().encode(event),
         dedupe_key=dedupe_key,
-        # In the project's form, as everything it is compared with is: an aware
-        # value under USE_TZ = False is converted to local time, which SQLite
-        # would otherwise refuse to store
-        # (test_fire_stores_an_aware_occurred_at_as_local_time).
         occurred_at=in_project_time(occurred_at) if occurred_at is not None else timezone.now(),
         actor_id=scope.actor.user_pk,
         actor_key=scope.actor.key,
         actor_label=scope.actor.label,
-        # A copy. The stored value is handed to receivers as DeliveryContext.scope
-        # and one mutation of a shared dict would reach every later event.
         scope=dict(scope.data),
         correlation_id=scope.correlation_id or inherited_correlation_id(),
         causation_id=causing_event_id(),
         suppressed_reason=suppression[0] if suppression is not None else "",
-        # Copied, as max_attempts is onto a delivery, so re-declaring or
-        # deleting the class later cannot change this event's fate. At most
-        # one of the two is set: see RegisteredEvent.retention_columns.
         retention_seconds=retention_seconds,
         delete_when=delete_when,
     )
     if suppression is not None:
-        # Recorded, deliberately undelivered, and the reason is on the row. No
-        # delivery rows, and no inline or on-commit receivers either: suppression
-        # is about the event, not about one execution site.
         return record.pk
     context = DeliveryContext(
         event_id=record.pk,
@@ -185,15 +113,6 @@ def fire(
     )
 
     receivers = registry.receivers_for(type(event))
-    # Each receiver is handed a context naming it, built from the one above
-    # with ``replace`` so no receiver's copy is another's: a ``targets=``
-    # callable, an INLINE and an ON_COMMIT receiver are each told their own key
-    # (test_a_targets_callable_is_told_the_key_of_the_receiver_it_fans_out,
-    # test_an_immediate_receiver_is_told_its_own_key).
-    #
-    # One entry per row to write. A fan-out receiver's callable runs here, in
-    # the caller's transaction, and whatever it raises is not caught: see the
-    # docstring for why a failed fan-out must fail the change.
     owed = [
         (r, target)
         for r in receivers
@@ -204,10 +123,6 @@ def fire(
             else resolve_targets(r.key, r.targets, event, replace(context, receiver_key=r.key))
         )
     ]
-    # A scheduled receiver's due time, resolved here for the same reason and
-    # with the same consequence as a fan-out: in the caller's transaction, and
-    # raising into it. Never a fan-out as well, which the declaration refuses,
-    # so one time per receiver is one time per row.
     due = {
         r.key: resolve_due(r.key, r.due, event, record.occurred_at, record.recorded_at)
         for r, _ in owed
@@ -221,39 +136,24 @@ def fire(
                     receiver_key=r.key,
                     target=target,
                     max_attempts=r.max_attempts,
-                    # At the due time for a scheduled receiver, so the claim
-                    # takes it then and not before; at once for every other.
-                    # due_at stays NULL for those, which reads as recorded_at.
                     available_at=due.get(r.key, record.recorded_at),
                     due_at=due.get(r.key),
                 )
                 for r, target in owed
             ]
         )
-        # Keys rather than the ids bulk_create hands back: MySQL returns none
-        # from a multi-row insert, so a list of ids there was a list of None
-        # and the eager attempt claimed nothing, leaving every row to the
-        # relay (test_an_eager_receiver_delivers_at_commit_without_a_relay,
-        # on MySQL). A key covers each of a fan-out's targets too.
         eager_keys = sorted({r.key for r, _ in owed if r.eager})
         if eager_keys:
             transaction.on_commit(
                 _deliver_eagerly(record.pk, eager_keys, alias), using=alias, robust=True
             )
-        # After commit, because a notification sent before it would wake a relay
-        # that cannot yet see the rows it was told about.
         transaction.on_commit(notify_relay, using=alias, robust=True)
 
     for r in receivers:
         if r.mode is DeliveryMode.INLINE:
-            # Causation at every execution site, not only the durable one. An
-            # event fired by an inline receiver is just as much a descendant.
             with caused_by(record.pk, record.correlation_id):
                 call_receiver(r.func, r.takes_context, event, replace(context, receiver_key=r.key))
         elif r.mode is DeliveryMode.ON_COMMIT:
-            # robust=True is not optional: without it an uncaught exception in one
-            # on_commit callback cancels every later one in the same transaction,
-            # silently deleting the other receivers' work.
             transaction.on_commit(
                 _bind(
                     r.func,
@@ -271,22 +171,7 @@ def fire(
 
 
 def _deliver_eagerly(event_id: int, receiver_keys: list[str], alias: str) -> Callable[[], None]:
-    """Attempt this event's deliveries to these receivers in the firing
-    process, once, after commit.
-
-    Best effort by construction: whatever this loses to a crash is still owed,
-    because the delivery row is the record and the relay reclaims it when the
-    lease lapses.
-
-    The rows are found by event and receiver once the transaction has
-    committed, one read filtering on the two columns the unique index leads
-    with, so every backend takes the same path whether or not its inserts
-    report the ids they assigned. Each half is held by a test: without the
-    receiver, a non-eager receiver of the same event is attempted too
-    (test_the_eager_attempt_leaves_a_non_eager_receiver_of_the_same_event_to_the_relay);
-    without the event, an earlier event still owed the receiver is
-    (test_the_eager_attempt_leaves_an_earlier_event_owed_the_same_receiver_alone).
-    """
+    """Attempt this event's deliveries in the firing process, once, after commit."""
 
     def run() -> None:
         from django_domain_events.delivery.claim_batch import claim_batch
@@ -311,9 +196,7 @@ def _deliver_eagerly(event_id: int, receiver_keys: list[str], alias: str) -> Cal
             only_ids=delivery_ids,
         )
         for delivery_id in claimed:
-            # As the worker that claimed it. Left to read the owner off the row,
-            # the fence would agree with whoever took the row since, and a
-            # site="task" hand-off would carry that worker's claim instead.
+            # As the claiming worker, not the row's current owner, which may have changed since.
             dispatch_one(delivery_id, worker_id="eager")
 
     return run
@@ -322,62 +205,12 @@ def _deliver_eagerly(event_id: int, receiver_keys: list[str], alias: str) -> Cal
 def call_receiver(
     func: Callable[..., Any], takes_context: bool, event: object, context: DeliveryContext
 ) -> None:
-    """Invoke a receiver with the arity its declaration promised, to completion.
-
-    The one function every execution site passes through - INLINE here in
-    ``fire()``, ON_COMMIT through ``_bind``, DURABLE in ``_deliver_one`` - so
-    running an ``async def`` receiver here runs it everywhere.
-    """
+    """Invoke a receiver with the arity its declaration promised, to completion."""
     run_to_completion(func, *((event, context) if takes_context else (event,)))
 
 
 def run_to_completion(func: Callable[..., Any], *args: object) -> None:
-    """Call a sync or an ``async def`` callable and return once it has finished.
-
-    Shared by receivers and their ``on_failure`` hooks. Calling an ``async
-    def`` only builds a coroutine, so a caller that discarded what it returned
-    recorded the work as done with the body never entered. A coroutine
-    function is therefore run through ``async_to_sync``, in this thread's
-    stead: outside ASGI on a fresh event loop in a worker thread, and under
-    ASGI on the server's loop, while this thread serves
-    the coroutine's thread-sensitive ``sync_to_async`` calls - which is what
-    keeps Django's async ORM on this thread's connection, inside the
-    transaction carrying the acknowledgement. asgiref re-raises whatever the
-    coroutine raised, the same object, so ``RetryAfter``, ``NotYet`` and
-    ``PermanentFailure`` are read at the boundary exactly as from a function
-    (``test_a_verdict_raised_from_a_coroutine_is_read_as_from_a_function``).
-
-    A ``CancelledError`` out of the coroutine is re-raised as a
-    ``RuntimeError``, chained to it. It is a ``BaseException``, so every
-    ``except Exception`` on the way out would let it through: a durable row
-    would stay claimed until its lease lapsed, spend no attempt and take the
-    relay down with it, and be retried that way for ever
-    (``test_a_coroutine_that_cancels_itself_fails_its_attempt``). Whoever
-    cancelled it - the coroutine itself, or, on a server's loop, something
-    else running there - it did not finish, which is a failure. The cause is
-    kept, so a traceback still shows where it was cancelled
-    (``test_an_inline_coroutine_that_cancels_itself_raises_a_chained_runtime_error``).
-
-    A sync callable that returns an awaitable is refused rather than run
-    (``test_a_sync_wrapper_returning_a_coroutine_is_refused_and_retried``).
-    That is what a ``functools.wraps`` decorator around an ``async def``
-    looks like, and a lambda or a factory returning a coroutine: the exact
-    shape of the silent drop, and invisible to any detection before the
-    call. Not awaited instead, because an awaitable the callable did not
-    create fresh - a Task or Future bound to another loop - cannot be awaited
-    on this call's loop at all. A coroutine is closed first, so Python's
-    "never awaited" warning does not fire beside the error that explains it;
-    any other awaitable has nothing to close
-    (``test_a_sync_callable_returning_any_awaitable_is_refused``).
-
-    An async generator is refused the same way
-    (``test_an_async_generator_is_refused_without_a_warning``): an ``async
-    def`` containing ``yield`` is not a coroutine function, so calling it runs
-    nothing, and it is not awaitable either, so the check above cannot see it.
-    It is left to the garbage collector rather than closed, because a
-    generator that never started is dropped without a warning, where an
-    ``aclose()`` is itself a coroutine that would need awaiting.
-    """
+    """Call a sync or an ``async def`` callable and return once it has finished."""
     if is_async_callable(func):
         try:
             async_to_sync(func)(*args)
@@ -399,12 +232,7 @@ def run_to_completion(func: Callable[..., Any], *args: object) -> None:
 
 
 def _name(func: Callable[..., Any]) -> str:
-    """The callable's qualified name for a message, or its repr where it has none.
-
-    A ``functools.partial`` has no ``__qualname__``; without the fallback the
-    message would name ``None``
-    (``test_a_refused_callable_with_no_qualified_name_is_named_by_its_repr``).
-    """
+    """The callable's qualified name for a message, or its repr where it has none."""
     return getattr(func, "__qualname__", None) or repr(func)
 
 
@@ -416,13 +244,7 @@ def _bind(
     event_id: int,
     correlation_id: UUID | None,
 ) -> Callable[[], None]:
-    """Capture everything an ``on_commit`` callback needs, at fire time.
-
-    Commit can happen after the scope that set an ambient value has exited, so a
-    callback reading one later gets a stale answer, silently. The cause is
-    captured here for the same reason: relying on the ambient one still being
-    set at commit is exactly the mistake this function's existence warns about.
-    """
+    """Capture everything an ``on_commit`` callback needs, at fire time."""
 
     def run() -> None:
         with caused_by(event_id, correlation_id):
