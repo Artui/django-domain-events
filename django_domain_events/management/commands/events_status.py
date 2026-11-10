@@ -71,8 +71,7 @@ class Command(BaseCommand):
         self.stdout.write(f"dead          {health.dead}")
         self.stdout.write(f"lapsed leases {health.lapsed_leases}")
         self.stdout.write(f"oldest owed   {'-' if age is None else f'{age}s ago'}")
-        # The lanes come first because a lane is what an operator scales and
-        # pauses; the receivers below say which reaction inside it is behind.
+        # Lanes come first: a lane is what an operator scales and pauses.
         self.stdout.write("")
         self.stdout.write("lanes")
         for lane in health.lanes:
@@ -99,20 +98,12 @@ class Command(BaseCommand):
 
 
 def _age(moment: datetime | None) -> int | None:
-    """Seconds since a timestamp, which is what a threshold is written against.
-
-    The timestamp itself is useless to an alert rule: it changes every time
-    anything is fired, and comparing it needs the reader to know the clock.
-    """
+    """Seconds since a timestamp, which is what a threshold is written against."""
     if moment is None:
         return None
     return int((timezone.now() - moment).total_seconds())
 
 
 def _left(moment: datetime) -> int:
-    """Seconds until a timestamp: how long a pause has to run.
-
-    The time left rather than the end, for the reason ``_age`` gives an age:
-    a threshold or an operator deciding whether to wait reads a duration.
-    """
+    """Seconds until a timestamp: how long a pause has to run."""
     return int((moment - timezone.now()).total_seconds())
