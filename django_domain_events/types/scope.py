@@ -30,7 +30,12 @@ class Actor:
 
 @dataclass(frozen=True, slots=True)
 class Scope:
-    """The ambient facts captured onto every event fired inside a block."""
+    """The ambient facts captured onto every event fired inside a block.
+
+    Frozen, and nested blocks build a new one rather than mutating: a scope that
+    could be edited from inside would let a receiver rewrite the attribution of
+    events fired after it.
+    """
 
     actor: Actor = field(default_factory=Actor)
     correlation_id: UUID | None = None

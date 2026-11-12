@@ -12,7 +12,18 @@ _cause: ContextVar[tuple[int, UUID | None] | None] = ContextVar(
 
 @contextmanager
 def caused_by(event_id: int, correlation_id: UUID | None = None) -> Generator[None]:
-    """Mark events fired inside this block as descended from ``event_id``."""
+    """Mark events fired inside this block as descended from ``event_id``.
+
+    Set around every receiver, at every execution site, so an event a receiver
+    fires records its parent with no ceremony at the call site - a parameter
+    threaded through every receiver is a parameter someone forgets.
+
+    Both values come off the parent's row, never from a ``ContextVar``: by the
+    time a durable delivery runs, the block that attributed the parent has long
+    exited, possibly in another process. Causation is one hop; the correlation
+    id is the whole tree, and carrying it here is what keeps a grandchild fired
+    hours later in the same chain as the request that started it.
+    """
     token = _cause.set((event_id, correlation_id))
     try:
         yield

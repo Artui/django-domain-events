@@ -15,7 +15,36 @@ from django_domain_events.utils import in_project_time
 def quiet_receivers(
     *, within: timedelta | None = None, now: datetime | None = None
 ) -> list[QuietReceiver]:
-    """Declared receivers that have succeeded at nothing inside the window."""
+    """Declared receivers that have succeeded at nothing inside the window.
+
+    The query an event log makes possible and a signal never will: "this
+    receiver has not run since June" is a fact here, not a guess, because every
+    durable delivery left a row.
+
+    Driven by the registry rather than by the table, so a receiver that has
+    never received anything appears - which is the answer worth having, and
+    exactly the one a query over delivery rows alone cannot produce.
+
+    Only DURABLE receivers write rows, so only they are reported. An INLINE or
+    ON_COMMIT receiver has no delivery history to be quiet about, and listing it
+    as silent forever would train the reader to ignore the output.
+
+    Read off ``succeeded_at`` rather than ``completed_at``, and with no status
+    filter at all. Both of those describe the *current* cycle: replay and
+    requeue reopen a row and clear them, so an operator who replays yesterday's
+    events would then be told the receiver had never run. ``Max`` ignores nulls,
+    so a receiver whose every delivery failed still reads as never having
+    succeeded without a predicate saying so.
+
+    The rows are not the whole record: the prune deletes them, within a sweep
+    for an event declared to delete on consumption, and writes each receiver's
+    newest success among what it deleted to ``ReceiverLastSuccess`` as it goes.
+    The answer is the later of that and the live rows, so a receiver whose
+    every event has been pruned still reports when it last ran.
+
+    The window defaults to RETENTION_DAYS, the window an ordinary event's
+    deliveries are kept for.
+    """
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.models.receiver_last_success import ReceiverLastSuccess
 

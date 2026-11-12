@@ -48,7 +48,122 @@ def run_relay(
     lane_batch_sizes: Mapping[str, int] | None = None,
     monotonic: Callable[[], float] = time_module.monotonic,
 ) -> dict[DeliveryStatus, int]:
-    """Claim and deliver until ``passes`` is spent, ``stop`` says so, or forever."""
+    """Claim and deliver until ``passes`` is spent, ``stop`` says so, or forever.
+
+    The clock and the sleep are arguments rather than module calls so the loop
+    is testable without waiting: every branch here turns on time, and a suite
+    that had to elapse real seconds to reach one would either be slow or never
+    reach it.
+
+    ``stop`` is read before every claim and before every delivery. When it
+    returns true the relay finishes the delivery in hand, hands back the rest
+    of its claimed batch, and returns: the rows it gives back are claimable by
+    any worker at once, rather than when their lease lapses. An idle relay
+    reads it when its wait ends, so it stops within ``POLL_SECONDS``.
+    ``deliver_events`` wires it to SIGTERM and SIGINT.
+
+    The relay survives its database. A claim, a delivery or a wait that fails
+    is logged and the loop goes on; after a database error the connection is
+    closed so the next query opens a fresh one, and a failed claim is retried
+    after a backoff that doubles from ``POLL_SECONDS`` up to 15 seconds.
+
+    Refuses to start where the database cannot express a skipped lock. Two
+    workers there would hand the same row to two receivers on every pass, which
+    at-least-once tolerates but nobody wants as a steady state.
+    ``allow_unsafe_concurrency`` lifts that for a deployment running exactly one
+    relay, which is a real shape in development; running two under it is the
+    thing the guard exists to prevent.
+
+    ``lane`` is the lane this process serves, or a collection of lanes: only
+    the rows of receivers declared with that ``lane=``, read from the registry
+    on every claim. The default lane is every row no named lane takes,
+    including the rows of a receiver that has since been deleted, and it is
+    what a relay serves unless told otherwise - the default relay staying out
+    of a slow lane is the whole of the isolation. A ``str`` is one lane; a
+    collection is served as its distinct members, and an empty one is refused.
+    None serves every lane the registry declares, re-read at each pass, for a
+    single relay in development. A lane no receiver is declared in is refused
+    at start, because a relay serving it would claim nothing and look healthy
+    doing it.
+
+    A relay serving several lanes visits them in sorted order, one claim each,
+    and claims each lane's batch immediately before delivering it, so no batch
+    burns its lease while another lane delivers. ``stop`` is read before each
+    lane's turn as well as before each row. One rotation is one pass, and the
+    pass is idle - it may sweep, and it waits - only when every lane in it was
+    empty or paused. Because the lanes take turns, a lane waits for the others
+    at most one batch of each other unpaused lane it shares the relay with,
+    times that lane's slowest delivery: the bound is set by their batch sizes
+    and never by how much they are owed, so a burst in one lane delays another
+    by what one of its batches takes. Each claim stamps its own lane's lease,
+    ``None`` included. A failed claim ends the pass, since a database refusing
+    one lane is refusing them all.
+
+    Concurrency is the number of processes. Deliveries run one at a time within
+    a relay, so a lane that must go faster runs more relays with the same
+    ``lane``; nothing here limits the rate across them.
+
+    ``batch_size`` sizes this relay's claims in place of ``BATCH_SIZE``, which
+    also sizes prune batches and requeue chunks. ``lane_batch_sizes`` sizes the
+    claims of the lanes it names in place of ``batch_size``, and is the lever
+    on the bound above: a noisy lane given a small batch in a shared relay
+    delays the others less. A size below one, or a lane in it this relay does
+    not serve, is refused at start. Every row of a batch is
+    claimed under one lease, and a row still waiting its turn when that lease
+    lapses is taken by another relay, so a slow lane wants a batch it can work
+    through inside the lease its claim stamps. That is the lane's own lease
+    plus 10 percent where every durable receiver in it shares one no longer
+    than ``LEASE_SECONDS``, and ``LEASE_SECONDS`` plus 10 percent otherwise: 66 seconds, not
+    ``LEASE_SECONDS``, for a lane of receivers declaring ``lease_seconds=60``.
+    A row that starts while its claimed lease is still its receiver's own
+    starts without extending it, which saves a write per delivery, so a batch
+    whose rows all start inside a tenth of the lease costs the fewest.
+
+    A relay that finds nothing to claim also prunes, so an event declared to be
+    deleted on consumption goes within minutes without a ``prune_events`` cron
+    line. The sweep is ``prune_events()`` with its defaults, run from the idle
+    branch at most once per ``RELAY_PRUNE_SECONDS``, the first one an interval
+    after the relay starts rather than at its first idle pass: a relay that is
+    restarted often, or run for a few passes, then never sweeps at all. Every
+    relay sweeps whatever its lane. Nothing is lost or deleted twice, because
+    the prune re-checks at the delete that an event is still due; the interval
+    is what keeps N relays at N cheap queries per interval. ``RELAY_PRUNE`` set
+    false turns it off for a project that schedules the prune itself. ``stop``
+    is read between the sweep's batches, so a stop request waits for at most
+    one batch of ``PRUNE_BATCH_ROWS`` rather than for a whole backlog.
+
+    ``monotonic`` is the sweep's clock, apart from ``now`` because that one is a
+    wall-clock reading a test sets to any value it likes for the claim, and a
+    monotonic clock is not moved by an NTP step, which would silence or flood
+    the sweep. It advances
+    only when a sweep was attempted, and a failed one counts: it is not retried
+    before the next interval.
+
+    ``now`` defaults to ``django.utils.timezone.now``, so its readings follow
+    ``USE_TZ`` as the columns they are compared with do; an injected clock may
+    answer aware under either setting, and is converted to the project's form
+    (``test_a_relay_on_an_aware_clock_claims_and_delivers``).
+
+    A receiver deferring with ``RetryAfter(seconds, counts=False)`` pauses its
+    lane in this process for ``seconds``, measured on ``now``: the unstarted
+    rest of the batch, every row of which is in that lane, is handed back
+    rather than attempted - each would cost a call to learn what the first
+    already said - and is claimable by any worker at once. While the pause
+    lasts the relay does not claim the lane at all, and goes on to the next
+    lane it serves. The pause is per process and shares nothing: every relay in
+    the lane learns of the throttle from its own first deferral, at the cost of
+    one call each. It ends at the lane's first turn at or after ``seconds``, so
+    within ``POLL_SECONDS`` of it for a relay with nothing else to do.
+
+    So that operators can see a pause, the relay writes it to
+    ``LanePauseRecord`` - its lane, this ``worker_id``, when and until when -
+    deleting in the same call every record, whoever wrote it, whose pause has
+    passed. It deletes its own when the pause ends and when it returns. No
+    relay reads the table, and a relay that never defers never touches it.
+    Every one of those writes is logged and survived if it fails: the pause in
+    this process still governs the relay, and the record is only a window
+    onto it.
+    """
     connection = connections[write_alias()]
     if not (allow_unsafe_concurrency or connection.features.has_select_for_update_skip_locked):
         raise RuntimeError(

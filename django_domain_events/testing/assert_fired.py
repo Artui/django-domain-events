@@ -9,7 +9,12 @@ E = TypeVar("E")
 
 
 def assert_fired(event_class: type[E], *, times: int | None = None) -> list[E]:
-    """Assert an event was fired, and return the decoded events."""
+    """Assert an event was fired, and return the decoded events.
+
+    Reads the log rather than patching ``fire``: a mock records that a function
+    was called, while the row is what the rest of the system reacts to. Decoding
+    on the way out means a payload that cannot round-trip fails here too.
+    """
     from django_domain_events.models.event_record import EventRecord
 
     entry = registry.event_for_class(event_class)

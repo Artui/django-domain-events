@@ -7,7 +7,13 @@ from django_domain_events.types.delivery_status import DeliveryStatus
 
 @dataclass(frozen=True, slots=True)
 class DeliveryFailure:
-    """One failed attempt, handed to a receiver's ``on_failure`` hook."""
+    """One failed attempt, handed to a receiver's ``on_failure`` hook.
+
+    Carries the delivery's identity rather than the delivery row, deliberately.
+    The hook runs at a moment when the row has just been written by the relay,
+    and handing over a model instance invites a second write against a row
+    another worker may now own.
+    """
 
     delivery_id: int
     event_id: int

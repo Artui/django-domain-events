@@ -16,7 +16,27 @@ from django_domain_events.utils import in_project_time, not_yet_due, owed
 
 
 def outbox_health(*, now: datetime | None = None) -> OutboxHealth:
-    """How far behind the outbox is: owed rows by receiver and lane, scheduled ones apart."""
+    """How far behind the outbox is.
+
+    The gap the package left until now: ``quiet_receivers()`` answers whether a
+    receiver is running, and nothing answered whether the queue is draining.
+    Those fail differently - a relay that has been down for an hour has every
+    receiver quiet and a backlog climbing, while a single wedged receiver has a
+    backlog and everything else fine.
+
+    Owed means "not terminal and due", and a superset of what the relay can
+    claim right now - a row inside its backoff window is owed and not yet
+    claimable. The superset is the useful side: this cannot report an empty
+    queue while work is still outstanding. A row whose due time is still ahead
+    of ``now`` is not outstanding yet, so it is counted as ``scheduled``
+    instead, and is never what the backlog age is read from: a receiver
+    declared with ``due=`` fourteen days out would otherwise hold a five-minute
+    alert open for the fortnight.
+
+    ``lanes`` splits the same backlog by lane, from the per-receiver split
+    rather than a query of its own, and carries each lane's pauses, read from
+    the records relays write when a receiver defers.
+    """
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.models.lane_pause_record import LanePauseRecord
 

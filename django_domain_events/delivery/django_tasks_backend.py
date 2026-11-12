@@ -9,7 +9,15 @@ def deliver_delivery(delivery_id: int, claimed_by: str, claimed_at: str) -> None
 
 
 class DjangoTasksBackend:
-    """Hands deliveries to Django's Tasks framework."""
+    """Hands deliveries to Django's Tasks framework.
+
+    Django Tasks rather than Celery first: ``django.tasks`` is in core from 6.0
+    and the ``django-tasks`` backport covers 4.2 through 6.0, so it spans this
+    package's whole supported range with no broker to install.
+
+    The import is lazy because the framework is not a dependency - a consumer
+    using the relay directly should not have to have it.
+    """
 
     def __init__(self, queue_name: str = "default") -> None:
         self.queue_name = queue_name

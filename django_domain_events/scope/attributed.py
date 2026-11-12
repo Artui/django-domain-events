@@ -26,7 +26,17 @@ def attributed(
     correlation_id: UUID | None = None,
     **data: Any,
 ) -> Generator[Scope]:
-    """Attach ambient facts to every event fired inside this block."""
+    """Attach ambient facts to every event fired inside this block.
+
+    Nested blocks layer: an inner one overrides what it sets and inherits the
+    rest, so a request-level actor survives a block that only adds a source. The
+    actor is one such thing - naming any part of it replaces all of it, because
+    a key from one block beside a user id from another describes two actors.
+
+    ``actor`` is any object; its identity is derived once, here. Only an instance
+    of the user model reaches the ``actor`` column, which is a foreign key to it;
+    everything else is identified by ``actor_key`` alone.
+    """
     incoming = Scope(
         actor=_actor_from(actor, actor_key, actor_label),
         correlation_id=correlation_id,
@@ -44,7 +54,12 @@ def attributed(
 
 
 def current_scope() -> Scope:
-    """The scope in effect right now."""
+    """The scope in effect right now. Read at fire time, never later.
+
+    A fresh empty Scope when none is set, not a shared one: a singleton's dict
+    would be handed to callers and to receivers, and one mutation would reach
+    every later event in the process.
+    """
     return _scope.get() or Scope()
 
 

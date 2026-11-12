@@ -26,7 +26,52 @@ from django_domain_events.utils import (
 def replay_events(
     event_ids: Iterable[int], *, receiver_keys: Iterable[str] | None = None
 ) -> dict[str, int]:
-    """Make these events owed again, and report what changed."""
+    """Make these events owed again, and report what changed.
+
+    The receiver set freezes at fire time, so deploying a new receiver does not
+    hand it a backlog of week-old events. That is deliberate - and this is the
+    other half of it: replay is an operation somebody invokes, with a name, and
+    not an accident of a deploy.
+
+    Two things happen, and they are counted separately because they are
+    different decisions. A terminal delivery is *reopened*: it ran, and you want
+    it to run again. A receiver with no row for the event is *added*: it did not
+    exist when the event fired, and you are choosing to give it the backlog.
+
+    Both are owed *now*, so both get ``due_at`` set to the moment of the
+    replay. A receiver's ``give_up_after`` is measured from it, and measuring
+    from the event's own timestamp would dead-letter a replayed month-old event
+    on its first deferral
+    (``test_a_replayed_old_event_is_not_dead_lettered_on_its_first_deferral``
+    and ``test_a_row_a_replay_adds_is_owed_from_the_replay_too``).
+
+    A receiver declared with ``due=`` is the exception: its due time is
+    resolved again, through the resolver ``fire()`` uses, and both columns are
+    written with the later of that and now. Replay is how a scheduled receiver
+    is adopted - declare the expiry, replay the recent offers - and writing now
+    would expire every open offer at once; an offer whose time has already
+    passed is expired by the replay, owed from it. A ``due`` callable is called
+    again, as a ``targets`` callable is, and raises to the operator on the same
+    terms.
+
+    A delivery still in flight is left alone. Reopening a claimed row would hand
+    the same work to two receivers, which is the one thing the lease exists to
+    prevent.
+
+    A receiver declared with ``targets=`` has its callable **called again**, so
+    a replay goes to the targets that exist now: a target it still returns is
+    reopened or added exactly as a receiver is, and one it no longer returns is
+    left as it was - neither reopened nor counted - because the callable has
+    just said it is not owed this event. That includes a blank row written
+    before the receiver gained ``targets=``. A replay is a new delivery, not a
+    re-run of an old one, and a target registered after the event was fired
+    receiving it is the point rather than a side effect.
+
+    Calling the callable means rebuilding the event, so a fan-out receiver's
+    replay fails loudly on a payload that no longer decodes, where a plain
+    receiver's reopened row would dead-letter in the relay instead. Either is
+    raised to the operator who asked; only the second waits to be found.
+    """
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.models.event_record import EventRecord
 

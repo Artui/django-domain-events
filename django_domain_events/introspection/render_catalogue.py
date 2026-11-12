@@ -10,7 +10,15 @@ from django_domain_events.types.retention import Retention
 
 
 def render_catalogue(catalogue: Catalogue, *, format: str = "markdown") -> str:
-    """Render a catalogue as a document, in Markdown or JSON, ending in exactly one newline."""
+    """Render a catalogue as a document, in Markdown or JSON.
+
+    Both, because they answer different questions: Markdown is read by a person
+    onboarding onto a codebase, JSON is diffed by a pipeline that wants to fail
+    a pull request for removing a field other teams consume.
+
+    Both end in exactly one newline. These are written to a file and diffed,
+    and a file with no final newline reports a change on its last line forever.
+    """
     if format == "json":
         return json.dumps(dataclasses.asdict(catalogue), indent=2, sort_keys=False) + "\n"
     if format == "markdown":
