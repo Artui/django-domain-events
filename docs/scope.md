@@ -35,13 +35,17 @@ things that fire events are not users, which is why `actor_key` exists at all.
 ## Nesting
 
 Blocks merge. An inner block adds to and overrides the outer one, rather than
-replacing it:
+replacing it (the actor is the exception, below):
 
 ```python
 with attributed(source="checkout"):
     with attributed(tenant=org.id):
         fire(...)  # scope == {"source": "checkout", "tenant": org.id}
 ```
+
+The actor is the exception. Naming any of `actor`, `actor_key` or `actor_label` in an
+inner block replaces the whole actor, so the outer user is not recorded beside a key
+from the inner block: that would describe two actors.
 
 `current_scope()` returns the scope in force right now, as a fresh value each
 call - never a shared instance, so a receiver that mutates what it is given

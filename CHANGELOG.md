@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - The API reference's docstrings are restored.
+- The operations and scope pages say when to choose the Celery backend, that `deliver_events`
+  refuses to run continuously on SQLite, and that a nested `attributed()` block replaces the
+  actor whole. The `fire()` docstring notes that `record=False` suppression returns before the
+  `dedupe_key` length check.
 
 ## [0.14.1] — 2026-10-26
 
