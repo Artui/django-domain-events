@@ -65,9 +65,9 @@ def fire(
     is refused, with ``ValueError``, for an event declared to delete on
     consumption: the key is unique on the row, so it would protect only until
     the prune deleted it. A ``dedupe_key`` longer than the column that stores it
-    is refused with ``ValueError`` before anything is written, unless suppression
-    with ``record=False`` discards the event first: then it returns ``None``
-    unchecked.
+    is refused with ``ValueError`` before anything is written. Both refusals
+    come after suppression: an event suppressed with ``record=False`` returns
+    ``None`` unchecked.
     """
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.models.event_record import EventRecord
