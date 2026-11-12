@@ -55,7 +55,44 @@ def deliver_one(
     claimed_by: str | None = None,
     claimed_at: str | None = None,
 ) -> DeliveryStatus | None:
-    """Run one delivery and record its outcome."""
+    """Run one delivery and record its outcome. ``None`` means this call recorded none.
+
+    The receiver's work and the acknowledgement commit together, so a receiver
+    touching only this database is effectively once: the duplicate at-least-once
+    owes you cannot be observed. Side effects outside the database are
+    at-least-once, as promised.
+
+    Every write here is a compare-and-set against the claim this call read, and
+    the lease is extended to cover this one delivery before the receiver runs,
+    unless the claim already leased it for this receiver.
+    Both exist for the same reason: a claim can lapse while its worker is still
+    alive, and a worker that has lost its row must not go on to write a verdict
+    over whoever legitimately took it. Losing the row returns ``None`` rather
+    than raising - it is an ordinary outcome of a lease expiring, not a fault.
+
+    A row that is not owed is refused the same way, whoever asks: one already
+    settled (succeeded, dead or orphaned), one that failed and is waiting out
+    its backoff, or one whose due time has not come. Running any of them would
+    repeat committed work, resurrect a dead letter past its budget, ignore a
+    ``RetryAfter`` the destination sent, or do scheduled work early.
+
+    A receiver answering ``NotYet`` has its row moved to the time it named,
+    with no attempt spent, and this returns ``PENDING``: the one outcome that
+    leaves the row owed and not failed.
+
+    ``claimed_by`` and ``claimed_at`` are the claim a task message carries, as
+    the relay passed them to ``TaskBackend.enqueue``. Given them, this call
+    first *takes* the row: one conditional update, committed before anything
+    else runs, that succeeds only while the row is still CLAIMED under exactly
+    that claim, and moves it to ``worker_id`` - or to an id minted for this one
+    take. A second copy of the message, a copy the queue held past its lease,
+    and a copy for a row that has since settled all fail the take and return
+    ``None`` without running the receiver.
+
+    A receiver deferring with ``RetryAfter(counts=False)`` is recorded here as
+    anywhere, but pauses nothing: a pause belongs to the relay process that
+    claimed the row's batch, and a call made directly holds no batch.
+    """
     return _deliver_one(
         delivery_id,
         worker_id=worker_id,
@@ -609,6 +646,77 @@ def deliver_pending(
     lane_batch_sizes: Mapping[str, int] | None = None,
     now: datetime | None = None,
 ) -> dict[DeliveryStatus, int]:
+    """Claim and deliver what is owed, and report the outcome.
+
+    ``limit=None`` means everything owed, claimed in batches until none is left;
+    a number caps it at that many. Claims go through the same leased path the
+    relay uses, so a pass here and a running relay do not hand the same row to
+    two receivers - on a backend with row locking. SQLite has none, so two
+    concurrent passes there can both take the same row.
+
+    ``lane`` delivers only that lane's rows, as ``run_relay(lane=...)`` claims
+    them; ``"default"`` is every row no named lane takes. A ``str`` is one
+    lane, and a collection is served as its distinct members; an empty one, a
+    member that is not a ``str`` and a member no receiver is declared in are
+    refused, as the relay refuses them. None, the default here, is every lane
+    the registry declares, which is what this function did before lanes
+    existed and what ``drain_outbox`` promises. ``deliver_events --once``
+    passes the default lane unless told otherwise, as the relay does.
+
+    The lanes are visited as the relay visits them: in sorted order, one claim
+    each, each claimed under its own lease immediately before it is delivered,
+    and again in turn until a whole rotation claims nothing
+    (``test_a_set_is_served_once_per_lane_in_sorted_order_until_a_rotation_claims_nothing``).
+    So a burst in one lane delays another by one of its batches rather than by
+    the burst (``test_a_burst_in_one_lane_does_not_hold_back_another_under_every_lane``),
+    and ``None`` delivers across lanes in that rotation rather than in one
+    ``available_at`` order. In a project that names no lane, None is the
+    default lane alone and sends what it always sent
+    (``test_with_no_named_lanes_every_lane_sends_what_it_always_sent``).
+
+    ``batch_size`` sizes each claim in place of ``BATCH_SIZE``, and
+    ``lane_batch_sizes`` sizes the claims of the lanes it names in place of
+    ``batch_size``; a size below one, or a lane in it this call does not
+    serve, is refused.
+
+    ``limit`` caps the call's total and is shared between the lanes with work,
+    so a cron running ``--once --limit 100`` over a lane with a burst and a
+    lane without one does not spend every run on the burst. Each lane's claim
+    takes its share of what is left: what is left divided by the lanes still
+    open in this rotation, itself included, rounded up
+    (``test_a_limit_is_shared_between_the_lanes_with_work``). A lane that
+    claims fewer than its share is drained, and is not claimed again in the
+    call; what it did not take falls to the lanes after it, and the call
+    rotates again while some of the limit is left and some lane is open
+    (``test_a_drained_lanes_share_goes_to_the_lanes_with_work``). So a lane
+    with work gets at least ``limit // n`` of a call serving ``n`` lanes, and
+    with one lane this is one claim of ``limit`` rows. A limit below the
+    number of lanes gives one row each to the first lanes in sorted order
+    (``test_a_limit_below_the_number_of_lanes_serves_the_first_lanes``). Rows
+    handed back on a deferral do not count against it, since they were not
+    delivered
+    (``test_rows_handed_back_on_a_deferral_do_not_count_against_the_limit``).
+
+    The sizes cannot be combined with ``limit``, which sizes each claim as its
+    lane's share of it: accepting both would silently ignore the sizes
+    (``test_a_limit_and_a_batch_size_together_are_refused``,
+    ``test_a_limit_with_lane_sizes_is_refused``).
+
+    A receiver deferring with ``RetryAfter(counts=False)`` sets its lane aside
+    for the rest of the call: the unstarted rest of the batch, every row of
+    which is in that lane, is handed back rather than attempted, and the lane
+    is not claimed again, while every other lane goes on being delivered
+    (``test_a_deferral_sets_its_lane_aside_and_the_pass_delivers_the_rest``).
+    Unlike the relay's pause, this one is held for the call alone and writes
+    no ``LanePauseRecord``.
+
+    ``now`` is the moment every claim of the call is made at, in place of the
+    clock: what is due, which backoff has run out and which lease has lapsed
+    are all read against it. It is how ``drain_outbox(now=...)`` moves a test
+    forward to a receiver's due time. Only the claims read it; the attempt
+    itself runs and is recorded on the real clock, since a receiver's
+    acknowledgement is a fact about when it ran.
+    """
     if limit is not None and batch_size is not None:
         raise ValueError(
             f"limit={limit} sizes each claim as its lane's share of it, so "

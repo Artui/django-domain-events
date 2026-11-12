@@ -19,7 +19,22 @@ def requeue_dead(
     delivery_ids: Iterable[int] | None = None,
     limit: int | None = None,
 ) -> int:
-    """Give dead-lettered deliveries their attempt budget back."""
+    """Give dead-lettered deliveries their attempt budget back.
+
+    Dead is where a delivery stops on its own; it is not where it stops for
+    good. Attempts reset to zero rather than staying spent, because a row
+    requeued at its limit dead-letters again on the first failure and the
+    operator learns nothing they did not already know. ``due_at`` resets to now
+    for the same reason, applied to time: a receiver's ``give_up_after`` is
+    measured from it, and a dead letter requeued a month after its event would
+    otherwise be past a one-day bound on its first deferral
+    (``test_a_requeued_row_is_owed_from_the_requeue``).
+
+    Scoped by receiver, because the usual reason to requeue is that one
+    downstream was broken and now is not. Scoped by row as well, because the
+    other reason is an operator reading a dead-letter list and picking the four
+    they understand.
+    """
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.models.event_record import EventRecord
 

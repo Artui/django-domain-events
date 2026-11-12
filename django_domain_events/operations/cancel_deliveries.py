@@ -17,7 +17,74 @@ def cancel_deliveries(
     receiver_key: str | None = None,
     delivery_ids: Iterable[int] | None = None,
 ) -> dict[str, int]:
-    """Withdraw the owed deliveries of these events, so they never run."""
+    """Withdraw the owed deliveries of these events, so they never run.
+
+    The scheduled case is the one this exists for: an offer accepted before its
+    expiry is due, a reminder for an order already paid. A receiver that finds
+    nothing to do and returns is still the answer when the world moved on and
+    nobody said so; this is the answer when the application knows ahead of
+    time, and wants neither the run nor a success recorded for work that was
+    never done.
+
+    A delivery is withdrawn if it is **unclaimed and owed**: pending, which is
+    a row waiting for its due time or for the relay, or failed, which is one
+    waiting out its backoff - a scheduled row that came due and failed is
+    still work, and "never runs" has to cover its retries. It becomes
+    ``CANCELLED``, a settled status of its own, with ``completed_at`` set and
+    nothing else touched. Not only scheduled rows: an immediate row the relay
+    has not reached yet is withdrawn the same way, though the relay may well
+    get there first.
+
+    A **claimed** row is left alone. A worker holds it and may be running the
+    receiver now, so settling it under the worker would record an outcome the
+    receiver contradicts; the receiver re-checks current state when it runs,
+    as it always did. It is counted, so the caller learns how many it could not
+    stop. A settled row - succeeded, dead, orphaned or already cancelled -
+    keeps its outcome: a dead letter withdrawn here would leave the
+    dead-letter counts without anyone having read or requeued it.
+
+    Narrowed to one receiver by ``receiver_key``, because one event usually
+    drives an immediate reaction and a scheduled one, and only the scheduled
+    one became moot. Narrowed to rows by ``delivery_ids``, which intersects
+    with ``event_ids`` rather than widening it: a stale id list cannot reach
+    another event's work.
+
+    Returns ``{"cancelled": n, "in_flight": m}``: the rows withdrawn, and the
+    claimed rows in the same scope that were left to run.
+
+    Called inside a transaction on the database the package writes to, it
+    joins it, so the cancel commits with the change that made the work moot or
+    not at all. ``replay_events()`` reopens a cancelled row like any settled
+    one; ``requeue_dead()`` does not touch it.
+
+    Concurrency, on a backend with row locks. Each batch locks its events
+    first, in primary key order, the lock ``replay_events``, ``requeue_dead``
+    and ``prune_events`` take: a cancel issued while a replay of the event is
+    open waits for it and then withdraws what it reopened
+    (test_a_cancel_issued_during_a_replay_is_not_overtaken_by_it), and two
+    callers locking overlapping events queue rather than deadlock, which the
+    ordering in test_the_events_are_locked_before_their_rows_are_written holds.
+    Against the prune the lock buys nothing observable: a prune deletes only
+    an event with nothing owed and this writes only owed rows, so the two never
+    contend for a delivery row
+    (test_a_prune_during_a_cancel_loses_nothing_and_takes_the_event_after
+    passes without it). A relay's
+    claim takes no event lock, so the write itself carries the status
+    predicate: a claim committed first leaves the row claimed and the write
+    skips it (test_it_will_not_cancel_a_row_claimed_after_the_lock, and on two
+    connections test_a_cancel_waits_for_a_claim_in_flight_and_leaves_the_row_
+    claimed), and a write committed first leaves nothing for a claim to take.
+
+    Each condition of the write is one branch arc, so each has a test that
+    fails without it: pending by test_unclaimed_rows_are_settled_and_never_run;
+    failed by test_a_failed_row_awaiting_its_retry_is_cancelled_too; the event
+    scope by test_only_the_named_events_are_touched; the receiver by
+    test_it_can_be_narrowed_to_one_receiver; the named rows by
+    test_it_can_be_narrowed_to_named_rows, their intersection with the events
+    by test_a_named_row_of_an_event_not_named_is_left_alone, and an empty list
+    meaning no rows rather than every row by
+    test_an_empty_row_list_cancels_nothing.
+    """
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.models.event_record import EventRecord
 

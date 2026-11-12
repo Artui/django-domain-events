@@ -35,7 +35,20 @@ def event(
     version: int = 1,
     retention: timedelta | Retention | None = None,
 ) -> type | Callable[[type], type]:
-    """Register a frozen dataclass as an event, bare or called; ``name=`` pins the stored name."""
+    """Register a frozen dataclass as an event, bare or called.
+
+    The default name is ``<app_label>.<ClassName>``. Pin it with ``name=`` when
+    renaming the class would otherwise strand rows written under the old one.
+    A name may not be longer than the column that holds it, 255 characters,
+    whether given or derived: a longer one is refused here with ``ValueError``,
+    because Postgres raises at ``fire()`` time while SQLite enforces nothing.
+
+    ``retention`` says how long ``prune_events`` keeps this event's rows: a
+    ``timedelta`` for a window of its own, ``Retention.SUCCEEDED`` or
+    ``Retention.SETTLED`` to delete it once consumed, or None for
+    ``RETENTION_DAYS``. ``fire()`` copies it onto every row it records, so a
+    later change here does not reach events already recorded.
+    """
     _require_valid_retention(retention)
 
     def decorate(target: type) -> type:

@@ -26,7 +26,20 @@ def notify_relay(
     connection: Any | None = None,
     clock: Callable[[], float] = time_module.monotonic,
 ) -> None:
-    """Tell a listening relay that something is owed."""
+    """Tell a listening relay that something is owed.
+
+    Fire-and-forget: a notification sent while nobody is listening is simply
+    lost, which is why the relay's poll stays as the floor rather than being
+    replaced by this. It removes latency and never carries the obligation - the
+    delivery row does.
+
+    Sends nothing under ``WAKE = "poll"``, and at most one per
+    ``NOTIFY_COALESCE_SECONDS`` per database from this process. Skipping one is
+    safe for the same reason losing one is: a single wake makes the relay claim
+    everything due, and the poll picks up whatever the skipped one announced.
+    ``clock`` is injected, as ``sleep`` is below, so a test moves time rather
+    than waiting for it.
+    """
     connection = connection or connections[write_alias()]
     if not _resolve(supported, connection):
         return

@@ -5,7 +5,18 @@ from django_domain_events.types.registered_event import RegisteredEvent
 
 
 def listens_for(receiver_key: str) -> RegisteredEvent | None:
-    """The event one receiver is declared for, or None: a wildcard names no single one."""
+    """The event one receiver is declared for, or None if no such receiver.
+
+    The inverse direction, and the one an operator needs: a dead-letter row
+    names a receiver key, and the next question is always what it was supposed
+    to be receiving.
+
+    None covers two cases that look the same from a delivery row - a key never
+    declared, and one whose event class was deleted out from under it - and a
+    third that does not: a wildcard receiver, declared for ``AnyEvent``, is owed
+    every event and so names no single one. Its delivery row already says which
+    event it was.
+    """
     receiver = registry.receiver_for_key(receiver_key)
     if receiver is None:
         return None

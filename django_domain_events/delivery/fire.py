@@ -37,7 +37,36 @@ from django_domain_events.utils import (
 def fire(
     event: object, *, dedupe_key: str | None = None, occurred_at: datetime | None = None
 ) -> int | None:
-    """Record an event and owe it to its durable receivers."""
+    """Record an event and owe it to its durable receivers. Returns its id.
+
+    Returns the event id, or ``None`` when suppression discarded it without
+    recording.
+
+    This does not call durable receivers; it records intent. The event row and
+    one delivery row per durable receiver are written inside the caller's
+    transaction, so the obligation exists if and only if the business change
+    committed. A durable receiver therefore cannot signal failure back here -
+    only ``INLINE`` receivers can, by raising.
+
+    A durable receiver declared with ``targets=`` gets one row per target
+    instead, and **its callable runs here, inside the caller's transaction**.
+    If it raises, this raises, and the caller's change rolls back with the event:
+    a fan-out that delivered to nobody would be a committed change whose
+    consequences silently never happened. It also costs whatever the callable
+    costs, on every event it is owed - one query per fired event per fan-out
+    receiver, for one that reads a table.
+
+    A durable receiver declared with ``due=`` has its row written due later:
+    ``available_at`` and ``due_at`` at its due time, never earlier than now. A
+    ``due`` callable runs here too, on the same terms as ``targets``: if it
+    raises, or answers with anything but an aware datetime, this raises.
+
+    The event's declared ``retention`` is copied onto the row. A ``dedupe_key``
+    is refused, with ``ValueError``, for an event declared to delete on
+    consumption: the key is unique on the row, so it would protect only until
+    the prune deleted it. A ``dedupe_key`` longer than the column that stores it
+    is refused with ``ValueError`` before anything is written.
+    """
     from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.models.event_record import EventRecord
 

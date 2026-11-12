@@ -17,7 +17,18 @@ from django_domain_events.types.registered_receiver import RegisteredReceiver
 
 
 def catalogue() -> Catalogue:
-    """Describe every declared event, its payload shape and its receivers, sorted by name."""
+    """Describe every declared event, its payload shape and its receivers.
+
+    The artefact a team wants and signals cannot produce: what exists, what
+    listens, and under which guarantee - generated from the declarations rather
+    than maintained beside them, so it cannot drift.
+
+    Sorted by name throughout. A catalogue is written to a file and diffed
+    against the last one, and import order is not a difference.
+
+    Wildcard receivers are listed once, in their own section, and not under
+    each event they receive - which is every event.
+    """
     events = []
     for entry in sorted(registry.events(), key=lambda e: e.name):
         cls = entry.event_class

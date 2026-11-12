@@ -17,7 +17,18 @@ def deliver_delivery_task(delivery_id: int, claimed_by: str, claimed_at: str) ->
 
 
 class CeleryBackend:
-    """Hands deliveries to Celery."""
+    """Hands deliveries to Celery.
+
+    For a project whose workers already run Celery. A project without one is
+    better served by ``DjangoTasksBackend``, which needs no broker.
+
+    Redelivery is safe: ``acks_late`` and a broker's visibility timeout both
+    hand a worker a message whose task already ran, and the claim the message
+    carries is what turns that copy into a no-op. Recovery from a worker that
+    died mid-delivery comes from the row's lease, not from the redelivery: the
+    second copy finds the row taken by the worker that died and leaves it for
+    the relay to reclaim.
+    """
 
     def __init__(self, queue: str | None = None) -> None:
         self.queue = queue

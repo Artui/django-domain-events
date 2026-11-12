@@ -8,7 +8,12 @@ from django_domain_events.types.lane_pause import LanePause
 
 @dataclass(frozen=True, slots=True)
 class LaneBacklog:
-    """What one lane is behind on, and which relays hold it paused."""
+    """What one lane is behind on, and which relays hold it paused.
+
+    The lane's receivers' backlogs added up. A row whose receiver has been
+    deleted since is counted in the default lane, because that is the lane it
+    drains through.
+    """
 
     lane: str
     owed: int

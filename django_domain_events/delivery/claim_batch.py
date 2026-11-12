@@ -24,7 +24,56 @@ def claim_batch(
     exclude_lanes: Collection[str] = (),
     exclude_ids: Collection[int] = (),
 ) -> list[int]:
-    """Take ownership of up to ``limit`` deliveries and return their ids."""
+    """Take ownership of up to ``limit`` deliveries and return their ids.
+
+    Claims are leased, not marked: a worker that dies without acknowledging
+    becomes re-claimable when its lease lapses, which is the same path as an
+    ordinary retry rather than a special case.
+
+    Rows are selected by ``available_at`` and never by primary key. A
+    transaction holding a lower id can commit after one holding a higher id, so
+    a row can become visible "in the past"; a high-water mark would skip it
+    forever.
+
+    ``ignore_backoff`` claims rows whose retry is still scheduled. It exists for
+    the test helper, which cannot wait out a jittered hour to observe a retry.
+    It never claims a row whose due time is still ahead of ``now`` - a receiver
+    declared with ``due=`` - because that is not a wait the helper is skipping
+    but the time the work exists for
+    (``test_ignoring_the_backoff_never_ignores_the_schedule``).
+
+    ``lane`` claims only the rows of the receivers declared in it, read from the
+    registry on every call; ``"default"`` claims every row no named lane takes,
+    which includes the rows of a receiver that no longer exists; None claims
+    every lane. The filter is applied to the whole of the owed condition, both
+    arms, so a relay never takes over another lane's lapsed claims
+    (``test_a_lapsed_claim_in_a_named_lane_stays_out_of_the_default_lane``).
+
+    ``exclude_lanes`` leaves lanes out of the claim, for a caller claiming
+    several lanes in one statement that has paused one of them. The package's
+    own relay and ``deliver_pending`` no longer pass it: they claim one lane at
+    a time and skip a paused lane's turn instead, which is what lets each lane
+    keep its own lease and batch size.
+    It is each lane's own condition negated, so it covers both arms as ``lane``
+    does - the rows a deferral handed back are lapsed claims, and exactly the
+    ones not to take straight back
+    (``test_a_paused_lane_covers_its_lapsed_claims_too``) - and excluding the
+    default lane leaves only the named ones, or nothing where none is declared
+    (``test_a_paused_default_lane_with_no_named_lanes_claims_nothing``). Empty,
+    the claim is the one it was without it.
+
+    ``exclude_ids`` leaves those rows out, and is how a pass keeps a row it is
+    done with from coming straight back when the pass was told a ``now`` beyond
+    the real clock: one its receiver answered with ``NotYet``, moved to a time
+    that ``now`` has passed, or one handed to a task backend under a lease the
+    real clock extended and ``now`` reads as lapsed. A pass on the real clock
+    passes none, since neither is claimable again there until its time has
+    really come
+    (``test_a_row_rescheduled_in_place_on_the_real_clock_is_not_excluded``).
+    Empty, it adds nothing to the claim: Django compiles a negated ``__in`` over
+    no values to nothing at all, so the relay's claim is the one it was
+    (``test_without_named_lanes_the_default_lane_sends_the_unfiltered_claim``).
+    """
     from django_domain_events.models.delivery_record import DeliveryRecord
 
     now = in_project_time(now)
