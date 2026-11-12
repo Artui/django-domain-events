@@ -24,6 +24,10 @@ rather than accepting a cap nothing reads. Bound a relay with `--passes`.
 
 Run as many as you like on Postgres. On SQLite, run exactly one.
 
+`deliver_events` without `--once` refuses to start on SQLite. From cron, use `--once`
+and never let two passes overlap. For a single relay in development,
+`run_relay(..., allow_unsafe_concurrency=True)` starts it from Python.
+
 ### Lanes: a relay per kind of work
 
 One relay delivers one row at a time. A receiver that takes a second per
@@ -683,6 +687,9 @@ still the debt, so a lost task is still owed.
 ```bash
 pip install "django-domain-events[celery]"
 ```
+
+Choose it for a project whose workers already run Celery. Without Celery workers,
+`DjangoTasksBackend` is the lighter choice: it adds no broker to install.
 
 ```python
 DJANGO_DOMAIN_EVENTS = {
