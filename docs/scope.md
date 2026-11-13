@@ -164,12 +164,20 @@ with attributed(actor=request.user, club_id=club.id):
 
 - A task published outside any scope carries no header and fires with no actor.
 - `suppressed()` and the causing event id do not travel; only the chain does.
-- Installing twice is harmless. Only the apps you install run their tasks in
-  the carried scope, but the publish signal does not say which app published,
-  so once one app is installed the header rides on every message the process
-  publishes.
+- Installing twice is harmless.
 - Under `task_always_eager` nothing is published: the task runs inline, inside
   the caller's scope already.
+
+!!! warning "The header goes to every broker the process publishes to"
+    Installing is process-wide on the publishing side. Celery's publish signal
+    does not say which app published, so once any app is installed, every task
+    message the process publishes inside a scope carries the header, whichever
+    app sends it and whichever broker receives it. The actor's key, label and
+    user id and the whole scope data travel as plain JSON to that broker and to
+    whatever consumes its queue. The label is `str(user)` unless you pass
+    `actor_label`, so it can be an email address. Only the apps you install
+    run their tasks in the carried scope; the others' tasks ignore it, but
+    their messages still carry it.
 
 !!! note "Not for `django.tasks`"
     Django's task framework sends no signal when a task is enqueued, so there is
