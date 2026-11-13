@@ -46,10 +46,13 @@ def test_a_late_start_spaces_the_next_from_when_it_began() -> None:
 
 
 def test_five_a_second_over_ten_seconds_never_exceeds_five_in_a_window() -> None:
+    """Windows are half-open, [b, b + 1): at exact 0.2 s spacing a closed one holds six."""
     clock = Clock()
     gate = LaneRate(5, clock)
     starts: list[float] = []
-    while clock.now < 10:
+    for _ in range(200):
+        if clock.now >= 10:
+            break
         clock.now += gate.wait_time()
         gate.started()
         starts.append(clock.now)
@@ -69,7 +72,7 @@ def test_half_a_start_a_second_spaces_starts_two_seconds_apart() -> None:
     assert starts == [0.0, 2.0, 4.0, 6.0]
 
 
-@pytest.mark.parametrize("rate", [0, -1, -0.5])
+@pytest.mark.parametrize("rate", [0, -1, -0.5, float("nan")])
 def test_a_rate_that_is_not_positive_is_refused(rate: float) -> None:
     with pytest.raises(ValueError, match="greater than 0"):
         LaneRate(rate, Clock())
