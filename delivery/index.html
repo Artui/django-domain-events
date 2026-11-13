@@ -540,10 +540,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#the-pause-is-per-process" class="md-nav__link">
+  <a href="#the-pause-is-shared" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The pause is per process
+        The pause is shared
       
     </span>
   </a>
@@ -963,10 +963,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#the-pause-is-per-process" class="md-nav__link">
+  <a href="#the-pause-is-shared" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The pause is per process
+        The pause is shared
       
     </span>
   </a>
@@ -1293,8 +1293,11 @@ delivery's identity - <code>delivery_id</code>, <code>event_id</code>, <code>eve
 and the <code>target</code> for a fan-out receiver - with the <code>attempt</code>, the <code>status</code> and
 the stored <code>error</code>, rather than the row itself, since another worker may own the
 row by the time the hook runs.</p>
-<p>A worker whose lease lapsed does not call it: whoever holds the row now will
-report its own outcome. A hook that raises is logged and swallowed, because a
+<p>A worker whose lease lapsed does not call it, and nor does the claim that takes
+the row back while attempts remain: that lapse
+<a href="../operations/#a-lapse-spends-an-attempt">spends an attempt</a> silently. The claim
+that finds it at its last attempt dead-letters it instead and calls the hook
+once, with status <code>dead</code>. A hook that raises is logged and swallowed, because a
 failure path that fails leaves the operator a traceback about logging instead of
 about the delivery.</p>
 <h3 id="the-failure-log">The failure log<a class="headerlink" href="#the-failure-log" title="Permanent link">&para;</a></h3>
@@ -1316,10 +1319,13 @@ not told. A row whose receiver is no longer registered goes to <code>orphaned</c
 deliberately not logged as a failed attempt: no attempt is counted, and no
 receiver failed.</p>
 <p>It follows the same rule as the hook: a worker whose lease lapsed recorded
-nothing and logs nothing, so the log never shows an attempt the row does not.
-An attempt whose connection was lost before anything could be written is not
-logged either, because nothing recorded it; the lease lapsing is what puts it
-back in the queue. See
+nothing and logs nothing. The claim that takes the row back
+<a href="../operations/#a-lapse-spends-an-attempt">spends that attempt</a> without a line
+while attempts remain, so the row can show attempts the log does not; the one
+that dead-letters it logs <code>... on attempt 3 with a lapsed lease; the row is dead</code>
+on the same logger. An attempt whose connection was lost before anything could
+be written is not logged either, because nothing recorded it; the lease lapsing
+is what puts it back in the queue. See
 <a href="../operations/#side-effects-inside-the-acknowledging-transaction">Side effects inside the acknowledging transaction</a>.</p>
 <h2 id="a-hook-around-each-delivery">A hook around each delivery<a class="headerlink" href="#a-hook-around-each-delivery" title="Permanent link">&para;</a></h2>
 <p>Tracing, a log context, a tenant schema or a database role: anything that has to
@@ -1538,39 +1544,37 @@ as an ordinary <code>RetryAfter</code> - counted, no jitter, no pause - and a wa
 naming the receiver is logged once per process. Declare the bound to get
 the deferral.</p>
 </div>
-<h3 id="the-pause-is-per-process">The pause is per process<a class="headerlink" href="#the-pause-is-per-process" title="Permanent link">&para;</a></h3>
-<p>Nothing is shared between relays: each process pauses a lane when a deferral it
-ran says to, measured on its own clock, and every relay serving the lane learns
-of the throttle from its own first deferral - one call each. That is the price
-of having no shared state to keep consistent, and it is small next to one call
-per row. A relay serving the lane claims nothing in it while the pause lasts,
-and takes it up again at the lane's first turn after the pause ends: within
-<code>POLL_SECONDS</code> for a relay with nothing else to do, and at the lane's next
-turn in the rotation for one busy with other lanes.</p>
+<h3 id="the-pause-is-shared">The pause is shared<a class="headerlink" href="#the-pause-is-shared" title="Permanent link">&para;</a></h3>
+<p>The relay that ran the deferral pauses the lane at once, measured on its own clock,
+and records the pause in the <code>LanePauseRecord</code> table - the lane, its <code>worker_id</code>,
+when it paused and until when. Every relay reads the unexpired pauses of the lanes it
+serves once per pass, in one query on that small table, and claims nothing in a lane
+any of them holds: so the first deferral costs one call, and the other relays serving
+the lane learn of the throttle without making their own. A relay takes the lane up
+again at its first turn after the latest pause of it ends: within <code>POLL_SECONDS</code> for a
+relay with nothing else to do, and at the lane's next turn in the rotation for one
+busy with other lanes. An operator can pause a lane the same way, and lift any pause,
+with <a href="../operations/#pausing-a-lane"><code>pause_lane</code> and <code>resume_lane</code></a>; a relay whose own
+pause was lifted takes the lane up again at its next pass.</p>
 <p>Every batch a relay claims is one lane's, so a deferral hands back the whole
 unstarted rest of it with no query to sort it. A relay serving several lanes -
 <code>--lane default --lane mail</code>, or <code>run_relay(lane=None)</code> - pauses only the
-deferring lane: it skips that lane's turn, without a query, while the pause
+deferring lane: it skips that lane's turn, without a claim, while the pause
 lasts, and goes on delivering the others. <code>deliver_pending()</code> and
 <code>drain_outbox()</code> have no clock to wait on, so they set the lane aside for the
-rest of the call instead.</p>
-<p>So that operators can see a pause, the relay records it in the
-<code>LanePauseRecord</code> table - the lane, its own <code>worker_id</code>, when it paused and
-until when - and <code>outbox_health().lanes</code> and <code>events_status</code> show it
-(<a href="../introspection/#is-the-outbox-keeping-up">introspection</a>). The record is a
-window, not shared state: no relay reads it, so a pause still governs only the
-relay that heard it. A relay deletes its record when the pause ends and when
-it returns, and a relay that never defers never touches the table.
-<code>deliver_pending()</code> and <code>drain_outbox()</code> write none, since their set-aside
-ends with the call. A write that fails is logged and the relay carries on,
-paused as before.</p>
+rest of the call instead, and write no record; they read the records once, when
+the call starts, and claim nothing in a lane one holds.</p>
+<p><code>outbox_health().lanes</code> and <code>events_status</code> show every pause
+(<a href="../introspection/#is-the-outbox-keeping-up">introspection</a>). A relay deletes its
+record when its pause ends and when it returns, and a relay that never defers
+writes nothing. A write that fails is logged and the relay carries on, paused as
+before, though the other relays then do not see the pause; a read that fails is
+logged too, and the relay goes on with the pauses it already knows.</p>
 <p>A relay that dies without returning - killed, or its pod evicted - leaves its
-record showing a pause no running process honours, until the <code>until</code> it
-recorded passes. Every pause any relay records also deletes every record whose
-pause has passed, so such leftovers do not accumulate, but one can show for
-as long as the deferral asked: up to <code>MAX_RECEIVER_RETRY_DELAY_SECONDS</code>, a day
-by default, for a quota that resets at midnight. Compare the <code>worker_id</code> with the relays running before reading it as a lane
-nobody serves.</p>
+record, and the other relays honour it until the <code>until</code> it recorded passes: up to
+<code>MAX_RECEIVER_RETRY_DELAY_SECONDS</code>, a day by default, for a quota that resets at
+midnight. Every pause any relay records also deletes every record whose pause has
+passed, so such leftovers do not accumulate. <code>resume_lane</code> lifts one at once.</p>
 <p>Neither the pause nor the hand-back reaches a row already given to a
 <a href="../operations/#handing-delivery-to-a-task-queue">task backend</a>, and a receiver
 running in a task defers there, in a process that holds no batch to pause; its

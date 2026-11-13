@@ -686,6 +686,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#django_domain_events.scope.install_celery_scope.install_celery_scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        install_celery_scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#delivery" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -932,6 +943,17 @@
     <span class="md-ellipsis">
       
         outbox_health
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.introspection.delivery_tally.delivery_tally" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        delivery_tally
       
     </span>
   </a>
@@ -1576,6 +1598,56 @@
     <span class="md-ellipsis">
       
         lanes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_tally.DeliveryTally" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DeliveryTally
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="DeliveryTally">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_tally.DeliveryTally.owed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        owed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_tally.DeliveryTally.cancelled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cancelled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_tally.DeliveryTally.total" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        total
       
     </span>
   </a>
@@ -2170,6 +2242,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#django_domain_events.scope.install_celery_scope.install_celery_scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        install_celery_scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#delivery" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2416,6 +2499,17 @@
     <span class="md-ellipsis">
       
         outbox_health
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.introspection.delivery_tally.delivery_tally" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        delivery_tally
       
     </span>
   </a>
@@ -3060,6 +3154,56 @@
     <span class="md-ellipsis">
       
         lanes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_tally.DeliveryTally" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DeliveryTally
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="DeliveryTally">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_tally.DeliveryTally.owed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        owed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_tally.DeliveryTally.cancelled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cancelled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_tally.DeliveryTally.total" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        total
       
     </span>
   </a>
@@ -4044,6 +4188,40 @@ it cannot help across a process boundary, where the answer is the event row.</p>
 
     </div>
 
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.scope.install_celery_scope.install_celery_scope" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">install_celery_scope</span>
+
+
+<a href="#django_domain_events.scope.install_celery_scope.install_celery_scope" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">install_celery_scope</span><span class="p">(</span><span class="n">app</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Carry the publisher's scope into the Celery tasks it starts.</p>
+<p><code>propagate_scope()</code> covers threads; a Celery task runs in another process,
+so an event it fires would otherwise record no actor. Call this once where the
+Celery app is built:</p>
+<div class="language-text highlight"><pre><span></span><code>app = Celery("proj")
+install_celery_scope(app)
+</code></pre></div>
+<p>Publishing writes the current scope's actor, data and correlation id into one
+message header, as JSON; a task of an installed app runs inside that scope and
+leaves it when it ends, raised or not. Nothing is written when there is no
+scope, and a message without the header runs as before.</p>
+<p>Installing twice is a no-op. The publish signal names no app, so once any app
+is installed the header rides on every message this process publishes; only an
+installed app's tasks read it. <code>suppressed()</code> and the causing event do not
+travel, only the chain.</p>
+
+
+    </div>
+
 </div><h2 id="delivery">Delivery<a class="headerlink" href="#delivery" title="Permanent link">&para;</a></h2>
 
 
@@ -4158,23 +4336,26 @@ before the next interval.</p>
 answer aware under either setting, and is converted to the project's form
 (<code>test_a_relay_on_an_aware_clock_claims_and_delivers</code>).</p>
 <p>A receiver deferring with <code>RetryAfter(seconds, counts=False)</code> pauses its
-lane in this process for <code>seconds</code>, measured on <code>now</code>: the unstarted
-rest of the batch, every row of which is in that lane, is handed back
-rather than attempted - each would cost a call to learn what the first
-already said - and is claimable by any worker at once. While the pause
-lasts the relay does not claim the lane at all, and goes on to the next
-lane it serves. The pause is per process and shares nothing: every relay in
-the lane learns of the throttle from its own first deferral, at the cost of
-one call each. It ends at the lane's first turn at or after <code>seconds</code>, so
-within <code>POLL_SECONDS</code> of it for a relay with nothing else to do.</p>
-<p>So that operators can see a pause, the relay writes it to
+lane for <code>seconds</code>, measured on <code>now</code>: the unstarted rest of the batch,
+every row of which is in that lane, is handed back rather than attempted -
+each would cost a call to learn what the first already said - and is
+claimable by any worker at once. The relay writes the pause to
 <code>LanePauseRecord</code> - its lane, this <code>worker_id</code>, when and until when -
 deleting in the same call every record, whoever wrote it, whose pause has
-passed. It deletes its own when the pause ends and when it returns. No
-relay reads the table, and a relay that never defers never touches it.
-Every one of those writes is logged and survived if it fails: the pause in
-this process still governs the relay, and the record is only a window
-onto it.</p>
+passed, and deletes its own when the pause ends and when it returns.</p>
+<p>The pause is shared. Each pass starts by reading the unexpired records of
+the lanes it serves, in one query, and a lane any of them holds is not
+claimed: the relay goes on to the next lane it serves. So every relay in the
+lane honours the first deferral, an operator's <code>pause_lane</code> stops them
+all, and a <code>resume_lane</code> that deletes the records restarts them at their
+next pass, the relay that recorded the pause included. A lane is taken up
+again at its first turn at or after its latest pause ends, so within
+<code>POLL_SECONDS</code> of it for a relay with nothing else to do.</p>
+<p>Every one of those reads and writes is logged and survived if it fails. A
+relay whose write failed still holds its own pause until it ends on its
+clock, though no other relay sees it; a relay whose read failed goes on with
+the pauses it already holds, and drops one of its own only when a read that
+succeeded finds the record it wrote gone.</p>
 
 
     </div>
@@ -4319,12 +4500,24 @@ is not claimed again, while every other lane goes on being delivered
 (<code>test_a_deferral_sets_its_lane_aside_and_the_pass_delivers_the_rest</code>).
 Unlike the relay's pause, this one is held for the call alone and writes
 no <code>LanePauseRecord</code>.</p>
+<p>A lane a relay or <code>pause_lane</code> paused, by a <code>LanePauseRecord</code> whose
+<code>until</code> is past the call's start (<code>now</code>, if given), is not claimed in
+the call; the pauses are read once, when it starts
+(<code>test_a_lane_a_relay_paused_is_not_claimed_while_the_others_are</code>,
+<code>test_the_pauses_are_read_once_per_call</code>). So <code>deliver_events --once</code>
+honours a pause as a running relay does, and <code>drain_outbox(now=...)</code>
+past a pause's end delivers the lane
+(<code>test_a_pause_that_has_ended_at_the_calls_now_holds_nothing</code>).</p>
 <p><code>now</code> is the moment every claim of the call is made at, in place of the
 clock: what is due, which backoff has run out and which lease has lapsed
 are all read against it. It is how <code>drain_outbox(now=...)</code> moves a test
 forward to a receiver's due time. Only the claims read it; the attempt
 itself runs and is recorded on the real clock, since a receiver's
-acknowledgement is a fact about when it ran.</p>
+acknowledgement is a fact about when it ran. A claim told <code>now</code> spends
+no attempt on a lease it reads as lapsed and dead-letters nothing for one,
+since a <code>now</code> past the real clock reads a lease stamped a moment ago as
+lapsed; on the real clock a lapse spends an attempt as it does in the relay
+(<code>test_a_real_clock_pass_dead_letters_a_lapse_at_its_last_attempt</code>).</p>
 
 
     </div>
@@ -4350,7 +4543,8 @@ acknowledgement is a fact about when it ran.</p>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">lane</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">exclude_lanes</span><span class="p">:</span> <span class="n">Collection</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">(),</span>
 </span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">exclude_ids</span><span class="p">:</span> <span class="n">Collection</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">(),</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">count_lapses</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
 </span></code></pre></div>
 
     <div class="doc doc-contents first">
@@ -4363,6 +4557,40 @@ ordinary retry rather than a special case.</p>
 transaction holding a lower id can commit after one holding a higher id, so
 a row can become visible "in the past"; a high-water mark would skip it
 forever.</p>
+<p>A lapsed claim spends an attempt when it is claimed again: the worker that
+held it is read as dead mid-delivery, so the row's <code>attempts</code> goes up by
+one, and a row that reaches <code>max_attempts</code> that way is marked <code>DEAD</code>
+with <code>last_error</code> naming the lapsed lease, and its <code>on_failure</code> is told
+after the claim commits
+(<code>test_a_receiver_that_kills_its_relay_goes_dead_after_max_attempts_claims</code>).
+A pending or failed row is not a lapse
+(<code>test_a_claim_then_success_records_one_attempt</code>), nor is a row given
+back by <code>hand_back</code>, whose lease is the epoch
+(<code>test_a_handed_back_claim_spends_no_attempt</code>). The row lock keeps two
+relays from dead-lettering one row twice
+(<code>test_two_relays_racing_a_lapse_to_dead_tell_on_failure_once</code>), and a
+dead-lettered row takes no place in the batch: the claim goes on until it
+fills <code>limit</code> or meets no lapse to dead-letter
+(<code>test_a_claim_dead_lettering_lapses_still_fills_its_limit</code>,
+<code>test_a_refill_claims_only_what_the_limit_has_left</code>). The lapsed rows are
+raised by an UPDATE of their own rather than a CASE in one, which keeps the
+result independent of the order Django writes the SET clause in: MySQL
+assigns a single-table UPDATE's columns left to right, so a CASE reading
+<code>status</code> placed after it would read the value just written.</p>
+<p>Each pass of that refill commits on its own. If a later pass raises an
+<code>Exception</code>, the rows the earlier ones took are handed back, as
+<code>hand_back</code> gives them, and it propagates; a <code>BaseException</code>, such as a
+second signal's <code>SystemExit</code>, leaves them to their lease. The rows they
+dead-lettered are reported whichever way the claim ends
+(<code>test_a_refill_that_raises_hands_back_its_rows_and_reports_its_dead</code>).
+<code>on_failure</code> is told outside the claim's transaction
+(<code>test_on_failure_is_told_outside_the_claims_transaction</code>).</p>
+<p><code>count_lapses=False</code> takes a lapsed claim as it takes a pending row:
+no attempt is spent and nothing is dead-lettered. It exists for the test
+helper, whose <code>now</code> reads as lapsed a lease the real clock stamped a
+moment ago, as on a <code>site="task"</code> row still in its queue
+(<code>test_a_drain_told_the_same_later_time_never_spends_a_queued_rows_attempt</code>,
+<code>test_a_drain_told_a_later_time_after_a_real_clock_one_spends_nothing</code>).</p>
 <p><code>ignore_backoff</code> claims rows whose retry is still scheduled. It exists for
 the test helper, which cannot wait out a jittered hour to observe a retry.
 It never claims a row whose due time is still ahead of <code>now</code> - a receiver
@@ -5201,6 +5429,26 @@ the records relays write when a receiver defers.</p>
 
     </div>
 
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="django_domain_events.introspection.delivery_tally.delivery_tally" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">delivery_tally</span>
+
+
+<a href="#django_domain_events.introspection.delivery_tally.delivery_tally" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">delivery_tally</span><span class="p">(</span><span class="n">event_id</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DeliveryTally</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>How one event's deliveries stand, counted by outcome in a single query.</p>
+
+
+    </div>
+
 </div><h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
 
 
@@ -5238,7 +5486,9 @@ expire it in the same breath. <code>now</code> is how a test moves forward inste
 <code>drain_outbox(now=placed + timedelta(hours=48))</code> delivers what is due by
 then, reading the backoff, when respected, against the same moment. The
 receiver still runs on the real clock; <code>DeliveryContext.due_at</code> is what it
-should compare against.</p>
+should compare against. A lease that <code>now</code> reads as lapsed spends no
+attempt here, since the real clock stamped it: a <code>site="task"</code> row still
+in its queue is handed off again rather than dead-lettered.</p>
 <p>A row is attempted at most once a call when its receiver answers
 <code>NotYet</code>, and handed to a task backend at most once a call when its
 receiver declares <code>site="task"</code>. A handed-off row is not counted in the
@@ -5249,6 +5499,8 @@ a <code>NotYet</code> moved a row to and the lease a hand-off extended are ahead
 the clock when written, so a later claim takes the row again only once that
 time has really come, and nothing is excluded or read back
 (<code>test_a_task_row_on_the_real_clock_is_not_read_back_or_excluded</code>).</p>
+<p>A lane paused by a relay or <code>pause_lane</code> is skipped while its pause lasts
+at <code>now</code> (<code>test_a_pause_that_has_ended_at_the_calls_now_holds_nothing</code>).</p>
 
 
     </div>
@@ -6899,6 +7151,128 @@ reason <code>scheduled</code> is.</p>
 
 
 
+<h2 id="django_domain_events.types.delivery_tally.DeliveryTally" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">DeliveryTally</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#django_domain_events.types.delivery_tally.DeliveryTally" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>One event's deliveries counted by outcome; every delivery is in exactly one field.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="django_domain_events.types.delivery_tally.DeliveryTally.owed" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">owed</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+<a href="#django_domain_events.types.delivery_tally.DeliveryTally.owed" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">owed</span><span class="p">:</span> <span class="nb">int</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Pending, failed or claimed: not settled yet, due or scheduled.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="django_domain_events.types.delivery_tally.DeliveryTally.cancelled" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">cancelled</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+<a href="#django_domain_events.types.delivery_tally.DeliveryTally.cancelled" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">cancelled</span><span class="p">:</span> <span class="nb">int</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Cancelled by <code>cancel_deliveries</code> or settled by <code>Moot</code>, which store the same status.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="django_domain_events.types.delivery_tally.DeliveryTally.total" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">total</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+<a href="#django_domain_events.types.delivery_tally.DeliveryTally.total" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">total</span><span class="p">:</span> <span class="nb">int</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Every delivery the event has, the sum of the five fields above.</p>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
 <h2 id="django_domain_events.types.lane_backlog.LaneBacklog" class="doc doc-heading">
             <span class="doc doc-object-name doc-class-name">LaneBacklog</span>
 
@@ -7055,9 +7429,8 @@ lane is owed. This is the per-lane backlog alert's number, read the way
 
     <div class="doc doc-contents ">
 
-        <p>Every relay holding this lane paused, by <code>worker_id</code>; empty when none
-does. A pause is per relay, so one relay's pause says nothing about another
-relay serving the same lane.</p>
+        <p>Every pause holding this lane, a relay's or the operator's, by <code>worker_id</code>;
+empty when none does. Each one holds the lane on every delivery path.</p>
 
     </div>
 
@@ -7093,15 +7466,17 @@ relay serving the same lane.</p>
 
 
 
-        <p>One relay holding one lane paused after a deferral, as it recorded it.</p>
-<p>A pause governs only the relay that heard the deferral, and that relay
-writes it and clears it when the pause ends or it stops. A relay that died
-without returning leaves its record behind: it stops showing once <code>until</code>
-passes and is deleted at the next deferral any relay records. A successor
-started under the same <code>worker_id</code> takes it over only at its own first
-deferral, so before reading this as a lane nobody serves, compare
-<code>worker_id</code> and <code>paused_at</code> against the processes running and when they
-started.</p>
+        <p>One recorded pause of a lane: a relay's after a deferral, or an operator's.</p>
+<p>Every delivery path serving the lane, a relay and <code>deliver_pending()</code>
+alike, reads these records and claims nothing in it while any of them
+holds, whoever wrote it. A relay writes its own when a
+receiver defers and deletes it when the pause ends or it stops;
+<code>pause_lane</code> writes one under the <code>worker_id</code> <code>operator</code>, and
+<code>resume_lane</code> deletes every one of a lane. A relay that died without
+returning leaves its record behind, and it holds the lane on every path
+until <code>until</code> passes, so before waiting it out, compare <code>worker_id</code> and
+<code>paused_at</code> against the processes running and lift a leftover with
+<code>resume_lane</code>.</p>
 
 
 
@@ -7139,8 +7514,9 @@ started.</p>
 
     <div class="doc doc-contents ">
 
-        <p>The <code>worker_id</code> of the relay holding the pause: <code>host:pid</code> under
-<code>deliver_events</code> unless <code>--worker-id</code> names another.</p>
+        <p>The <code>worker_id</code> of the relay holding the pause, <code>host:pid</code> under
+<code>deliver_events</code> unless <code>--worker-id</code> names another, or <code>operator</code> for a
+<code>pause_lane</code>.</p>
 
     </div>
 
@@ -7164,7 +7540,7 @@ started.</p>
 
     <div class="doc doc-contents ">
 
-        <p>When the relay heard the deferral that paused the lane.</p>
+        <p>When the relay heard the deferral, or the operator ran <code>pause_lane</code>.</p>
 
     </div>
 
@@ -7188,7 +7564,7 @@ started.</p>
 
     <div class="doc doc-contents ">
 
-        <p>When the relay takes the lane up again: it claims the lane at its first
+        <p>When the pause ends: a relay claims the lane at its first
 reading of the clock at or past this
 (<code>test_the_pause_ends_when_the_requested_delay_has_passed_on_the_injected_clock</code>).</p>
 
@@ -7815,9 +8191,10 @@ waiting. <code>replay_events</code> resolves it afresh.</p>
 <p>The relay claims the row either way; this only decides who executes it. That
 is the whole reason the execution site is a separate knob from the timing:
 a queue is only ever an answer to the second question.</p>
-<p>The backend may lose an enqueue without consequence. The delivery row is the
-record, so anything dropped is reclaimed when the lease lapses - which is
-what makes a lossy queue safe here, and what keeps this a small protocol.</p>
+<p>The backend may lose an enqueue at the cost of one attempt. The delivery row
+is the record, so anything dropped is reclaimed when the lease lapses, and
+that lapse spends an attempt - which is what makes a lossy queue safe here,
+and what keeps this a small protocol.</p>
 <p>It may also deliver one twice, or late, which is what <code>acks_late</code> and a
 broker's visibility timeout do. The message carries the claim the row was
 handed off under, and the task takes the row under exactly that claim

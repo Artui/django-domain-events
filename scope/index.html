@@ -486,6 +486,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#celery-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Celery tasks
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -710,6 +721,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#celery-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Celery tasks
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -863,6 +885,51 @@ submits the same wrapped callable per item would raise on the second.</p>
 <p>Not needed for <code>asyncio</code> tasks, which inherit a copy at creation, nor across
 <code>sync_to_async</code> / <code>async_to_sync</code>, which carry context both ways. It cannot help
 across a <strong>process</strong> boundary - there the answer is the event row.</p>
+<h2 id="celery-tasks">Celery tasks<a class="headerlink" href="#celery-tasks" title="Permanent link">&para;</a></h2>
+<p>A Celery task runs in another process, so <code>propagate_scope()</code> cannot reach it,
+and an event a task fires records no actor unless the scope travels with the
+message. <code>install_celery_scope(app)</code> makes it travel. It needs the <code>[celery]</code>
+extra and is opt-in: without the call, nothing changes.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">celery</span><span class="w"> </span><span class="kn">import</span> <span class="n">Celery</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">install_celery_scope</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">app</span> <span class="o">=</span> <span class="n">Celery</span><span class="p">(</span><span class="s2">"proj"</span><span class="p">)</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">install_celery_scope</span><span class="p">(</span><span class="n">app</span><span class="p">)</span>
+</span></code></pre></div>
+<p>Publishing a task inside <code>attributed()</code> then writes the scope into one message
+header, <code>django_domain_events_scope</code>, as JSON: the actor's key, label and user
+id, the scope data and the correlation id. The task runs inside that scope and
+leaves it when it ends, whether it returned or raised, so an event it fires
+records the publisher's actor and data and joins the publisher's chain. A task
+published from inside a receiver carries that receiver's chain too.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">with</span> <span class="n">attributed</span><span class="p">(</span><span class="n">actor</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">user</span><span class="p">,</span> <span class="n">club_id</span><span class="o">=</span><span class="n">club</span><span class="o">.</span><span class="n">id</span><span class="p">):</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="n">send_welcome_pack</span><span class="o">.</span><span class="n">delay</span><span class="p">(</span><span class="n">member</span><span class="o">.</span><span class="n">id</span><span class="p">)</span>  <span class="c1"># its events record request.user</span>
+</span></code></pre></div>
+<ul>
+<li>A task published outside any scope carries no header and fires with no actor.</li>
+<li><code>suppressed()</code> and the causing event id do not travel; only the chain does.</li>
+<li>Installing twice is harmless.</li>
+<li>Under <code>task_always_eager</code> nothing is published: the task runs inline, inside
+  the caller's scope already.</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">The header goes to every broker the process publishes to</p>
+<p>Installing is process-wide on the publishing side. Celery's publish signal
+does not say which app published, so once any app is installed, every task
+message the process publishes inside a scope or a receiver's chain carries
+the header, whichever app sends it and whichever broker receives it. The
+actor's key, label and user id, the whole scope data and the correlation id
+travel as plain JSON to that broker and to whatever consumes its queue. The label is <code>str(user)</code> unless you pass
+<code>actor_label</code>, so it can be an email address. Only the apps you install
+run their tasks in the carried scope; the others' tasks ignore it, but
+their messages still carry it.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Not for <code>django.tasks</code></p>
+<p>Django's task framework sends no signal when a task is enqueued, so there is
+nowhere to write the scope. Pass what the task needs as arguments and open
+<code>attributed()</code> inside it.</p>
+</div>
 
 
 

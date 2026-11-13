@@ -1249,7 +1249,9 @@ expire it in the same breath. Pass <code>now=</code> to move forward instead:</p
 </span></code></pre></div>
 <p><code>now=</code> is the moment every claim of the call is made at - what is due, which
 backoff has run out and which lease has lapsed are all read against it.
-<code>deliver_pending(now=)</code> takes the same. <strong>The receiver still runs on the real
+<code>deliver_pending(now=)</code> takes the same. A claim told <code>now=</code> spends no attempt
+on a lease it reads as lapsed, so a <code>site="task"</code> row still in its queue is
+handed off again rather than dead-lettered. <strong>The receiver still runs on the real
 clock</strong>, since its acknowledgement is a fact about when it ran: compare against
 <code>ctx.due_at</code>, with the real clock only as the floor that lets a late row
 proceed (<code>max(ctx.due_at, timezone.now())</code>), and the receiver behaves the same

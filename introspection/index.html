@@ -557,6 +557,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#how-did-one-event-go" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How did one event go?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#system-checks" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -704,6 +715,17 @@
     <span class="md-ellipsis">
       
         Is the outbox keeping up?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-did-one-event-go" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How did one event go?
       
     </span>
   </a>
@@ -924,7 +946,7 @@ climbing, while one wedged receiver has a backlog and everything else fine.</p>
 </tr>
 <tr>
 <td><code>lanes</code></td>
-<td>The same backlog split by <a href="../operations/#lanes-a-relay-per-kind-of-work">lane</a>, worst first, ranked as <code>receivers</code> is. Every lane a relay can serve is listed, the default and each declared one, zeros included, so a dashboard keeps one series per lane. Each <code>LaneBacklog</code> carries its own <code>owed</code>, <code>scheduled</code>, <code>claimed</code>, <code>dead</code> and <code>oldest_owed_at</code>, and <code>pauses</code>: a <code>LanePause</code> per relay holding the lane paused after a <a href="../delivery/#the-pause-is-per-process">deferral</a>, with its <code>worker_id</code>, <code>paused_at</code> and <code>until</code></td>
+<td>The same backlog split by <a href="../operations/#lanes-a-relay-per-kind-of-work">lane</a>, worst first, ranked as <code>receivers</code> is. Every lane a relay can serve is listed, the default and each declared one, zeros included, so a dashboard keeps one series per lane. Each <code>LaneBacklog</code> carries its own <code>owed</code>, <code>scheduled</code>, <code>claimed</code>, <code>dead</code> and <code>oldest_owed_at</code>, and <code>pauses</code>: a <code>LanePause</code> per relay holding the lane paused after a <a href="../delivery/#the-pause-is-shared">deferral</a>, and one for an operator's <a href="../operations/#pausing-a-lane"><code>pause_lane</code></a>, with its <code>worker_id</code>, <code>paused_at</code> and <code>until</code></td>
 </tr>
 </tbody>
 </table>
@@ -969,15 +991,15 @@ since been deleted is counted in the default lane, which is where it drains.
 Its <code>oldest_owed_at</code> is the number to alert on per lane
 (<a href="../operations/#knowing-it-is-working">knowing it is working</a>), against a
 threshold sized to that lane's work rather than one shared by all of them. A
-lane's <code>pauses</code> come from the
-records relays write when a receiver defers
-(<a href="../delivery/#the-pause-is-per-process">the pause is per process</a>); a lane no
-receiver declares any more is listed while a relay still holds it paused, as
-happens when a lane is renamed mid-rollout. A pause names its relay because
-one that died leaves its record showing until <code>until</code> passes: check the
-<code>worker_id</code> and <code>paused_at</code> against the relays running and when they started,
-since a relay restarted under the same <code>worker_id</code> takes the old record over
-only at its own first deferral.</p>
+lane's <code>pauses</code> are the records every delivery path reads before claiming
+(<a href="../delivery/#the-pause-is-shared">the pause is shared</a>): one per relay that
+deferred, and one with the <code>worker_id</code> <code>operator</code> for a
+<a href="../operations/#pausing-a-lane"><code>pause_lane</code></a>. A lane no receiver declares any
+more is listed while a pause of it is recorded, as happens when a lane is
+renamed mid-rollout. A pause names its relay because one that died leaves its
+record holding the lane until <code>until</code> passes: check the <code>worker_id</code> and
+<code>paused_at</code> against the relays running and when they started, and lift a
+leftover with <code>resume_lane</code>.</p>
 <p>Every figure here is answered from an index and none of them scans the
 delivery table, so the call is cheap enough to scrape on an interval. It sends
 four queries: three over the delivery table, and one over the pause records,
@@ -1014,6 +1036,51 @@ receiver, and a <code>"lanes"</code> list beside <code>"receivers"</code>: each 
 <code>owed</code>, <code>scheduled</code>, <code>claimed</code>, <code>dead</code> and <code>oldest_owed_age_seconds</code>, and
 <code>"paused"</code>, a list of <code>{"worker_id", "paused_for_seconds"}</code> where
 <code>paused_for_seconds</code> is the time left until the pause ends.</p>
+<h2 id="how-did-one-event-go">How did one event go?<a class="headerlink" href="#how-did-one-event-go" title="Permanent link">&para;</a></h2>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">delivery_tally</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">tally</span> <span class="o">=</span> <span class="n">delivery_tally</span><span class="p">(</span><span class="n">event_id</span><span class="p">)</span>
+</span></code></pre></div>
+<p>Where <code>outbox_health()</code> answers for the whole queue, this answers for one event:
+how many of its deliveries are still owed, and how the rest settled. It runs a
+single <code>GROUP BY</code> query and returns a frozen <code>DeliveryTally</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>owed</code></td>
+<td>Pending, failed or claimed: not settled yet, whether due or scheduled</td>
+</tr>
+<tr>
+<td><code>succeeded</code></td>
+<td>Delivered</td>
+</tr>
+<tr>
+<td><code>cancelled</code></td>
+<td>Cancelled with <code>cancel_deliveries</code>, or settled by a receiver raising <code>Moot</code>, which stores the same status</td>
+</tr>
+<tr>
+<td><code>dead</code></td>
+<td>Dead-lettered</td>
+</tr>
+<tr>
+<td><code>orphaned</code></td>
+<td>Addressed to a receiver key the registry no longer has</td>
+</tr>
+<tr>
+<td><code>total</code></td>
+<td>Every delivery the event has: the sum of the five above</td>
+</tr>
+</tbody>
+</table>
+<p>An event id nothing was recorded under gives all zeros. <code>owed</code> reads the same
+settled set as the rest of the package, so a status added later is counted in
+one place.</p>
 <h2 id="system-checks">System checks<a class="headerlink" href="#system-checks" title="Permanent link">&para;</a></h2>
 <p>Run with <code>python manage.py check</code>.</p>
 <table>
