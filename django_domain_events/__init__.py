@@ -29,6 +29,7 @@ from django_domain_events.operations.requeue_dead import requeue_dead
 from django_domain_events.payload_upgrade_failed import PayloadUpgradeFailed
 from django_domain_events.scope.attributed import attributed, current_scope
 from django_domain_events.scope.causation import caused_by, causing_event_id
+from django_domain_events.scope.install_celery_scope import install_celery_scope
 from django_domain_events.scope.propagate_scope import propagate_scope
 from django_domain_events.scope.suppressed import suppressed
 from django_domain_events.testing.assert_fired import assert_fired
@@ -103,6 +104,7 @@ __all__ = [
     "drain_outbox",
     "event",
     "fire",
+    "install_celery_scope",
     "listens_for",
     "notify_relay",
     "outbox_health",

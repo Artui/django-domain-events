@@ -16,6 +16,7 @@ Everything below is exported from `django_domain_events` directly.
 ::: django_domain_events.scope.suppressed.suppressed
 ::: django_domain_events.scope.causation.caused_by
 ::: django_domain_events.scope.propagate_scope.propagate_scope
+::: django_domain_events.scope.install_celery_scope.install_celery_scope
 
 ## Delivery
 
