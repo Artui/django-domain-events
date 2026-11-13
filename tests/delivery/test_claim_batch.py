@@ -629,3 +629,33 @@ def test_a_refill_that_raises_hands_back_its_rows_and_reports_its_dead(
     assert set(taken.values_list("status", "lease_expires_at")) == {
         (DeliveryStatus.CLAIMED, in_project_time(GIVEN_BACK))
     }
+
+
+def test_a_refill_ended_by_a_system_exit_hands_nothing_back(
+    order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second signal leaves the first pass's rows to their lease, but still reports its dead."""
+    seen: list[DeliveryFailure] = []
+    real = claim_batch_module._claim_once
+    passes: list[int] = []
+
+    def second_pass_exits(*args: Any, **kwargs: Any) -> tuple[list[int], list[int]]:
+        passes.append(kwargs["limit"])
+        if len(passes) > 1:
+            raise SystemExit(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(claim_batch_module, "_claim_once", second_pass_exits)
+    with receiver_registered(_dying(seen, max_attempts=1)):
+        dead = _one_lapse_at_its_last_attempt(order)
+        now = _now()
+        with pytest.raises(SystemExit):
+            claim_batch(worker_id="w1", now=now, lease=LEASE, limit=2)
+
+    taken = DeliveryRecord.objects.filter(claimed_by="w1")
+    assert passes == [2, 1]
+    assert [f.delivery_id for f in seen] == [dead]
+    assert taken.count() == 1
+    assert set(taken.values_list("status", "lease_expires_at")) == {
+        (DeliveryStatus.CLAIMED, in_project_time(now + LEASE))
+    }
