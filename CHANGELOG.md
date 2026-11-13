@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- A `NotYet` answer is now logged at DEBUG instead of INFO: it says the work is scheduled,
+  which an operator does not act on, and a receiver answering it on every pass wrote tens of
+  thousands of lines a week. The `RetryAfter` lane-pause line stays at INFO.
+- The relay's sweep line now reads `relay <id> pruned N events and M delivery rows in S s`,
+  so a prune that grows slow, or deletes many delivery rows, shows in the log.
 - The API reference's docstrings are restored.
 - The operations and scope pages say when to choose the Celery backend, that `deliver_events`
   refuses to run continuously on SQLite, and that a nested `attributed()` block replaces the

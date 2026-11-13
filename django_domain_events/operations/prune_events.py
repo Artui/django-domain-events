@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 
 from django.db import models, transaction
 from django.utils import timezone
@@ -20,6 +20,13 @@ _EVENTS_PER_BATCH = 500
 A batch is a list of ids bound as parameters, and a run of events with no
 delivery rows would otherwise put ``PRUNE_BATCH_ROWS`` of them in one
 statement - past the parameter limit of an older SQLite at the default."""
+
+
+class Pruned(NamedTuple):
+    """What one prune deleted: events, and the delivery rows that went with them."""
+
+    events: int
+    deliveries: int
 
 
 def prune_events(
@@ -79,6 +86,20 @@ def prune_events(
     retention of their own are alive, and not with how much the tables have
     ever held. ``docs/retention.md`` has the measurement.
     """
+    return prune_with_counts(
+        older_than, now=now, batch_size=batch_size, limit=limit, stop=stop
+    ).events
+
+
+def prune_with_counts(
+    older_than: timedelta | None = None,
+    *,
+    now: datetime | None = None,
+    batch_size: int | None = None,
+    limit: int | None = None,
+    stop: Callable[[], bool] | None = None,
+) -> Pruned:
+    """``prune_events``, counting the delivery rows it deleted as well."""
     from django_domain_events.models.event_record import EventRecord
 
     size = batch_size if batch_size is not None else setting("PRUNE_BATCH_ROWS")
@@ -109,10 +130,11 @@ def prune_events(
         ).exclude(models.Exists(unsettled)),
     ]
 
-    deleted = 0
+    total = Pruned(0, 0)
     for due in arms:
-        deleted += _prune(due, size, None if limit is None else limit - deleted, stop)
-    return deleted
+        more = _prune(due, size, None if limit is None else limit - total.events, stop)
+        total = Pruned(total.events + more.events, total.deliveries + more.deliveries)
+    return total
 
 
 class _Seconds(models.Func):
@@ -136,29 +158,34 @@ def _deliveries_of_each() -> models.QuerySet[Any]:
 
 def _prune(
     due: models.QuerySet[Any], size: int, limit: int | None, stop: Callable[[], bool] | None
-) -> int:
+) -> Pruned:
     """Delete due events in batches, until none is left, ``limit`` is hit, or ``stop`` says so."""
     from django_domain_events.models.delivery_record import DeliveryRecord
 
     deleted = 0
+    rows = 0
     while (limit is None or deleted < limit) and not (stop is not None and stop()):
         take = min(size, _EVENTS_PER_BATCH)
         if limit is not None:
             take = min(take, limit - deleted)
         ids = sorted(_candidates(due, take))
         if not ids:
-            return deleted
+            return Pruned(deleted, rows)
         owners = list(
             DeliveryRecord.objects.filter(event__in=ids)
             .order_by("event_id")
             .values_list("event_id", flat=True)[:size]
         )
         if len(owners) == size and owners[-1] == ids[0]:
-            if not _delete_chunk(due, ids[0], size):
-                return deleted
+            chunk = _delete_chunk(due, ids[0], size)
+            if not chunk:
+                return Pruned(deleted, rows)
+            rows += chunk
             continue
-        deleted += _delete_batch(due, _fitting(ids, owners, size))
-    return deleted
+        gone = _delete_batch(due, _fitting(ids, owners, size))
+        deleted += gone.events
+        rows += gone.deliveries
+    return Pruned(deleted, rows)
 
 
 def _candidates(due: models.QuerySet[Any], take: int) -> list[int]:
@@ -179,8 +206,8 @@ def _fitting(ids: list[int], owners: list[int], size: int) -> list[int]:
     return batch
 
 
-def _delete_batch(due: models.QuerySet[Any], batch: list[int]) -> int:
-    """Delete these events if they are still due, and return how many went."""
+def _delete_batch(due: models.QuerySet[Any], batch: list[int]) -> Pruned:
+    """Delete these events if they are still due, and count what went."""
     from django_domain_events.models.delivery_record import DeliveryRecord
 
     with transaction.atomic(using=write_alias()):
@@ -203,11 +230,15 @@ def _lock_events(ids: list[int]) -> list[int]:
     )
 
 
-def _delete_events(ids: list[int]) -> int:
-    """Delete these events and their delivery rows, and count the events."""
+def _delete_events(ids: list[int]) -> Pruned:
+    """Delete these events and their delivery rows, and count both."""
+    from django_domain_events.models.delivery_record import DeliveryRecord
     from django_domain_events.models.event_record import EventRecord
 
-    return EventRecord.objects.filter(pk__in=ids).delete()[1].get(EventRecord._meta.label, 0)
+    per_model = EventRecord.objects.filter(pk__in=ids).delete()[1]
+    return Pruned(
+        per_model.get(EventRecord._meta.label, 0), per_model.get(DeliveryRecord._meta.label, 0)
+    )
 
 
 def _delete_chunk(due: models.QuerySet[Any], event_id: int, size: int) -> int:

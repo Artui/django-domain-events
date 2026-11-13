@@ -18,7 +18,7 @@ from django_domain_events.delivery.hand_back import hand_back
 from django_domain_events.delivery.utils import OnDeferral, lane_claim_sizes, served_lanes
 from django_domain_events.delivery.wake import wait_for_work
 from django_domain_events.delivery.write_alias import write_alias
-from django_domain_events.operations.prune_events import prune_events
+from django_domain_events.operations.prune_events import prune_with_counts
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import DEFAULT_LANE
@@ -280,14 +280,21 @@ def _wait_or_survive(
 
 def _sweep_or_survive(worker_id: str, connection: Any, stop: Callable[[], bool]) -> None:
     """Prune, and keep the daemon alive if the database refuses."""
+    started = time_module.monotonic()
     try:
-        deleted = prune_events(stop=stop)
+        pruned = prune_with_counts(stop=stop)
     except Exception as exc:
         logger.exception("relay %s could not prune", worker_id)
         _close_after(exc, connection, worker_id)
         return
-    if deleted:
-        logger.info("relay %s pruned %d events", worker_id, deleted)
+    if pruned.events or pruned.deliveries:
+        logger.info(
+            "relay %s pruned %d events and %d delivery rows in %.3f s",
+            worker_id,
+            pruned.events,
+            pruned.deliveries,
+            time_module.monotonic() - started,
+        )
 
 
 def _deliver_or_survive(

@@ -524,7 +524,7 @@ def _defer(
 
 def _reschedule(fence: _Fence, row: Any, exc: NotYet) -> DeliveryStatus | None:
     """Move a row its receiver answered with ``NotYet`` to the time it named."""
-    logger.info(
+    logger.debug(
         "receiver %s answered delivery %s with NotYet; it is due again at %s",
         row.receiver_key,
         row.pk,
