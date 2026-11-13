@@ -15,7 +15,12 @@ from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.deliver import dispatch_one
 from django_domain_events.delivery.hand_back import hand_back
-from django_domain_events.delivery.utils import OnDeferral, lane_claim_sizes, served_lanes
+from django_domain_events.delivery.utils import (
+    OnDeferral,
+    lane_claim_sizes,
+    lane_pauses,
+    served_lanes,
+)
 from django_domain_events.delivery.wake import wait_for_work
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.operations.prune_with_counts import prune_with_counts
@@ -355,22 +360,12 @@ def _read_pauses_or_survive(
     lanes: Collection[str], moment: datetime, worker_id: str, connection: Any
 ) -> dict[str, datetime] | None:
     """The latest unexpired pause of each of ``lanes``, by any writer; None if unreadable."""
-    from django_domain_events.models.lane_pause_record import LanePauseRecord
-
     try:
-        rows = list(
-            LanePauseRecord.objects.filter(until__gt=moment, lane__in=sorted(lanes)).values_list(
-                "lane", "until"
-            )
-        )
+        return lane_pauses(lanes, moment)
     except Exception as exc:
         logger.exception("relay %s could not read the lane pauses", worker_id)
         _close_after(exc, connection, worker_id)
         return None
-    held: dict[str, datetime] = {}
-    for lane, until in rows:
-        held[lane] = max(until, held.get(lane, until))
-    return held
 
 
 def _record_pause_or_survive(

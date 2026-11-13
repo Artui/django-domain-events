@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `pause_lane LANE (--for SECONDS | --until ISO)` and `resume_lane LANE` management
-  commands. `pause_lane` stops every running relay claiming the lane until the pause ends
-  (`deliver_events --once` and `deliver_pending()` do not read pauses); one of
-  `--for` and `--until` is required, an `--until` without an offset is read in `TIME_ZONE`,
+  commands. `pause_lane` stops every delivery path claiming the lane until the pause ends:
+  a running relay, `deliver_events --once`, `deliver_pending()` and `drain_outbox()`. One
+  of `--for` and `--until` is required, an `--until` without an offset is read in `TIME_ZONE`,
   and a lane no receiver declares is refused. It writes a `LanePauseRecord` under the
   worker `operator`, which `outbox_health()` and `events_status` show beside the relays'
   pauses. `resume_lane` deletes every pause of the lane, the operator's and every relay's,
@@ -31,9 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signal.
 
 ### Changed
-- **A lane paused by one relay is now paused in every relay.** Each pass of `run_relay()`
-  and of `deliver_events` running as a relay (not `--once`) reads the unexpired `LanePauseRecord`s of the lanes it serves, one
-  query on that small table, and claims nothing in a lane any of them holds. Until now only
+- **A lane paused by one relay is now paused on every delivery path.** Each pass of
+  `run_relay()`, and each call of `deliver_pending()` (so `deliver_events --once` and
+  `drain_outbox()`) when it starts, reads the unexpired `LanePauseRecord`s of the lanes it
+  serves, one query on that small table, and claims nothing in a lane any of them holds. A
+  `drain_outbox(now=...)` past a pause's end delivers the lane. Until now only
   the relay whose receiver deferred with `RetryAfter(counts=False)` paused the lane, and
   every other relay made its own failing call before it learned of the outage. It is on by
   default, with no setting. A relay that dies while paused leaves its record, which now

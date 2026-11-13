@@ -34,6 +34,5 @@ class LaneBacklog:
     ``OutboxHealth.oldest_owed_at`` is."""
 
     pauses: tuple[LanePause, ...]
-    """Every relay holding this lane paused, by ``worker_id``; empty when none
-    does. A pause is per relay, so one relay's pause says nothing about another
-    relay serving the same lane."""
+    """Every pause holding this lane, a relay's or the operator's, by ``worker_id``;
+    empty when none does. Each one holds the lane on every delivery path."""

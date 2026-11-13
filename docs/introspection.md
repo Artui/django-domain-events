@@ -221,7 +221,7 @@ since been deleted is counted in the default lane, which is where it drains.
 Its `oldest_owed_at` is the number to alert on per lane
 ([knowing it is working](operations.md#knowing-it-is-working)), against a
 threshold sized to that lane's work rather than one shared by all of them. A
-lane's `pauses` are the records every relay reads before claiming
+lane's `pauses` are the records every delivery path reads before claiming
 ([the pause is shared](delivery.md#the-pause-is-shared)): one per relay that
 deferred, and one with the `worker_id` `operator` for a
 [`pause_lane`](operations.md#pausing-a-lane). A lane no receiver declares any

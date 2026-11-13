@@ -506,3 +506,20 @@ def test_relay_startup_runs_before_a_relay_without_skip_locked_is_refused(
         call_command("deliver_events", "--passes", "1", stdout=StringIO())
 
     assert [step for step, _ in steps] == ["startup"]
+
+
+def test_once_holds_off_a_lane_an_operator_paused_until_resume_lane(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    with transaction.atomic():
+        fire(order)
+    call_command("pause_lane", "default", "--for", "600", stdout=StringIO())
+
+    paused = StringIO()
+    call_command("deliver_events", "--once", stdout=paused)
+    call_command("resume_lane", "default", stdout=StringIO())
+    resumed = StringIO()
+    call_command("deliver_events", "--once", stdout=resumed)
+
+    assert paused.getvalue().strip() == "Nothing owed."
+    assert "succeeded: 2" in resumed.getvalue()

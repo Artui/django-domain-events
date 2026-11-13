@@ -24,6 +24,7 @@ from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.utils import (
     OnDeferral,
     lane_claim_sizes,
+    lane_pauses,
     log_failure,
     report_failure,
     served_lanes,
@@ -701,6 +702,15 @@ def deliver_pending(
     Unlike the relay's pause, this one is held for the call alone and writes
     no ``LanePauseRecord``.
 
+    A lane a relay or ``pause_lane`` paused, by a ``LanePauseRecord`` whose
+    ``until`` is past the call's start (``now``, if given), is not claimed in
+    the call; the pauses are read once, when it starts
+    (``test_a_lane_a_relay_paused_is_not_claimed_while_the_others_are``,
+    ``test_the_pauses_are_read_once_per_call``). So ``deliver_events --once``
+    honours a pause as a running relay does, and ``drain_outbox(now=...)``
+    past a pause's end delivers the lane
+    (``test_a_pause_that_has_ended_at_the_calls_now_holds_nothing``).
+
     ``now`` is the moment every claim of the call is made at, in place of the
     clock: what is due, which backoff has run out and which lease has lapsed
     are all read against it. It is how ``drain_outbox(now=...)`` moves a test
@@ -722,7 +732,8 @@ def deliver_pending(
     size_of = lane_claim_sizes(lanes, batch_size=batch_size, lane_batch_sizes=lane_batch_sizes)
 
     counts: dict[DeliveryStatus, int] = {}
-    closed: set[str] = set()
+    start = in_project_time(now) if now is not None else timezone.now()
+    closed = set(lane_pauses(registry.lanes() if lanes is None else lanes, start))
     deferred: list[str] = []
     remaining = limit
     set_aside: set[int] = set()

@@ -386,11 +386,11 @@ before every claim and before every delivery.
 
 ### Pausing a lane
 
-Every running relay stops claiming a lane while any unexpired pause of it is
-recorded, and takes it up again within one poll of the last one ending or being
-lifted. `deliver_events --once`, `deliver_pending()` and `drain_outbox()` do not
-read the pauses: a cron pass delivers a paused lane. The relays
-record a pause themselves when a receiver
+Every delivery path stops claiming a lane while any unexpired pause of it is
+recorded. A running relay takes it up again within one poll of the last one ending
+or being lifted; `deliver_events --once`, `deliver_pending()` and `drain_outbox()`
+read the pauses once, when the call starts, so a cron pass skips a paused lane and
+the first pass after the pause delivers it. The relays record a pause themselves when a receiver
 [defers without counting](delivery.md#a-deferral-that-spends-no-attempt), so one
 relay's deferral holds the lane in all of them. An operator records one by hand, for a
 provider outage announced ahead or a destination being migrated:

@@ -40,5 +40,8 @@ def drain_outbox(
     the clock when written, so a later claim takes the row again only once that
     time has really come, and nothing is excluded or read back
     (``test_a_task_row_on_the_real_clock_is_not_read_back_or_excluded``).
+
+    A lane paused by a relay or ``pause_lane`` is skipped while its pause lasts
+    at ``now`` (``test_a_pause_that_has_ended_at_the_calls_now_holds_nothing``).
     """
     return deliver_pending(limit=limit, ignore_backoff=not respect_backoff, now=now)

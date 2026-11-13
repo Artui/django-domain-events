@@ -61,6 +61,17 @@ def lane_claim_sizes(
     return lambda name: overrides.get(name, default)
 
 
+def lane_pauses(lanes: Collection[str], moment: datetime) -> dict[str, datetime]:
+    """The latest pause of each of ``lanes`` still unexpired at ``moment``, by any writer."""
+    from django_domain_events.models.lane_pause_record import LanePauseRecord
+
+    held: dict[str, datetime] = {}
+    rows = LanePauseRecord.objects.filter(until__gt=moment, lane__in=sorted(lanes))
+    for lane, until in rows.values_list("lane", "until"):
+        held[lane] = max(until, held.get(lane, until))
+    return held
+
+
 def driver_listens() -> bool:
     """Whether Django's Postgres backend loaded psycopg 3, the driver the wake listens through."""
     from django.db.backends.postgresql import psycopg_any

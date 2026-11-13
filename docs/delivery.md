@@ -552,7 +552,8 @@ unstarted rest of it with no query to sort it. A relay serving several lanes -
 deferring lane: it skips that lane's turn, without a claim, while the pause
 lasts, and goes on delivering the others. `deliver_pending()` and
 `drain_outbox()` have no clock to wait on, so they set the lane aside for the
-rest of the call instead; they neither read nor write the records.
+rest of the call instead, and write no record; they read the records once, when
+the call starts, and claim nothing in a lane one holds.
 
 `outbox_health().lanes` and `events_status` show every pause
 ([introspection](introspection.md#is-the-outbox-keeping-up)). A relay deletes its

@@ -16,7 +16,7 @@ OPERATOR = "operator"
 
 
 class Command(BaseCommand):
-    help = "Stop every running relay (not --once) claiming a lane, until a time or for seconds."
+    help = "Stop every delivery path claiming a lane, until a time or for seconds."
 
     def add_arguments(self, parser: Any) -> None:
         parser.add_argument("lane")

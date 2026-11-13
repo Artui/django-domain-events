@@ -8,12 +8,13 @@ from datetime import datetime
 class LanePause:
     """One recorded pause of a lane: a relay's after a deferral, or an operator's.
 
-    Every relay serving the lane reads these records and claims nothing in it
-    while any of them holds, whoever wrote it. A relay writes its own when a
+    Every delivery path serving the lane, a relay and ``deliver_pending()``
+    alike, reads these records and claims nothing in it while any of them
+    holds, whoever wrote it. A relay writes its own when a
     receiver defers and deletes it when the pause ends or it stops;
     ``pause_lane`` writes one under the ``worker_id`` ``operator``, and
     ``resume_lane`` deletes every one of a lane. A relay that died without
-    returning leaves its record behind, and it holds the lane in every relay
+    returning leaves its record behind, and it holds the lane on every path
     until ``until`` passes, so before waiting it out, compare ``worker_id`` and
     ``paused_at`` against the processes running and lift a leftover with
     ``resume_lane``.
