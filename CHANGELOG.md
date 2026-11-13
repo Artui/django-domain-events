@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default, with no setting. A relay that dies while paused leaves its record, which now
   holds the lane in every relay until its `until` passes (up to
   `MAX_RECEIVER_RETRY_DELAY_SECONDS`); `resume_lane` lifts it at once.
+- **A lapsed lease now spends an attempt.** When a claim takes a `CLAIMED` row whose lease
+  ran out, it raises the row's `attempts` by one, and a row that reaches `max_attempts` that
+  way is marked `DEAD`, with `last_error` naming the lapsed lease and its receiver's
+  `on_failure` told once. Until now a receiver that killed its own process, with
+  `os._exit()` or a crash, was claimed and run forever. Every lapse counts: the rows a
+  relay killed with `SIGKILL` held, the one it was running included, and `site="task"`
+  rows whose message waited in the queue past its lease, which an undersized lease can now
+  dead-letter without their ever running. A row given back, or answered with `NotYet`,
+  spends nothing. See "A lapse spends an attempt" in the operations guide.
 
 ## [0.15.0] — 2026-11-13
 

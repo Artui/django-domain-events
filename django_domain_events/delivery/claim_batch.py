@@ -36,6 +36,25 @@ def claim_batch(
     a row can become visible "in the past"; a high-water mark would skip it
     forever.
 
+    A lapsed claim spends an attempt when it is claimed again: the worker that
+    held it is read as dead mid-delivery, so the row's ``attempts`` goes up by
+    one, and a row that reaches ``max_attempts`` that way is marked ``DEAD``
+    with ``last_error`` naming the lapsed lease, and its ``on_failure`` is told
+    after the claim commits
+    (``test_a_receiver_that_kills_its_relay_goes_dead_after_max_attempts_claims``).
+    A pending or failed row is not a lapse
+    (``test_a_claim_then_success_records_one_attempt``), nor is a row given
+    back by ``hand_back``, whose lease is the epoch
+    (``test_a_handed_back_claim_spends_no_attempt``). The row lock keeps two
+    relays from dead-lettering one row twice
+    (``test_two_relays_racing_a_lapse_to_dead_tell_on_failure_once``), and a
+    dead-lettered row takes no place in the batch: the claim goes on until it
+    fills ``limit`` or meets no lapse to dead-letter
+    (``test_a_claim_dead_lettering_lapses_still_fills_its_limit``). The lapsed
+    rows are raised by an UPDATE of their own rather than a CASE in one: MySQL
+    assigns a single-table UPDATE's columns left to right, so a CASE reading
+    ``status`` would read the value the same statement had just written.
+
     ``ignore_backoff`` claims rows whose retry is still scheduled. It exists for
     the test helper, which cannot wait out a jittered hour to observe a retry.
     It never claims a row whose due time is still ahead of ``now`` - a receiver
