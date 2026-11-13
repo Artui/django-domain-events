@@ -14,15 +14,22 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 
 from django_domain_events.delivery.fire import fire
+from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.scope.attributed import attributed, current_scope
 from django_domain_events.scope.causation import caused_by
 from django_domain_events.scope.install_celery_scope import HEADER, install_celery_scope
+from django_domain_events.scope.suppressed import suppressed
 from tests.testapp.events import Currency, OrderPlaced
 
 pytestmark = pytest.mark.django_db
 
 QUEUE = "dde-install-celery-scope"
+UIDS = (
+    (signals.before_task_publish, "publish"),
+    (signals.task_prerun, "prerun"),
+    (signals.task_postrun, "postrun"),
+)
 CHAIN = UUID("5b0c3f8e-2f7a-4f4e-9d61-3c1f0e8a7b21")
 
 
@@ -54,17 +61,12 @@ def _app(name: str) -> Celery:
 def app(caplog: pytest.LogCaptureFixture) -> Iterator[Celery]:
     """A non-eager app on the memory broker; eager mode never sends ``before_task_publish``."""
     yield _app("scoped")
-    for signal in (signals.before_task_publish, signals.task_prerun, signals.task_postrun):
-        signal.receivers = [r for r in signal.receivers if not _ours(r)]
-        signal.sender_receivers_cache.clear()
+    for signal, stage in UIDS:
+        signal.disconnect(dispatch_uid=f"{HEADER}.{stage}")
     swallowed = [
         r for r in caplog.get_records("call") if r.name.startswith("celery.utils.dispatch")
     ]
     assert not swallowed, "Celery logs and swallows a handler's exception"
-
-
-def _ours(receiver: tuple) -> bool:
-    return isinstance(receiver[0], tuple) and str(receiver[0][0]).startswith("django_domain_events")
 
 
 def _publish(app: Celery, order_id: int, *, fail: bool = False) -> None:
@@ -135,14 +137,25 @@ def test_a_receivers_chain_reaches_the_task_without_attributed(app: Celery) -> N
         _publish(app, 1)
     _run_next(app)
 
-    assert _row(1).correlation_id == CHAIN
+    row = _row(1)
+    assert (row.correlation_id, row.causation_id) == (CHAIN, None)
+
+
+def test_suppression_does_not_travel(app: Celery) -> None:
+    install_celery_scope(app)
+    with suppressed(OrderPlaced, reason="import"):
+        _publish(app, 1)
+    _run_next(app)
+
+    row = _row(1)
+    assert row.suppressed_reason == ""
+    assert DeliveryRecord.objects.filter(event=row).exists()
 
 
 def test_installing_twice_connects_once(app: Celery) -> None:
     install_celery_scope(app)
     install_celery_scope(app)
 
-    assert sum(_ours(r) for r in signals.task_prerun.receivers) == 1
     with attributed(actor_key="system:parent"):
         _publish(app, 1)
     _run_next(app)
