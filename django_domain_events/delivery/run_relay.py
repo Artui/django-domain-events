@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import contextvars
 import itertools
 import logging
 import time as time_module
 from collections.abc import Callable, Collection, Mapping
+from contextlib import suppress
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -15,10 +17,13 @@ from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.deliver import dispatch_one
 from django_domain_events.delivery.hand_back import hand_back
+from django_domain_events.delivery.lane_rate import LaneRate
+from django_domain_events.delivery.lane_workers import LaneWorkers, Result
 from django_domain_events.delivery.utils import (
     OnDeferral,
     lane_claim_sizes,
     lane_pauses,
+    lane_threads,
     served_lanes,
 )
 from django_domain_events.delivery.wake import wait_for_work
@@ -38,6 +43,10 @@ logger = logging.getLogger(__name__)
 # recovered a relay that crashed on the claim, climbs to five minutes.
 _CLAIM_BACKOFF_CAP_SECONDS = 15.0
 
+# How stale a threaded lane's view of the shared pauses may grow: it refills every
+# latency/N, which would otherwise read LanePauseRecord dozens of times a second.
+_PAUSE_READ_SECONDS = 1.0
+
 
 def run_relay(
     *,
@@ -52,6 +61,8 @@ def run_relay(
     batch_size: int | None = None,
     lane_batch_sizes: Mapping[str, int] | None = None,
     monotonic: Callable[[], float] = time_module.monotonic,
+    lane_concurrency: Mapping[str, int] | None = None,
+    lane_rates: Mapping[str, float] | None = None,
 ) -> dict[DeliveryStatus, int]:
     """Claim and deliver until ``passes`` is spent, ``stop`` says so, or forever.
 
@@ -104,9 +115,32 @@ def run_relay(
     ``None`` included. A failed claim ends the pass, since a database refusing
     one lane is refusing them all.
 
-    Concurrency is the number of processes. Deliveries run one at a time within
-    a relay, so a lane that must go faster runs more relays with the same
-    ``lane``; nothing here limits the rate across them.
+    Deliveries run one at a time within a relay unless ``lane_concurrency``
+    gives its lane worker threads: ``{lane: N}`` delivers up to N rows of it at
+    once, each thread on its own connection, so the process holds 1 + N. This
+    thread then claims, pauses, sweeps and waits, and each claim takes only as
+    many rows as there are idle workers, excluding the rows still in flight, so
+    no row waits on its lease behind another. ``lane_rates`` caps a lane's
+    starts at ``{lane: R}`` a second in this process, R a float, so 0.5 is one
+    every two seconds; it counts every start, a task enqueue included, and runs
+    the lane on threads even at one worker, claiming a row at a time. A rate is
+    per process, so N relays in the lane start up to N x R a second. Each row
+    runs in a copy of the context this call was made in, so a ``ContextVar``
+    set before it, as ``RELAY_STARTUP`` may, is seen by every row and a value one
+    row sets is seen by no other. A lane with threads or a rate must be the only
+    lane this relay serves, and takes no ``batch_size`` or ``lane_batch_sizes``,
+    since a prefetched row waiting its turn would spend its lease: both are
+    refused at start. One worker and no rate is the loop described above.
+
+    On a threaded lane a ``RetryAfter`` deferral pauses the lane as above: no
+    row is started after it, the claimed rows not yet started are handed back,
+    and the rows already running record their own outcomes. The shared pauses
+    are read at most once a second rather than once a pass, so a ``pause_lane``
+    takes hold within a second plus the deliveries in flight. ``stop``, a spent
+    ``passes`` or a worker's ``BaseException`` stops the claims, hands back the
+    rows not yet started, and waits for those in flight until the last of their
+    leases ends; a worker's ``BaseException`` is then re-raised here. One pass is
+    one claim, or one wait when there is nothing to claim or no idle worker.
 
     ``batch_size`` sizes this relay's claims in place of ``BATCH_SIZE``, which
     also sizes prune batches and requeue chunks. ``lane_batch_sizes`` sizes the
@@ -182,6 +216,24 @@ def run_relay(
         )
     lanes = served_lanes(lane)
     size_of = lane_claim_sizes(lanes, batch_size=batch_size, lane_batch_sizes=lane_batch_sizes)
+    threads = lane_threads(
+        lanes,
+        lane_concurrency=lane_concurrency,
+        lane_rates=lane_rates,
+        batch_size=batch_size,
+        lane_batch_sizes=lane_batch_sizes,
+    )
+    if threads is not None:
+        return _ThreadedLane(
+            *threads,
+            worker_id=worker_id,
+            now=now,
+            sleep=sleep,
+            wait=wait or (lambda t: wait_for_work(t, sleep=sleep)),
+            stop=stop,
+            monotonic=monotonic,
+            connection=connection,
+        ).run(passes)
     poll = setting("POLL_SECONDS")
     sweep = setting("RELAY_PRUNE")
     sweep_every = setting("RELAY_PRUNE_SECONDS")
@@ -283,6 +335,180 @@ def run_relay(
                 )
     _forget_pauses_or_survive(paused, worker_id, connection)
     return counts
+
+
+class _ThreadedLane:
+    """One lane delivered by worker threads: this thread claims, pauses, sweeps and waits.
+
+    Claims take only the free workers (one under a rate), so no row waits on its lease."""
+
+    def __init__(
+        self,
+        lane: str,
+        n: int,
+        rate: float | None,
+        *,
+        worker_id: str,
+        now: Callable[[], datetime],
+        sleep: Callable[[float], None],
+        wait: Callable[[float], bool],
+        stop: Callable[[], bool],
+        monotonic: Callable[[], float],
+        connection: Any,
+    ) -> None:
+        self.lane = lane
+        self.worker_id = worker_id
+        self.now = now
+        self.sleep = sleep
+        self.wait = wait
+        self.stop = stop
+        self.monotonic = monotonic
+        self.connection = connection
+        self.poll = setting("POLL_SECONDS")
+        self.lease = timedelta(
+            seconds=registry.claim_lease_seconds(lane, default=setting("LEASE_SECONDS"))
+        )
+        self.gate = None if rate is None else LaneRate(rate, monotonic)
+        self.counts: dict[DeliveryStatus, int] = {}
+        self.held: dict[int, datetime] = {}
+        self.paused_until: datetime | None = None
+        self.recorded = False
+        self.shared_until: datetime | None = None
+        self.read_at: float | None = None
+        self.sweep = setting("RELAY_PRUNE")
+        self.sweep_every = setting("RELAY_PRUNE_SECONDS")
+        self.swept_at = monotonic()
+        self.failed_claims = 0
+        self.workers = LaneWorkers(lane, n, worker_id, contextvars.copy_context())
+
+    def run(self, passes: int | None) -> dict[DeliveryStatus, int]:
+        """Feed the workers until ``passes`` is spent, ``stop`` says so or a worker raises."""
+        try:
+            for _ in itertools.count() if passes is None else range(passes):
+                if self.stop() or self.workers.failed:
+                    break
+                self._pass()
+        except BaseException:
+            with suppress(BaseException):
+                self.workers.stop(time_module.monotonic())
+            raise
+        self.workers.stop(self._deadline())
+        self._collect(self.workers.results())
+        if self.recorded:
+            self._forget()
+        return self.counts
+
+    def _pass(self) -> None:
+        """One claim for the free workers, or one wait when there is nothing to claim."""
+        self._collect(self.workers.results())
+        slots = self.workers.idle_slots()
+        if self._paused() or not slots:
+            self._idle()
+            return
+        delay = 0.0 if self.gate is None else self.gate.wait_time()
+        if delay > 0:
+            self.sleep(min(delay, self.poll))
+            return
+        claimed_at = in_project_time(self.now())
+        try:
+            ids = claim_batch(
+                worker_id=self.worker_id,
+                now=claimed_at,
+                lease=self.lease,
+                limit=slots if self.gate is None else 1,
+                lane=self.lane,
+                exclude_ids=sorted(self.held),
+            )
+        except Exception as exc:
+            self.failed_claims += 1
+            logger.exception("relay %s could not claim", self.worker_id)
+            _close_after(exc, self.connection, self.worker_id)
+            self.sleep(
+                backoff(
+                    self.failed_claims, base=self.poll, cap=_CLAIM_BACKOFF_CAP_SECONDS, jitter=1.0
+                ).total_seconds()
+            )
+            return
+        self.failed_claims = 0
+        if not ids:
+            self._idle()
+            return
+        self._give(ids, claimed_at)
+
+    def _give(self, ids: list[int], claimed_at: datetime) -> None:
+        """Start each claimed row; a stop, a pause or a dead worker hands back the rest."""
+        for index, delivery_id in enumerate(ids):
+            self._collect(self.workers.results())
+            if self.stop():
+                _hand_back_or_survive(ids[index:], self.worker_id, claimed_at, self.connection)
+                return
+            if self._paused():
+                _set_aside_or_survive(
+                    ids[index:], self.lane, self.worker_id, claimed_at, self.connection
+                )
+                return
+            try:
+                self.workers.give(delivery_id)
+            except RuntimeError:
+                _hand_back_or_survive(ids[index:], self.worker_id, claimed_at, self.connection)
+                return
+            self.held[delivery_id] = claimed_at
+            if self.gate is not None:
+                self.gate.started()
+
+    def _collect(self, results: list[Result]) -> None:
+        """Count finished rows and pause the lane on a deferral a worker heard."""
+        for delivery_id, outcome, deferral in results:
+            self.held.pop(delivery_id, None)
+            if outcome is not None:
+                self.counts[outcome] = self.counts.get(outcome, 0) + 1
+            if deferral is not None:
+                paused_at = in_project_time(self.now())
+                until = paused_at + timedelta(seconds=deferral[1])
+                if self.paused_until is None or until > self.paused_until:
+                    self.paused_until = until
+                    self.recorded = (
+                        _record_pause_or_survive(
+                            self.lane, paused_at, until, self.worker_id, self.connection
+                        )
+                        or self.recorded
+                    )
+
+    def _paused(self) -> bool:
+        """Whether this relay's pause or any relay's recorded one holds the lane now."""
+        moment = in_project_time(self.now())
+        if self.read_at is None or self.monotonic() - self.read_at > _PAUSE_READ_SECONDS:
+            self.read_at = self.monotonic()
+            shared = _read_pauses_or_survive([self.lane], moment, self.worker_id, self.connection)
+            if shared is not None:
+                self.shared_until = shared.get(self.lane)
+                if self.recorded and self.lane not in shared:
+                    self.paused_until = None
+                    self._forget()
+        held = (self.paused_until, self.shared_until)
+        return any(until is not None and until > moment for until in held)
+
+    def _forget(self) -> None:
+        """Delete this relay's record of a pause that no longer holds."""
+        self.recorded = False
+        _forget_pauses_or_survive([self.lane], self.worker_id, self.connection)
+
+    def _idle(self) -> None:
+        """Wait for a worker to finish, or, with none busy, sweep and wait for work."""
+        if self.held:
+            self._collect(self.workers.results(timeout=self.poll))
+            return
+        if self.sweep and self.monotonic() - self.swept_at >= self.sweep_every:
+            self.swept_at = self.monotonic()
+            _sweep_or_survive(self.worker_id, self.connection, self.stop)
+        _wait_or_survive(self.wait, self.poll, self.worker_id, self.connection, self.sleep)
+
+    def _deadline(self) -> float:
+        """The real monotonic moment the last in-flight row's lease ends."""
+        if not self.held:
+            return time_module.monotonic()
+        remaining = max(self.held.values()) + self.lease - in_project_time(self.now())
+        return time_module.monotonic() + max(0.0, remaining.total_seconds())
 
 
 def _wait_or_survive(
