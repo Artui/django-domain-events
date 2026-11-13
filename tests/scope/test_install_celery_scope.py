@@ -197,6 +197,18 @@ def test_a_task_that_raises_still_exits_the_scope(app: Celery) -> None:
     assert _row(2).actor_key == ""
 
 
+def test_a_finished_task_leaves_no_token_behind(app: Celery) -> None:
+    """A long-running worker would otherwise hold one token per task it ever ran."""
+    install_celery_scope(app)
+    with attributed(actor_key="system:parent"):
+        _publish(app, 1, fail=True)
+        _publish(app, 2)
+    _run_next(app)
+    _run_next(app)
+
+    assert sys.modules["django_domain_events.scope.install_celery_scope"]._tokens == {}
+
+
 def test_the_package_root_does_not_import_celery() -> None:
     """The export sits at the root, and the [celery] extra must stay optional."""
     code = "import sys, django_domain_events; print('celery' in sys.modules)"
