@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- A delivery whose receiver finishes after its lease ran out, while the row is still its
+  own, now logs one WARNING naming the worker, the delivery, the receiver and the overrun in
+  seconds. Another relay could have claimed the row meanwhile; the outcome is unchanged. Raise
+  `lease_seconds=` on that receiver.
+
 ### Changed
 - A `NotYet` answer is now logged at DEBUG instead of INFO: it says the work is scheduled,
   which an operator does not act on, and a receiver answering it on every pass wrote tens of
