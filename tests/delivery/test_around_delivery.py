@@ -1018,3 +1018,17 @@ def test_exit_sees_a_moot_and_on_failure_is_not_told(settings: Any) -> None:
     assert deliver_one(row.pk) == DeliveryStatus.CANCELLED
     assert [(exc_type, exc) for exc_type, exc, _ in _exits()] == [(Moot, answer)]
     assert told == []
+
+
+def test_exit_sees_a_not_yet_the_receiver_raised(settings: Any) -> None:
+    answer = NotYet(timezone.now() + timedelta(hours=1), reason="not yet")
+
+    def later(event: Unheard) -> None:
+        raise answer
+
+    receiver(Unheard, key="probe.later")(later)
+    _hook(settings, "recording")
+    row = _owed("probe.later")
+
+    assert deliver_one(row.pk) == DeliveryStatus.PENDING
+    assert [(exc_type, exc) for exc_type, exc, _ in _exits()] == [(NotYet, answer)]
