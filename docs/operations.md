@@ -656,7 +656,9 @@ widening them, so a stale id list cannot reach another event's work.
 Called inside a transaction, it joins it: the cancel commits with the change that
 made the work moot, or not at all. A cancelled row writes `completed_at` and not
 `succeeded_at`, so it is no evidence for
-[`quiet_receivers`](introspection.md#quiet-receivers) that a receiver works.
+[`quiet_receivers`](introspection.md#quiet-receivers) that a receiver works. A
+receiver that finds its work moot only when it runs raises
+[`Moot`](scheduling.md#found-moot-when-it-runs-moot), which settles its row the same way.
 
 What else reads it:
 

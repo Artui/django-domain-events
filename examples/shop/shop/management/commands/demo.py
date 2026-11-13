@@ -559,7 +559,7 @@ class Command(BaseCommand):
         print(
             f"   open order:      {open_order.status}, due again at {open_order.due_at.isoformat()}"
         )
-        check("moot work is an ordinary success", cancelled.status, "succeeded")
+        check("moot work found when it runs is settled cancelled", cancelled.status, "cancelled")
         check("and sends nothing", SentEmail.objects.count(), emails)
         check(
             "NotYet moves the open order's reminder past the quiet period, spending no attempt",

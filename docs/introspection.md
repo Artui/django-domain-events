@@ -175,7 +175,8 @@ climbing, while one wedged receiver has a backlog and everything else fine.
 | `receivers` | Per-receiver backlog, worst first, omitting the ones with nothing owed, dead or scheduled. Each carries its own `owed`, `scheduled`, `claimed`, `dead` and `oldest_owed_at`; one with only scheduled work sorts after every receiver that is behind |
 | `lanes` | The same backlog split by [lane](operations.md#lanes-a-relay-per-kind-of-work), worst first, ranked as `receivers` is. Every lane a relay can serve is listed, the default and each declared one, zeros included, so a dashboard keeps one series per lane. Each `LaneBacklog` carries its own `owed`, `scheduled`, `claimed`, `dead` and `oldest_owed_at`, and `pauses`: a `LanePause` per relay holding the lane paused after a [deferral](delivery.md#the-pause-is-per-process), with its `worker_id`, `paused_at` and `until` |
 
-A [cancelled](operations.md#cancel-owed-work) delivery is settled, so it appears
+A cancelled delivery, [withdrawn](operations.md#cancel-owed-work) or found moot
+by its receiver, is settled, so it appears
 in none of these: not owed, not scheduled and not dead. An outbox holding only
 cancelled work reads as drained.
 
@@ -353,7 +354,8 @@ Add `django.contrib.admin` and both models appear, read-only, with actions.
   owed per event, **Replay selected events**, and **Cancel owed deliveries of
   selected events**.
 - **Delivery records** - the dead-letter queue, filterable by status and
-  receiver - `cancelled` included, so withdrawn work can be listed on its own -
+  receiver - `cancelled` included, so moot work, withdrawn or found when it ran, can be
+  listed on its own -
   with **Requeue selected dead deliveries** and **Cancel selected deliveries**.
   Each row shows its
   target, and the search covers the receiver key, the target and the last error,

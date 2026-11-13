@@ -44,11 +44,12 @@ event with no durable deliveries - nothing durable listens, or it was recorded i
 [`suppressed()`](scope.md) - is consumed as soon as it commits, so under either
 `Retention` policy its row goes at the next prune, suppression reason and all.
 
-A [cancelled](operations.md#cancel-owed-work) delivery counts as consumed under
-`Retention.SUCCEEDED` as well as under `Retention.SETTLED`. It is not a success -
-the receiver never ran - but it was withdrawn on purpose: nothing failed, nothing
-is left to inspect or requeue, and every row of the event is done, so holding the
-event for the window would keep it for no reader.
+A cancelled delivery counts as consumed under `Retention.SUCCEEDED` as well as
+under `Retention.SETTLED`, whether it was [withdrawn](operations.md#cancel-owed-work)
+before it ran or its receiver found it moot and raised
+[`Moot`](scheduling.md#found-moot-when-it-runs-moot). It is not a success - the work was not done - but it was
+moot: nothing failed, nothing is left to inspect or requeue, and every row of the
+event is done, so holding the event for the window would keep it for no reader.
 
 A window of its own may be longer than `RETENTION_DAYS` as well as shorter: the
 default is a default, not a ceiling. It has to be a whole number of seconds, from

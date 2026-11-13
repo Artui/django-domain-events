@@ -27,6 +27,7 @@ Everything below is exported from `django_domain_events` directly.
 ::: django_domain_events.delivery.permanent_failure.PermanentFailure
 ::: django_domain_events.delivery.retry_after.RetryAfter
 ::: django_domain_events.delivery.not_yet.NotYet
+::: django_domain_events.delivery.moot.Moot
 ::: django_domain_events.delivery.wake.notify_relay
 
 The hook around each durable attempt is a setting rather than a symbol: see

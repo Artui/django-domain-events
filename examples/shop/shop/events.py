@@ -21,6 +21,7 @@ from django_domain_events import (
     ON_COMMIT,
     AnyEvent,
     DeliveryContext,
+    Moot,
     NotYet,
     PermanentFailure,
     Retention,
@@ -359,8 +360,9 @@ def chase_unpaid_invoice(evt: InvoiceSent, ctx: DeliveryContext) -> None:
     differently:
 
     - **The order was cancelled**, so there is nothing to chase. That is moot
-      work, and returning is an ordinary success: the delivery ran and its
-      work is done.
+      work, found when it ran: `Moot` settles the row `cancelled`, which is
+      neither a success nor a failure, so success counts and
+      `quiet_receivers()` are not fooled by a reminder that sent nothing.
     - **The customer heard from us in the last three days**, so a reminder now
       would be one email too many. That is work not due yet, and returning
       would lose it - nothing would ever send the reminder. `NotYet` moves the
@@ -383,7 +385,7 @@ def chase_unpaid_invoice(evt: InvoiceSent, ctx: DeliveryContext) -> None:
 
     order = Order.objects.select_related("customer").get(pk=evt.order_id)
     if order.cancelled:
-        return
+        raise Moot("the order was cancelled")
     to = order.customer.email or "nobody@example.com"
     last = SentEmail.objects.filter(to=to).order_by("-sent_at").first()
     if last is not None and ctx.due_at is not None:
