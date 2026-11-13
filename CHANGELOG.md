@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `RELAY_STARTUP` setting: a dotted path to a callable that `deliver_events` calls once per
+  process with `worker_id` and `lanes`, after validating its options and before its first
+  claim, with `--once` and as a relay. It is where per-process setup such as feature flags
+  goes, so a project no longer copies the command to add it. An exception from it stops the
+  command before anything is claimed. `run_relay()`, `deliver_pending()` and `drain_outbox()`
+  called from Python do not call it.
+
 ### Changed
 - The API reference's docstrings are restored.
 - The operations and scope pages say when to choose the Celery backend, that `deliver_events`

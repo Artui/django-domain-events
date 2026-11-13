@@ -28,6 +28,31 @@ Run as many as you like on Postgres. On SQLite, run exactly one.
 and never let two passes overlap. For a single relay in development,
 `run_relay(..., allow_unsafe_concurrency=True)` starts it from Python.
 
+### Setting up the process before it delivers
+
+A project that needs per-process setup before the first delivery, such as
+loading feature flags as a Celery worker does in `worker_process_init`, names a
+callable in [`RELAY_STARTUP`](settings.md#relay_startup):
+
+```python
+DJANGO_DOMAIN_EVENTS = {"RELAY_STARTUP": "myproject.relay.startup"}
+```
+
+```python
+def startup(*, worker_id: str, lanes: list[str]) -> None:
+    load_feature_flags()
+```
+
+`deliver_events` calls it once per process, on the main thread, after it has
+validated its options and resolved the worker id and lanes, and before the first
+claim, with `--once` and as a relay alike. An exception from it stops the command
+before anything is claimed, so a process never starts half set up. A relay run on
+SQLite refuses to start after it has run.
+
+It is the command's hook, not the delivery functions': `run_relay()`,
+`deliver_pending()` and `drain_outbox()` called from Python do not call it. Code
+that starts them does its own setup first.
+
 ### Lanes: a relay per kind of work
 
 One relay delivers one row at a time. A receiver that takes a second per

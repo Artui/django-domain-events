@@ -29,6 +29,7 @@ DEFAULTS: dict[str, Any] = {
     "RELAY_PRUNE_SECONDS": 60,
     "TASK_BACKEND": None,
     "AROUND_DELIVERY": None,
+    "RELAY_STARTUP": None,
 }
 
 
@@ -59,4 +60,10 @@ def get_codec() -> PayloadCodec:
 def get_around_delivery() -> Callable[[DeliveryContext], AbstractContextManager[Any]] | None:
     """The configured ``AROUND_DELIVERY`` factory, or None when there is none."""
     path = setting("AROUND_DELIVERY")
+    return None if path is None else import_string(path)
+
+
+def get_relay_startup() -> Callable[..., object] | None:
+    """The configured ``RELAY_STARTUP`` callable, or None when there is none."""
+    path = setting("RELAY_STARTUP")
     return None if path is None else import_string(path)

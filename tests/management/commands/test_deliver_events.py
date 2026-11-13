@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import signal
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 
@@ -14,6 +14,7 @@ from django.db import connection, transaction
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.fire import fire
 from django_domain_events.management.commands import deliver_events
+from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_receiver import RegisteredReceiver
 from tests.conftest import receiver_registered, receiver_replaced
@@ -371,3 +372,95 @@ def test_a_signal_mid_batch_hands_back_the_rest(order: OrderPlaced, record: list
         worker_id="w2", now=datetime.now(timezone.utc), lease=timedelta(minutes=5), limit=10
     )
     assert len(taken) == 3, "the rest of the batch was not handed back"
+
+
+_steps: list[tuple[str, object]] = []
+
+
+def startup(**kwargs: object) -> None:
+    _steps.append(("startup", kwargs))
+
+
+def failing_startup(**kwargs: object) -> None:
+    raise RuntimeError("flags did not load")
+
+
+@pytest.fixture
+def steps() -> Iterator[list[tuple[str, object]]]:
+    _steps.clear()
+    yield _steps
+    _steps.clear()
+
+
+@pytest.mark.parametrize(
+    ("argv", "name"),
+    [(["--passes", "1"], "run_relay"), (["--once"], "deliver_pending")],
+    ids=["relay", "once"],
+)
+def test_relay_startup_runs_once_before_the_first_claim(
+    argv: list[str],
+    name: str,
+    monkeypatch: pytest.MonkeyPatch,
+    settings,
+    steps: list[tuple[str, object]],
+) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_STARTUP": f"{__name__}.startup"}
+
+    def stand_in(**kwargs: object) -> dict:
+        steps.append(("claim", None))
+        return {}
+
+    monkeypatch.setattr(deliver_events, name, stand_in)
+
+    call_command(
+        "deliver_events",
+        *argv,
+        "--worker-id",
+        "box-1",
+        "--lane",
+        "a",
+        "--lane",
+        "b",
+        stdout=StringIO(),
+    )
+
+    assert steps == [("startup", {"worker_id": "box-1", "lanes": ["a", "b"]}), ("claim", None)]
+
+
+def test_relay_startup_is_handed_the_default_lane_and_worker_id(
+    monkeypatch: pytest.MonkeyPatch, settings, steps: list[tuple[str, object]]
+) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_STARTUP": f"{__name__}.startup"}
+    _captured(monkeypatch, "deliver_pending")
+
+    call_command("deliver_events", "--once", stdout=StringIO())
+
+    kwargs = steps[0][1]
+    assert isinstance(kwargs, dict)
+    assert kwargs["lanes"] == ["default"]
+    assert re.fullmatch(r".+:\d+", str(kwargs["worker_id"]))
+
+
+def test_an_exception_from_relay_startup_stops_the_command_before_any_claim(
+    order: OrderPlaced, settings
+) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_STARTUP": f"{__name__}.failing_startup"}
+    with transaction.atomic():
+        fire(order)
+
+    with pytest.raises(RuntimeError, match="flags did not load"):
+        call_command("deliver_events", "--once", stdout=StringIO())
+
+    rows = set(DeliveryRecord.objects.values_list("claimed_by", "attempts"))
+    assert rows == {("", 0)}, "the command claimed rows anyway"
+
+
+def test_relay_startup_does_not_run_for_an_invalid_command(
+    settings, steps: list[tuple[str, object]]
+) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_STARTUP": f"{__name__}.startup"}
+
+    with pytest.raises(CommandError):
+        call_command("deliver_events", "--limit", "1")
+
+    assert steps == []

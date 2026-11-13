@@ -31,6 +31,7 @@ are changing.
 | `RELAY_PRUNE_SECONDS` | `60` | The most often a relay sweeps, in seconds above zero. |
 | `TASK_BACKEND` | `None` | Dotted path, or a `{"BACKEND": ..., **options}` mapping. |
 | `AROUND_DELIVERY` | `None` | Dotted path to a callable taking a `DeliveryContext` and returning a context manager, entered around each durable attempt. |
+| `RELAY_STARTUP` | `None` | Dotted path to a callable taking `worker_id` and `lanes`, called once by `deliver_events` before its first claim. |
 
 ## The ones worth thinking about
 
@@ -233,6 +234,22 @@ level (`SET search_path`, `SET ROLE`) and reset it on exit, rather than with
 
 The rules, and what it never wraps, are in
 [A hook around each delivery](delivery.md#a-hook-around-each-delivery).
+
+### `RELAY_STARTUP`
+
+A dotted path to a callable that `deliver_events` calls once per process, on the
+main thread, with the keyword arguments `worker_id: str` and `lanes: list[str]`,
+after its options are validated and before its first claim, with `--once` and as
+a relay. Its return value is ignored. An exception from it propagates and stops
+the command before anything is claimed.
+
+```python
+"RELAY_STARTUP": "myproject.relay.startup",
+```
+
+Only the command calls it: `run_relay()`, `deliver_pending()` and
+`drain_outbox()` called from Python do not. See
+[Setting up the process before it delivers](operations.md#setting-up-the-process-before-it-delivers).
 
 ## `USE_TZ = False`
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
+
 from django_domain_events.codecs.dacite_codec import DaciteCodec
 from django_domain_events.codecs.dataclass_codec import DataclassCodec
-from django_domain_events.settings import get_codec, setting
+from django_domain_events.settings import get_codec, get_relay_startup, setting
 
 
 def test_defaults_apply_when_nothing_is_configured() -> None:
@@ -49,3 +51,12 @@ def test_the_wake_defaults() -> None:
 def test_the_relay_sweep_is_on_and_throttled_to_a_minute_by_default() -> None:
     assert setting("RELAY_PRUNE") is True
     assert setting("RELAY_PRUNE_SECONDS") == 60
+
+
+def test_relay_startup_is_unset_by_default() -> None:
+    assert get_relay_startup() is None
+
+
+def test_a_configured_relay_startup_is_imported(settings) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_STARTUP": "os.getpid"}
+    assert get_relay_startup() is os.getpid

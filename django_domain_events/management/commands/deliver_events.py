@@ -11,6 +11,7 @@ from django.core.management.base import BaseCommand, CommandError, OutputWrapper
 
 from django_domain_events.delivery.deliver import deliver_pending
 from django_domain_events.delivery.run_relay import run_relay
+from django_domain_events.settings import get_relay_startup
 from django_domain_events.types.registered_receiver import DEFAULT_LANE
 
 # What a container runtime sends to ask for a stop, and what Ctrl-C sends.
@@ -71,6 +72,9 @@ class Command(BaseCommand):
                 "it is stopped. Bound a relay with --passes, or size its claims with "
                 "--batch-size."
             )
+        startup = get_relay_startup()
+        if startup is not None:
+            startup(worker_id=worker_id, lanes=list(lanes))
         if options["once"]:
             counts = deliver_pending(
                 limit=options["limit"],
