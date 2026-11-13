@@ -59,10 +59,11 @@ def claim_batch(
     assigns a single-table UPDATE's columns left to right, so a CASE reading
     ``status`` placed after it would read the value just written.
 
-    Each pass of that refill commits on its own. If a later pass raises, the
-    rows the earlier ones took are handed back, as ``hand_back`` gives them,
-    and the exception propagates; the rows they dead-lettered are reported
-    whichever way the claim ends
+    Each pass of that refill commits on its own. If a later pass raises an
+    ``Exception``, the rows the earlier ones took are handed back, as
+    ``hand_back`` gives them, and it propagates; a ``BaseException``, such as a
+    second signal's ``SystemExit``, leaves them to their lease. The rows they
+    dead-lettered are reported whichever way the claim ends
     (``test_a_refill_that_raises_hands_back_its_rows_and_reports_its_dead``).
     ``on_failure`` is told outside the claim's transaction
     (``test_on_failure_is_told_outside_the_claims_transaction``).

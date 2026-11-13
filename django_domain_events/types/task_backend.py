@@ -10,9 +10,10 @@ class TaskBackend(Protocol):
     is the whole reason the execution site is a separate knob from the timing:
     a queue is only ever an answer to the second question.
 
-    The backend may lose an enqueue without consequence. The delivery row is the
-    record, so anything dropped is reclaimed when the lease lapses - which is
-    what makes a lossy queue safe here, and what keeps this a small protocol.
+    The backend may lose an enqueue at the cost of one attempt. The delivery row
+    is the record, so anything dropped is reclaimed when the lease lapses, and
+    that lapse spends an attempt - which is what makes a lossy queue safe here,
+    and what keeps this a small protocol.
 
     It may also deliver one twice, or late, which is what ``acks_late`` and a
     broker's visibility timeout do. The message carries the claim the row was

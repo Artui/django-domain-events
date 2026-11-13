@@ -256,8 +256,8 @@ row by the time the hook runs.
 A worker whose lease lapsed does not call it, and nor does the claim that takes
 the row back while attempts remain: that lapse
 [spends an attempt](operations.md#a-lapse-spends-an-attempt) silently. The claim
-that takes it at its last attempt dead-letters it and calls the hook once, with
-status `dead`. A hook that raises is logged and swallowed, because a
+that finds it at its last attempt dead-letters it instead and calls the hook
+once, with status `dead`. A hook that raises is logged and swallowed, because a
 failure path that fails leaves the operator a traceback about logging instead of
 about the delivery.
 
