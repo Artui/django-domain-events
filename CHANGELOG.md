@@ -14,8 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   goes, so a project no longer copies the command to add it. An exception from it stops the
   command before anything is claimed. `run_relay()`, `deliver_pending()` and `drain_outbox()`
   called from Python do not call it.
+- A delivery whose receiver finishes after its lease ran out, while the row is still its
+  own, now logs one WARNING naming the worker, the delivery, the receiver and the overrun in
+  seconds. Another relay could have claimed the row meanwhile; the outcome is unchanged. Raise
+  `lease_seconds=` on that receiver.
 
 ### Changed
+- A `NotYet` answer is now logged at DEBUG instead of INFO: it says the work is scheduled,
+  which an operator does not act on, and a receiver answering it on every pass wrote tens of
+  thousands of lines a week. The `RetryAfter` lane-pause line stays at INFO.
+- The relay's sweep line now reads `relay <id> pruned N events and M delivery rows in S s`,
+  so a prune that grows slow, or deletes many delivery rows, shows in the log.
 - The API reference's docstrings are restored.
 - The operations and scope pages say when to choose the Celery backend, that `deliver_events`
   refuses to run continuously on SQLite, and that a nested `attributed()` block replaces the

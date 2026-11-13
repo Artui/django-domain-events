@@ -238,6 +238,15 @@ def _deliver_one(
                     receiver.key,
                 )
                 transaction.set_rollback(True, using=write_alias())
+            elif fence.lease_expires_at is not None and acknowledged > fence.lease_expires_at:
+                logger.warning(
+                    "worker %s finished %s %.1f s past its lease; another relay could "
+                    "have claimed it meanwhile. Raise lease_seconds= on receiver %s",
+                    worker_id,
+                    delivery_id,
+                    (acknowledged - fence.lease_expires_at).total_seconds(),
+                    receiver.key,
+                )
     except Exception as exc:
         if committed:
             logger.exception(
@@ -347,6 +356,7 @@ class _Fence:
         # The owner this call believes it is, not the one the row now names.
         self.claimed_by = worker_id if worker_id is not None else delivery.claimed_by
         self.claimed_at = delivery.claimed_at
+        self.lease_expires_at = delivery.lease_expires_at
 
     def _owned(self) -> Any:
         from django_domain_events.models.delivery_record import DeliveryRecord
@@ -367,7 +377,10 @@ class _Fence:
     def extend_lease(self, now: datetime, seconds: int | None = None) -> bool:
         """Push the lease out to cover this delivery alone."""
         lease = timedelta(seconds=seconds if seconds is not None else setting("LEASE_SECONDS"))
-        return bool(self._owned().update(lease_expires_at=now + lease))
+        extended = bool(self._owned().update(lease_expires_at=now + lease))
+        if extended:
+            self.lease_expires_at = now + lease
+        return extended
 
     def write(self, **fields: Any) -> DeliveryStatus | None:
         """Record an outcome, or return ``None`` if the row is no longer ours."""
@@ -524,7 +537,7 @@ def _defer(
 
 def _reschedule(fence: _Fence, row: Any, exc: NotYet) -> DeliveryStatus | None:
     """Move a row its receiver answered with ``NotYet`` to the time it named."""
-    logger.info(
+    logger.debug(
         "receiver %s answered delivery %s with NotYet; it is due again at %s",
         row.receiver_key,
         row.pk,

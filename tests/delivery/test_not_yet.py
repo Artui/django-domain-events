@@ -10,6 +10,7 @@ from django.utils import timezone as django_timezone
 import django_domain_events
 from django_domain_events.declaration.receiver import receiver
 from django_domain_events.declaration.registry import registry
+from django_domain_events.delivery import deliver as deliver_module
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.deliver import deliver_one, deliver_pending
 from django_domain_events.delivery.drain_outbox import drain_outbox
@@ -277,3 +278,15 @@ def test_an_on_commit_receiver_raising_it_has_it_logged(caplog) -> None:
     assert EventRecord.objects.count() == 1
     assert DeliveryRecord.objects.count() == 0
     assert [r.exc_info[0] for r in caplog.records if r.exc_info] == [NotYet]
+
+
+def test_a_not_yet_is_logged_at_debug_and_not_at_info(caplog: pytest.LogCaptureFixture) -> None:
+    """The receiver saying the work is scheduled is not an event an operator acts on."""
+    _extended_to(_now() + timedelta(hours=24))
+    _fire()
+
+    with caplog.at_level("DEBUG", logger=deliver_module.logger.name):
+        drain_outbox()
+
+    noted = [r for r in caplog.records if "NotYet" in r.getMessage()]
+    assert [r.levelname for r in noted] == ["DEBUG"]
