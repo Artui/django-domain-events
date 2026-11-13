@@ -211,6 +211,8 @@ def _deliver_one(
         delivery_id=delivery.pk,
         due_at=delivery.due_at if delivery.due_at is not None else delivery.event.recorded_at,
         receiver_key=receiver.key,
+        occurred_at=delivery.event.occurred_at,
+        correlation_id=delivery.event.correlation_id,
     )
     around = _Around(context)
     committed = False

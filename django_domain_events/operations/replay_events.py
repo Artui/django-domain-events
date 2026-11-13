@@ -165,6 +165,8 @@ def _targets_now(receiver: RegisteredReceiver, record: Any, event_class: type) -
         actor_label=record.actor_label,
         scope=record.scope,
         receiver_key=receiver.key,
+        occurred_at=record.occurred_at,
+        correlation_id=record.correlation_id,
     )
     event = decode_payload(event_class, record.payload, record.version)
     return resolve_targets(receiver.key, receiver.targets, event, context)

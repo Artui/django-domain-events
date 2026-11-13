@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,3 +66,16 @@ class DeliveryContext:
     metric or a log line by, since the hook is handed this context and not the
     receiver. Blank only on a context built by hand. Optional and last for the
     same reason as ``target``."""
+
+    occurred_at: datetime | None = None
+    """When the event happened, as ``fire(occurred_at=)`` set it.
+
+    What an audit trail records, and what a ``NotYet`` receiver can bound its
+    own wait with: stop deferring once the event is older than it allows. None
+    only on a context built by hand. Optional and last for the same reason as
+    ``target``."""
+
+    correlation_id: UUID | None = None
+    """The correlation id the event was recorded with, or None if it had none.
+
+    Optional and last for the same reason as ``target``."""

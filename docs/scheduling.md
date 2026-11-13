@@ -234,6 +234,11 @@ row that runs after the moved time has nothing left to wait for, and
 `NotYet` refuses a time already come, so comparing against `ctx.due_at` alone
 would raise that refusal as an ordinary failure on every retry.
 
+A receiver that must not wait forever bounds its own wait with `ctx.occurred_at`,
+the time the event happened: stop answering `NotYet` once
+`timezone.now() - ctx.occurred_at` passes what the work tolerates. The library
+has no setting for this; the receiver decides.
+
 The relay writes `until` to the row's `available_at` and `due_at` together, sets
 it back to `pending`, and does nothing else:
 

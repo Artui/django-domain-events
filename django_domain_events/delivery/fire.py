@@ -141,6 +141,8 @@ def fire(
         actor_key=record.actor_key,
         actor_label=record.actor_label,
         scope=record.scope,
+        occurred_at=record.occurred_at,
+        correlation_id=record.correlation_id,
     )
 
     receivers = registry.receivers_for(type(event))
