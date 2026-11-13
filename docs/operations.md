@@ -509,7 +509,9 @@ relay runs `prune_events()` with its defaults, at most once per
 interval after it starts. Every relay does, whatever its `--lane`; a relay that
 is never idle does not; and `deliver_events --once` never does. A sweep that
 fails is logged and not retried before the next interval, and a stop request
-waits for at most one prune batch of a running sweep. Set
+waits for at most one prune batch of a running sweep. A sweep that deleted
+anything logs one INFO line, `relay <id> pruned N events and M delivery rows in
+S s`, so a prune growing slow, or deleting many delivery rows, shows. Set
 [`RELAY_PRUNE`](settings.md#relay_prune) to `False` if you schedule
 `prune_events` yourself, which is also what a `--once` deployment needs; what the
 sweep costs, and when to prefer the schedule, is in
@@ -869,9 +871,15 @@ check the names against the relays running.
 
 The relay logs at `WARNING` when a worker loses a delivery - either before
 running it, or after finishing work whose lease had already lapsed. The second
-names the receiver and suggests `lease_seconds=`, because that is the fix. It
-also logs every failed attempt it records, at `WARNING`, one line each - see
-[the failure log](delivery.md#the-failure-log).
+names the receiver and suggests `lease_seconds=`, because that is the fix. A
+worker that finishes past its lease while the row is still its own keeps the
+outcome, since nothing took the row, and logs one `WARNING`, `worker W finished
+D X.X s past its lease`, naming the receiver whose `lease_seconds=` to raise:
+another relay could have claimed the row meanwhile. It also logs every failed
+attempt it records, at `WARNING`, one line each - see
+[the failure log](delivery.md#the-failure-log). A receiver answering `NotYet`
+is logged at `DEBUG`, not `INFO`: the row is scheduled, and there is nothing to
+act on.
 
 ## A cron that works
 
