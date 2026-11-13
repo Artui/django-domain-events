@@ -716,7 +716,11 @@ def deliver_pending(
     are all read against it. It is how ``drain_outbox(now=...)`` moves a test
     forward to a receiver's due time. Only the claims read it; the attempt
     itself runs and is recorded on the real clock, since a receiver's
-    acknowledgement is a fact about when it ran.
+    acknowledgement is a fact about when it ran. A claim told ``now`` spends
+    no attempt on a lease it reads as lapsed and dead-letters nothing for one,
+    since a ``now`` past the real clock reads a lease stamped a moment ago as
+    lapsed; on the real clock a lapse spends an attempt as it does in the relay
+    (``test_a_real_clock_pass_dead_letters_a_lapse_at_its_last_attempt``).
     """
     if limit is not None and batch_size is not None:
         raise ValueError(
@@ -762,6 +766,7 @@ def deliver_pending(
                 ignore_backoff=ignore_backoff,
                 lane=this_lane,
                 exclude_ids=set_aside,
+                count_lapses=now is None,
             )
             claimed = claimed or bool(ids)
             unstarted = list(ids)

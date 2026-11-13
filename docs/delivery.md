@@ -253,8 +253,11 @@ and the `target` for a fan-out receiver - with the `attempt`, the `status` and
 the stored `error`, rather than the row itself, since another worker may own the
 row by the time the hook runs.
 
-A worker whose lease lapsed does not call it: whoever holds the row now will
-report its own outcome. A hook that raises is logged and swallowed, because a
+A worker whose lease lapsed does not call it, and nor does the claim that takes
+the row back while attempts remain: that lapse
+[spends an attempt](operations.md#a-lapse-spends-an-attempt) silently. The claim
+that takes it at its last attempt dead-letters it and calls the hook once, with
+status `dead`. A hook that raises is logged and swallowed, because a
 failure path that fails leaves the operator a traceback about logging instead of
 about the delivery.
 
@@ -283,10 +286,13 @@ deliberately not logged as a failed attempt: no attempt is counted, and no
 receiver failed.
 
 It follows the same rule as the hook: a worker whose lease lapsed recorded
-nothing and logs nothing, so the log never shows an attempt the row does not.
-An attempt whose connection was lost before anything could be written is not
-logged either, because nothing recorded it; the lease lapsing is what puts it
-back in the queue. See
+nothing and logs nothing. The claim that takes the row back
+[spends that attempt](operations.md#a-lapse-spends-an-attempt) without a line
+while attempts remain, so the row can show attempts the log does not; the one
+that dead-letters it logs `... on attempt 3 with a lapsed lease; the row is dead`
+on the same logger. An attempt whose connection was lost before anything could
+be written is not logged either, because nothing recorded it; the lease lapsing
+is what puts it back in the queue. See
 [Side effects inside the acknowledging transaction](operations.md#side-effects-inside-the-acknowledging-transaction).
 
 ## A hook around each delivery

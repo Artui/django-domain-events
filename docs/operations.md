@@ -332,8 +332,11 @@ Which lapses count:
 
 What does not count: a row given back, by a stopping relay or a lane's
 deferral, which nobody started; a row a receiver answered with `NotYet`, which
-is moved rather than failed; and a pending or failed row, whose attempt is
-counted by its outcome. A relay that dies and a run that then succeeds record
+is moved rather than failed; a pending or failed row, whose attempt is
+counted by its outcome; and a lapse claimed by `drain_outbox(now=...)` or
+`deliver_pending(now=...)`, whose `now` reads as lapsed a lease the real clock
+stamped a moment ago. A relay given its clock, and either of those on the real
+clock, counts lapses as above. A relay that dies and a run that then succeeds record
 two attempts.
 
 ### Stopping it

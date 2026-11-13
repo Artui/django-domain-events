@@ -49,7 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   relay killed with `SIGKILL` held, the one it was running included, and `site="task"`
   rows whose message waited in the queue past its lease, which an undersized lease can now
   dead-letter without their ever running. A row given back, or answered with `NotYet`,
-  spends nothing. See "A lapse spends an attempt" in the operations guide.
+  spends nothing, and nor does a lapse that `drain_outbox(now=...)` or
+  `deliver_pending(now=...)` claims, since that `now` reads a lease the real clock stamped
+  as lapsed; `claim_batch(count_lapses=False)` is how they ask. See "A lapse spends an
+  attempt" in the operations guide.
 
 ## [0.15.0] — 2026-11-13
 

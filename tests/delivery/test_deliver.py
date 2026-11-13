@@ -28,6 +28,7 @@ from django_domain_events.models.event_record import EventRecord
 from django_domain_events.models.lane_pause_record import LanePauseRecord
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_context import DeliveryContext
+from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
@@ -1068,6 +1069,59 @@ def test_a_row_rescheduled_in_place_on_the_real_clock_is_not_excluded(
 
     assert (read_back, exclusions) == ([], [set(), set()])
     assert _delivery("probe.in_place").status == DeliveryStatus.PENDING
+
+
+def _task_row() -> tuple[str, int]:
+    return DeliveryRecord.objects.values_list("status", "attempts").get(
+        receiver_key="probe.task_site"
+    )
+
+
+def test_a_drain_told_the_same_later_time_never_spends_a_queued_rows_attempt(settings) -> None:
+    """Each call's now reads the lease the previous hand-off stamped as lapsed."""
+    later = django_timezone.now() + timedelta(days=2)
+    with _task_site(settings, _QueueingBackend, lambda event: None, max_attempts=2):
+        rows = []
+        for _ in range(3):
+            drain_outbox(now=later)
+            rows.append(_task_row())
+
+    assert rows == [(DeliveryStatus.CLAIMED, 0)] * 3
+    assert len(_ENQUEUED) == 3
+
+
+def test_a_drain_told_a_later_time_after_a_real_clock_one_spends_nothing(settings) -> None:
+    """The test-helper shape: drain now, then move forward past the hand-off's lease."""
+    with _task_site(settings, _QueueingBackend, lambda event: None, max_attempts=1):
+        drain_outbox()
+        drain_outbox(now=django_timezone.now() + timedelta(hours=48))
+
+    assert _task_row() == (DeliveryStatus.CLAIMED, 0)
+    assert len(_ENQUEUED) == 2
+
+
+def test_a_real_clock_pass_dead_letters_a_lapse_at_its_last_attempt() -> None:
+    seen: list[DeliveryFailure] = []
+    receiver(Unheard, key="probe.lapsed", max_attempts=1, on_failure=seen.append)(
+        lambda event: None
+    )
+    try:
+        with transaction.atomic():
+            fire(Unheard(value=1))
+        moment = django_timezone.now()
+        DeliveryRecord.objects.filter(receiver_key="probe.lapsed").update(
+            status=DeliveryStatus.CLAIMED,
+            claimed_by="dead",
+            claimed_at=moment - timedelta(hours=1),
+            lease_expires_at=moment - timedelta(minutes=30),
+        )
+        deliver_pending(worker_id="w")
+    finally:
+        registry._receivers.pop("probe.lapsed", None)
+
+    row = _delivery("probe.lapsed")
+    assert (row.status, row.attempts) == (DeliveryStatus.DEAD, 1)
+    assert [(f.status, f.attempt) for f in seen] == [(DeliveryStatus.DEAD, 1)]
 
 
 def test_give_up_after_measures_a_scheduled_row_from_its_due_time(order: OrderPlaced) -> None:

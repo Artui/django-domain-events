@@ -20,6 +20,7 @@ from django_domain_events.delivery.wake import wait_for_work
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.settings import setting
+from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
@@ -452,6 +453,56 @@ def test_an_exit_raised_mid_delivery_ends_the_relay_and_rolls_the_receiver_back(
     interrupted_row = DeliveryRecord.objects.get(receiver_key="testapp.durable_receiver")
     assert interrupted_row.status == DeliveryStatus.CLAIMED
     assert interrupted_row.lease_expires_at > django_timezone.now()
+
+
+def test_an_exit_mid_batch_hands_nothing_back(order: OrderPlaced, record: list[str]) -> None:
+    """A second signal leaves the unstarted rest of the batch to lapse under its lease."""
+    with transaction.atomic():
+        fire(order)
+    exits: list[str] = []
+
+    def first_call_exits(*args: object) -> None:
+        if not exits:
+            exits.append("exit")
+            raise SystemExit(128 + 15)
+
+    with (
+        receiver_replaced("testapp.durable_receiver", first_call_exits),
+        receiver_replaced("testapp.with_context", first_call_exits),
+        pytest.raises(SystemExit),
+    ):
+        run_relay(worker_id="w1", passes=1, wait=lambda _: False, **UNSAFE)
+
+    rows = DeliveryRecord.objects.filter(
+        receiver_key__in=["testapp.durable_receiver", "testapp.with_context"]
+    )
+    assert rows.count() == 2
+    assert {(row.status, row.claimed_by) for row in rows} == {(DeliveryStatus.CLAIMED, "w1")}
+    assert len({row.claimed_at for row in rows}) == 1
+    assert all(row.lease_expires_at > django_timezone.now() for row in rows)
+
+
+def test_a_relay_on_an_injected_clock_spends_an_attempt_on_a_lapse(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """Only the test helper is exempt: a relay told the time still counts the lapse."""
+    seen: list[DeliveryFailure] = []
+    entry = dataclasses.replace(_mail(), max_attempts=1, on_failure=seen.append)
+    later = django_timezone.now() + timedelta(days=2)
+    with receiver_registered(entry):
+        with transaction.atomic():
+            fire(order)
+        claim_batch(
+            worker_id="dead", now=django_timezone.now(), lease=timedelta(seconds=1), limit=10
+        )
+
+        run_relay(
+            worker_id="w1", passes=1, now=lambda: later, lane="mail", wait=lambda _: False, **UNSAFE
+        )
+
+    row = DeliveryRecord.objects.get(receiver_key="tests.mail")
+    assert (row.status, row.attempts) == (DeliveryStatus.DEAD, 1)
+    assert [(f.status, f.attempt) for f in seen] == [(DeliveryStatus.DEAD, 1)]
 
 
 def _mail() -> RegisteredReceiver:

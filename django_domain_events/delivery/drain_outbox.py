@@ -28,7 +28,9 @@ def drain_outbox(
     ``drain_outbox(now=placed + timedelta(hours=48))`` delivers what is due by
     then, reading the backoff, when respected, against the same moment. The
     receiver still runs on the real clock; ``DeliveryContext.due_at`` is what it
-    should compare against.
+    should compare against. A lease that ``now`` reads as lapsed spends no
+    attempt here, since the real clock stamped it: a ``site="task"`` row still
+    in its queue is handed off again rather than dead-lettered.
 
     A row is attempted at most once a call when its receiver answers
     ``NotYet``, and handed to a task backend at most once a call when its

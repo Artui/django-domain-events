@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from django.db import connections, models, transaction
 
 from django_domain_events.declaration.registry import registry
+from django_domain_events.delivery.hand_back import hand_back
 from django_domain_events.delivery.utils import GIVEN_BACK, report_failure
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.types.delivery_status import DeliveryStatus
@@ -24,6 +25,7 @@ def claim_batch(
     lane: str | None = None,
     exclude_lanes: Collection[str] = (),
     exclude_ids: Collection[int] = (),
+    count_lapses: bool = True,
 ) -> list[int]:
     """Take ownership of up to ``limit`` deliveries and return their ids.
 
@@ -50,10 +52,27 @@ def claim_batch(
     (``test_two_relays_racing_a_lapse_to_dead_tell_on_failure_once``), and a
     dead-lettered row takes no place in the batch: the claim goes on until it
     fills ``limit`` or meets no lapse to dead-letter
-    (``test_a_claim_dead_lettering_lapses_still_fills_its_limit``). The lapsed
-    rows are raised by an UPDATE of their own rather than a CASE in one: MySQL
+    (``test_a_claim_dead_lettering_lapses_still_fills_its_limit``,
+    ``test_a_refill_claims_only_what_the_limit_has_left``). The lapsed rows are
+    raised by an UPDATE of their own rather than a CASE in one, which keeps the
+    result independent of the order Django writes the SET clause in: MySQL
     assigns a single-table UPDATE's columns left to right, so a CASE reading
-    ``status`` would read the value the same statement had just written.
+    ``status`` placed after it would read the value just written.
+
+    Each pass of that refill commits on its own. If a later pass raises, the
+    rows the earlier ones took are handed back, as ``hand_back`` gives them,
+    and the exception propagates; the rows they dead-lettered are reported
+    whichever way the claim ends
+    (``test_a_refill_that_raises_hands_back_its_rows_and_reports_its_dead``).
+    ``on_failure`` is told outside the claim's transaction
+    (``test_on_failure_is_told_outside_the_claims_transaction``).
+
+    ``count_lapses=False`` takes a lapsed claim as it takes a pending row:
+    no attempt is spent and nothing is dead-lettered. It exists for the test
+    helper, whose ``now`` reads as lapsed a lease the real clock stamped a
+    moment ago, as on a ``site="task"`` row still in its queue
+    (``test_a_drain_told_the_same_later_time_never_spends_a_queued_rows_attempt``,
+    ``test_a_drain_told_a_later_time_after_a_real_clock_one_spends_nothing``).
 
     ``ignore_backoff`` claims rows whose retry is still scheduled. It exists for
     the test helper, which cannot wait out a jittered hour to observe a retry.
@@ -120,19 +139,33 @@ def claim_batch(
     )
     ids: list[int] = []
     spent: list[int] = []
-    while True:
-        taken, dead = _claim_once(
-            candidates,
-            alias=alias,
-            limit=limit - len(ids),
-            worker_id=worker_id,
-            now=now,
-            lease=lease,
-        )
-        ids += taken
-        spent += dead
-        if not dead:
-            break
+    try:
+        while True:
+            taken, dead = _claim_once(
+                candidates,
+                alias=alias,
+                limit=limit - len(ids),
+                worker_id=worker_id,
+                now=now,
+                lease=lease,
+                count_lapses=count_lapses,
+            )
+            ids += taken
+            spent += dead
+            if not dead:
+                break
+    except Exception:
+        hand_back(ids, worker_id=worker_id, claimed_at=now)
+        raise
+    finally:
+        _report_spent(spent)
+    return ids
+
+
+def _report_spent(spent: list[int]) -> None:
+    """Tell each dead-lettered row's receiver, once its claim has committed."""
+    from django_domain_events.models.delivery_record import DeliveryRecord
+
     for row in DeliveryRecord.objects.select_related("event").filter(pk__in=spent).order_by("pk"):
         report_failure(
             row,
@@ -141,7 +174,6 @@ def claim_batch(
             error=row.last_error,
             error_type="a lapsed lease",
         )
-    return ids
 
 
 def _claim_once(
@@ -152,6 +184,7 @@ def _claim_once(
     worker_id: str,
     now: datetime,
     lease: timedelta,
+    count_lapses: bool,
 ) -> tuple[list[int], list[int]]:
     """Claim up to ``limit`` rows under one lock; return those taken and those dead-lettered."""
     from django_domain_events.models.delivery_record import DeliveryRecord
@@ -171,7 +204,7 @@ def _claim_once(
             "max_attempts",
         )[:limit]
         for pk, status, claimed_by, claimed_at, expires, attempts, max_attempts in rows:
-            if status != DeliveryStatus.CLAIMED or expires <= given_back:
+            if not count_lapses or status != DeliveryStatus.CLAIMED or expires <= given_back:
                 taken.append(pk)
             elif attempts + 1 < max_attempts:
                 taken.append(pk)

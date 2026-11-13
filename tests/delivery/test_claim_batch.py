@@ -1,21 +1,27 @@
 from __future__ import annotations
 
+import dataclasses
+import logging
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
-from django.db import connection, transaction
+from django.db import OperationalError, connection, transaction
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone as django_timezone
 
+from django_domain_events.delivery import claim_batch as claim_batch_module
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.deliver import dispatch_one
 from django_domain_events.delivery.fire import fire
 from django_domain_events.delivery.hand_back import hand_back
+from django_domain_events.delivery.utils import GIVEN_BACK
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
+from django_domain_events.utils import in_project_time
 from tests.conftest import receiver_registered
 from tests.testapp.events import OrderPlaced
 
@@ -425,7 +431,7 @@ def _claims_left_to_lapse(pk: int, times: int, *, limit: int = 10) -> list[list[
 
 
 def test_a_receiver_that_kills_its_relay_goes_dead_after_max_attempts_claims(
-    order: OrderPlaced, record: list[str]
+    order: OrderPlaced, record: list[str], caplog: pytest.LogCaptureFixture
 ) -> None:
     """The os._exit() receiver: three runs, each lapsed, and the fourth claim dead-letters it."""
     seen: list[DeliveryFailure] = []
@@ -434,13 +440,21 @@ def test_a_receiver_that_kills_its_relay_goes_dead_after_max_attempts_claims(
             fire(order)
         row = DeliveryRecord.objects.get(receiver_key="tests.dying")
 
-        claims = _claims_left_to_lapse(row.pk, 4)
+        with caplog.at_level(logging.WARNING, logger="django_domain_events.delivery.deliver"):
+            claims = _claims_left_to_lapse(row.pk, 4)
 
     row.refresh_from_db()
     assert claims == [[row.pk]] * 3 + [[]]
     assert (row.status, row.attempts) == (DeliveryStatus.DEAD, 3)
     assert row.completed_at is not None
     assert "lease" in row.last_error and "w2" in row.last_error
+    assert f"at {row.claimed_at.isoformat()} and" in row.last_error
+    assert f"ran out at {row.lease_expires_at.isoformat()}." in row.last_error
+    assert "attempt 3 of 3." in row.last_error
+    assert caplog.messages == [
+        f"receiver tests.dying failed delivery {row.pk} on attempt 3 with a lapsed lease; "
+        "the row is dead"
+    ]
     assert [(f.status, f.attempt, f.delivery_id) for f in seen] == [
         (DeliveryStatus.DEAD, 3, row.pk)
     ]
@@ -530,3 +544,88 @@ def test_a_claim_dead_lettering_lapses_still_fills_its_limit(
     assert len(ids) == 1 and ids != [dying.pk]
     assert DeliveryRecord.objects.get(pk=dying.pk).status == DeliveryStatus.DEAD
     assert len(seen) == 1
+
+
+def _lapse(pk: int) -> None:
+    """Leave ``pk`` claimed by a dead worker whose lease ran out half an hour ago."""
+    DeliveryRecord.objects.filter(pk=pk).update(
+        status=DeliveryStatus.CLAIMED,
+        claimed_by="dead",
+        claimed_at=_now() - timedelta(hours=1),
+        lease_expires_at=_now() - timedelta(minutes=30),
+        available_at=_now() - timedelta(hours=2),
+    )
+
+
+def _one_lapse_at_its_last_attempt(order: OrderPlaced) -> int:
+    """Two events' rows, of which the one dying row left is lapsed at its last attempt."""
+    for _ in range(2):
+        with transaction.atomic():
+            fire(order)
+    dying = list(DeliveryRecord.objects.filter(receiver_key="tests.dying").order_by("pk"))
+    _lapse(dying[0].pk)
+    DeliveryRecord.objects.filter(pk=dying[1].pk).delete()
+    return dying[0].pk
+
+
+def test_a_refill_claims_only_what_the_limit_has_left(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The first pass takes one row beside the dead one; the refill may take one more."""
+    seen: list[DeliveryFailure] = []
+    with receiver_registered(_dying(seen, max_attempts=1)):
+        dead = _one_lapse_at_its_last_attempt(order)
+        assert DeliveryRecord.objects.exclude(pk=dead).count() >= 3
+
+        ids = claim_batch(worker_id="w1", now=_now(), lease=LEASE, limit=2)
+
+    assert len(ids) == 2 and dead not in ids
+    assert [f.delivery_id for f in seen] == [dead]
+
+
+def test_on_failure_is_told_outside_the_claims_transaction(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    depths: list[int] = []
+    entry = dataclasses.replace(
+        _dying([], max_attempts=1),
+        on_failure=lambda failure: depths.append(len(connection.atomic_blocks)),
+    )
+    with receiver_registered(entry):
+        with transaction.atomic():
+            fire(order)
+        _lapse(DeliveryRecord.objects.get(receiver_key="tests.dying").pk)
+        outer = len(connection.atomic_blocks)
+
+        claim_batch(worker_id="w1", now=_now(), lease=LEASE, limit=10)
+
+    assert depths == [outer]
+
+
+def test_a_refill_that_raises_hands_back_its_rows_and_reports_its_dead(
+    order: OrderPlaced, record: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first pass committed, so its rows are given back and its dead row reported."""
+    seen: list[DeliveryFailure] = []
+    real = claim_batch_module._claim_once
+    passes: list[int] = []
+
+    def second_pass_fails(*args: Any, **kwargs: Any) -> tuple[list[int], list[int]]:
+        passes.append(kwargs["limit"])
+        if len(passes) > 1:
+            raise OperationalError("the second pass lost its connection")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(claim_batch_module, "_claim_once", second_pass_fails)
+    with receiver_registered(_dying(seen, max_attempts=1)):
+        dead = _one_lapse_at_its_last_attempt(order)
+        with pytest.raises(OperationalError, match="second pass"):
+            claim_batch(worker_id="w1", now=_now(), lease=LEASE, limit=2)
+
+    taken = DeliveryRecord.objects.filter(claimed_by="w1")
+    assert passes == [2, 1]
+    assert [f.delivery_id for f in seen] == [dead]
+    assert taken.count() == 1
+    assert set(taken.values_list("status", "lease_expires_at")) == {
+        (DeliveryStatus.CLAIMED, in_project_time(GIVEN_BACK))
+    }
