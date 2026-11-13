@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -15,7 +16,7 @@ OPERATOR = "operator"
 
 
 class Command(BaseCommand):
-    help = "Stop every relay claiming a lane until a time, or for a number of seconds."
+    help = "Stop every running relay (not --once) claiming a lane, until a time or for seconds."
 
     def add_arguments(self, parser: Any) -> None:
         parser.add_argument("lane")
@@ -45,9 +46,12 @@ class Command(BaseCommand):
 def _until(now: datetime, seconds: float | None, until: str | None) -> datetime:
     """``now`` plus ``seconds``, or ``until`` (read in ``TIME_ZONE`` if naive), as stored."""
     if seconds is not None:
-        if seconds <= 0:
-            raise CommandError(f"--for must be positive, got {seconds:g}.")
-        return now + timedelta(seconds=seconds)
+        if not (math.isfinite(seconds) and seconds > 0):
+            raise CommandError(f"--for must be a positive number of seconds, got {seconds:g}.")
+        try:
+            return now + timedelta(seconds=seconds)
+        except OverflowError as exc:
+            raise CommandError(f"--for {seconds:g} ends past the last date there is.") from exc
     parsed = parse_datetime(until or "")
     if parsed is None:
         raise CommandError(f"--until {until!r} is not an ISO 8601 date and time.")

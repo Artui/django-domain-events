@@ -110,6 +110,8 @@ python manage.py prune_events                 # delete settled events past their
 python manage.py replay_events 41 42          # make those events owed again
 python manage.py requeue_dead --receiver k    # give dead deliveries their budget back
 python manage.py cancel_deliveries 41         # withdraw what those events are still owed
+python manage.py pause_lane mail --for 1800   # every relay holds off the mail lane
+python manage.py resume_lane mail             # lift every pause of the mail lane
 ```
 
 Pruning only removes *settled* events: one with a delivery still owed is kept,

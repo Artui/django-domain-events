@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `pause_lane LANE (--for SECONDS | --until ISO)` and `resume_lane LANE` management
-  commands. `pause_lane` stops every relay claiming the lane until the pause ends; one of
+  commands. `pause_lane` stops every running relay claiming the lane until the pause ends
+  (`deliver_events --once` and `deliver_pending()` do not read pauses); one of
   `--for` and `--until` is required, an `--until` without an offset is read in `TIME_ZONE`,
   and a lane no receiver declares is refused. It writes a `LanePauseRecord` under the
   worker `operator`, which `outbox_health()` and `events_status` show beside the relays'
@@ -31,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **A lane paused by one relay is now paused in every relay.** Each pass of `run_relay()`
-  and `deliver_events` reads the unexpired `LanePauseRecord`s of the lanes it serves, one
+  and of `deliver_events` running as a relay (not `--once`) reads the unexpired `LanePauseRecord`s of the lanes it serves, one
   query on that small table, and claims nothing in a lane any of them holds. Until now only
   the relay whose receiver deferred with `RetryAfter(counts=False)` paused the lane, and
   every other relay made its own failing call before it learned of the outage. It is on by

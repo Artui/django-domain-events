@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from io import StringIO
 from typing import Any
 
 import pytest
@@ -225,7 +226,7 @@ def test_pause_lane_stops_a_relay_and_its_record_outlives_the_relay(
 ) -> None:
     lane(0)
     _fire(1)
-    call_command("pause_lane", "mail", "--for", "3600", stdout=open("/dev/null", "w"))  # noqa: SIM115
+    call_command("pause_lane", "mail", "--for", "3600", stdout=StringIO())
     claims = _mail_claims(monkeypatch)
 
     run_relay(worker_id="w1", lane="mail", passes=3, wait=lambda _: False, **UNSAFE)
@@ -243,7 +244,7 @@ def test_resume_lane_restarts_the_relay_that_recorded_the_pause_within_one_poll(
     clock = _Clock(step=1)
 
     def wait(timeout: float) -> bool:
-        call_command("resume_lane", "mail", stdout=open("/dev/null", "w"))  # noqa: SIM115
+        call_command("resume_lane", "mail", stdout=StringIO())
         return clock.wait(timeout)
 
     counts = run_relay(worker_id="w1", lane="mail", passes=3, now=clock, wait=wait, **UNSAFE)
@@ -257,11 +258,11 @@ def test_resume_lane_restarts_a_relay_an_operator_paused_within_one_poll(
 ) -> None:
     lane(0)
     _fire(1)
-    call_command("pause_lane", "mail", "--for", "3600", stdout=open("/dev/null", "w"))  # noqa: SIM115
+    call_command("pause_lane", "mail", "--for", "3600", stdout=StringIO())
     claims = _mail_claims(monkeypatch)
 
     def wait(timeout: float) -> bool:
-        call_command("resume_lane", "mail", stdout=open("/dev/null", "w"))  # noqa: SIM115
+        call_command("resume_lane", "mail", stdout=StringIO())
         return False
 
     run_relay(worker_id="w1", lane="mail", passes=2, wait=wait, **UNSAFE)
@@ -302,6 +303,50 @@ def test_a_pause_whose_record_was_never_written_ends_on_the_relays_clock(
     counts = run_relay(worker_id="w1", lane="mail", passes=3, now=clock, wait=clock.wait, **UNSAFE)
 
     assert counts == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 1}, "it stayed paused"
+
+
+def test_a_pause_that_ends_between_the_read_and_the_lanes_turn(
+    lane: Callable[[int], None],
+) -> None:
+    """Each stop check moves the clock two seconds, so the pause ends after the pass's read."""
+    lane(1)
+    _fire(2)
+    clock = _Clock(step=3597)
+
+    def stop() -> bool:
+        clock.at += timedelta(seconds=2)
+        return False
+
+    counts = run_relay(
+        worker_id="w1", lane="mail", passes=4, now=clock, wait=clock.wait, stop=stop, **UNSAFE
+    )
+
+    assert counts == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 1}
+
+
+def test_resume_lane_restarts_a_relay_whose_cleanup_of_passed_pauses_failed(
+    lane: Callable[[int], None], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Its own record was written, so lifting it lifts the relay's pause too."""
+    lane(1)
+    _fire(2)
+    clock = _Clock(step=1)
+    real_filter = LanePauseRecord.objects.filter
+
+    def failing_cleanup(*args: object, **kwargs: object) -> object:
+        if "until__lte" in kwargs:
+            raise OperationalError("the connection is lost")
+        return real_filter(*args, **kwargs)
+
+    def wait(timeout: float) -> bool:
+        call_command("resume_lane", "mail", stdout=StringIO())
+        return clock.wait(timeout)
+
+    monkeypatch.setattr(LanePauseRecord.objects, "filter", failing_cleanup)
+    counts = run_relay(worker_id="w1", lane="mail", passes=3, now=clock, wait=wait, **UNSAFE)
+
+    assert counts == {DeliveryStatus.FAILED: 1, DeliveryStatus.SUCCEEDED: 1}
+    assert "relay w1 could not delete the pauses that have passed" in caplog.text
 
 
 def test_pauses_that_cannot_be_read_do_not_stop_the_relay_or_lift_its_own(

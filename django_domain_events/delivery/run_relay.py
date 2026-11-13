@@ -383,11 +383,15 @@ def _record_pause_or_survive(
         LanePauseRecord.objects.update_or_create(
             lane=lane, worker_id=worker_id, defaults={"paused_at": paused_at, "until": until}
         )
-        LanePauseRecord.objects.filter(until__lte=paused_at).delete()
     except Exception as exc:
         logger.exception("relay %s could not record the pause of lane %s", worker_id, lane)
         _close_after(exc, connection, worker_id)
         return False
+    try:
+        LanePauseRecord.objects.filter(until__lte=paused_at).delete()
+    except Exception as exc:
+        logger.exception("relay %s could not delete the pauses that have passed", worker_id)
+        _close_after(exc, connection, worker_id)
     return True
 
 

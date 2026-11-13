@@ -96,8 +96,11 @@ def test_for_and_until_together_are_refused() -> None:
 @pytest.mark.parametrize(
     ("args", "message"),
     [
-        (["--for", "0"], "--for must be positive, got 0"),
-        (["--for", "-5"], "--for must be positive, got -5"),
+        (["--for", "0"], "--for must be a positive number of seconds, got 0"),
+        (["--for", "-5"], "--for must be a positive number of seconds, got -5"),
+        (["--for", "nan"], "--for must be a positive number of seconds, got nan"),
+        (["--for", "inf"], "--for must be a positive number of seconds, got inf"),
+        (["--for", "1e12"], "--for 1e[+]12 ends past the last date there is"),
         (["--until", "tomorrow"], "'tomorrow' is not an ISO 8601 date and time"),
         (["--until", "2001-01-01T00:00:00+00:00"], "has already passed"),
     ],

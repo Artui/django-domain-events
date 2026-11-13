@@ -221,9 +221,8 @@ moving `mail` out to relays of its own, or back in, is a change to the
 manifests and nothing else. While a rollout runs, the shared relays and the
 lane's own both serve it: the skipped locks keep them from taking the same
 row, each claim stamps the lane's own lease, and a relay that stops hands back
-the unstarted rows it held, so the relays that stay take them at once. Each
-relay learns of a throttle from its own first deferral, as relays of one lane
-always have.
+the unstarted rows it held, so the relays that stay take them at once. A
+throttle's first deferral pauses the lane in all of them.
 
 What sharing costs: an idle pass sends one claim query per lane it serves, and
 each claim of a quiet lane runs beside a burst in a noisy one. That claim does
@@ -348,8 +347,10 @@ before every claim and before every delivery.
 
 ### Pausing a lane
 
-Every relay stops claiming a lane while any unexpired pause of it is recorded, and
-takes it up again within one poll of the last one ending or being lifted. The relays
+Every running relay stops claiming a lane while any unexpired pause of it is
+recorded, and takes it up again within one poll of the last one ending or being
+lifted. `deliver_events --once`, `deliver_pending()` and `drain_outbox()` do not
+read the pauses: a cron pass delivers a paused lane. The relays
 record a pause themselves when a receiver
 [defers without counting](delivery.md#a-deferral-that-spends-no-attempt), so one
 relay's deferral holds the lane in all of them. An operator records one by hand, for a
@@ -369,7 +370,8 @@ would pause nothing. Pausing again moves the operator's pause rather than adding
 second.
 
 `resume_lane` lifts every pause of the lane, the operator's and every relay's alike,
-including one a relay is honouring for its own deferral, and including a lane no
+including one a relay is honouring for its own deferral (unless that relay could
+not record it, when it holds its own until it ends), and including a lane no
 receiver declares any more. The relays see the lift at their next pass, so within
 `POLL_SECONDS` for an idle one. A lifted throttle that is still in force costs one
 deferral, after which the lane is paused again.

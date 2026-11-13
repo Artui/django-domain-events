@@ -35,6 +35,7 @@ from django_domain_events import (
     registry,
     replay_events,
     requeue_dead,
+    run_relay,
     suppressed,
 )
 from django_domain_events.models.delivery_record import DeliveryRecord
@@ -828,4 +829,18 @@ class Command(BaseCommand):
             extended,
             ["shop.audit"],
         )
+        head("23. An operator pauses the mail lane, and the relays hold off")
+        # A relay reads the pauses at every pass; --once and deliver_pending() do not.
+        replay_events([placed.pk], receiver_keys=[receipt])
+        sent_before = SentEmail.objects.count()
+        call_command("pause_lane", "mail", "--for", "600", stdout=StringIO())
+        paused = [p.worker_id for b in outbox_health().lanes if b.lane == "mail" for p in b.pauses]
+        print(f"   mail lane paused by: {paused}")
+        check("outbox_health() shows the operator's pause", paused, ["operator"])
+        relay = {"worker_id": "demo", "lane": "mail", "passes": 1, "wait": lambda _: False}
+        print(f"   relay while paused: {run_relay(**relay, allow_unsafe_concurrency=True)}")
+        check("a relay leaves the paused lane alone", SentEmail.objects.count(), sent_before)
+        call_command("resume_lane", "mail", stdout=StringIO())
+        print(f"   relay after resume: {run_relay(**relay, allow_unsafe_concurrency=True)}")
+        check("after resume_lane it sends the receipt", SentEmail.objects.count(), sent_before + 1)
         print("\nEvery claim above was checked.")
