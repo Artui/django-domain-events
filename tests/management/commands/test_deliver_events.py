@@ -493,3 +493,16 @@ def test_the_delivery_functions_called_from_python_never_call_relay_startup(
 
     assert steps == []
     assert record, "nothing was delivered, so the functions proved nothing"
+
+
+def test_relay_startup_runs_before_a_relay_without_skip_locked_is_refused(
+    settings, steps: list[tuple[str, object]]
+) -> None:
+    if connection.vendor != "sqlite":
+        pytest.skip("only a database without SKIP LOCKED refuses the relay")
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_STARTUP": f"{__name__}.startup"}
+
+    with pytest.raises(RuntimeError, match="SKIP LOCKED"):
+        call_command("deliver_events", "--passes", "1", stdout=StringIO())
+
+    assert [step for step, _ in steps] == ["startup"]
