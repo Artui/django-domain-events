@@ -341,7 +341,9 @@ acknowledgement. The receiver runs, the outcome is recorded, and only then is
 `__exit__` called. So:
 
 - **`__exit__` sees the receiver's exception**, the same object, with its
-  traceback, so a span can take its error status.
+  traceback, so a span can take its error status. `NotYet` and `Moot` reach it
+  too, and neither is an error: a tracing hook that marks every exception as one
+  should test for them first, or it reports scheduled and moot work as failures.
 - **Its return value is ignored.** Returning `True` cannot suppress a failure,
   because the failure has already been recorded.
 - **An `Exception` from `__exit__` is logged at `ERROR` and swallowed.** It
@@ -380,8 +382,8 @@ broken tracer dead-lettering loudly is recoverable with `requeue_dead`, where
 receivers writing to the wrong tenant are not. So an instrumentation hook should
 guard its own exporter calls. A path that no longer imports, or a factory
 returning something that is not a context manager, fails the attempt the same
-way. Because the verdict is read as a receiver's, a hook raising `NotYet` or
-`RetryAfter` on entry gets their semantics.
+way. Because the verdict is read as a receiver's, a hook raising `NotYet`,
+`RetryAfter` or `Moot` on entry gets their semantics.
 
 **What it wraps.** Durable deliveries, each attempt once, wherever they run: the
 relay, the eager attempt after commit, `deliver_pending`, `drain_outbox`,

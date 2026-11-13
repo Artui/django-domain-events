@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from django.db import transaction
@@ -122,6 +123,35 @@ def test_its_own_writes_are_rolled_back() -> None:
 
     assert _row().status == DeliveryStatus.CANCELLED
     assert not EventRecord.objects.filter(name="testapp.pinned").exists()
+
+
+def test_returning_on_moot_work_reads_as_alive_and_raising_moot_as_quiet() -> None:
+    """The bug Moot fixes: returning records a success, so the skipping receiver looks alive."""
+    receiver(Unheard, key="probe.returns")(lambda event: None)
+    _moot()
+    _fire()
+    drain_outbox()
+
+    quiet = {q.key for q in quiet_receivers()}
+    assert "probe.returns" not in quiet
+    assert KEY in quiet
+
+
+def test_an_eager_attempt_raising_it_settles_the_row_cancelled(
+    django_capture_on_commit_callbacks: Any,
+) -> None:
+    _moot(eager=True)
+
+    with django_capture_on_commit_callbacks(execute=True), transaction.atomic():
+        fire(Unheard(value=1))
+
+    row = _row()
+    assert (row.status, row.attempts, row.last_error) == (
+        DeliveryStatus.CANCELLED,
+        1,
+        "moot: token gone",
+    )
+    assert row.succeeded_at is None
 
 
 def test_a_receiver_whose_deliveries_are_all_moot_reads_as_quiet() -> None:

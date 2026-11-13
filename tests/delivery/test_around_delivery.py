@@ -22,6 +22,7 @@ from django_domain_events.delivery.deliver import deliver_one, deliver_pending, 
 from django_domain_events.delivery.django_tasks_backend import deliver_delivery
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.moot import Moot
 from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.run_relay import run_relay
@@ -114,6 +115,10 @@ def not_yet_on_enter(context: DeliveryContext) -> _Probe:
     return _Probe(
         context, enter_raises=NotYet(timezone.now() + timedelta(hours=1), reason="tenant paused")
     )
+
+
+def moot_on_enter(context: DeliveryContext) -> _Probe:
+    return _Probe(context, enter_raises=Moot("tenant gone"))
 
 
 def retry_after_on_enter(context: DeliveryContext) -> _Probe:
@@ -980,3 +985,36 @@ def test_a_context_built_by_keyword_without_the_key_still_constructs() -> None:
 
     assert getattr(context, "receiver_key", None) == ""
     assert (context.target, context.delivery_id, context.due_at) == ("endpoint:1", None, None)
+
+
+def test_a_hook_entering_with_moot_settles_the_delivery_cancelled(settings: Any) -> None:
+    ran: list[Any] = []
+    receiver(Unheard, key="probe.gone")(_record(ran))
+    _hook(settings, "moot_on_enter")
+    row = _owed("probe.gone")
+
+    assert deliver_one(row.pk) == DeliveryStatus.CANCELLED
+
+    row.refresh_from_db()
+    assert ran == []
+    assert (row.status, row.attempts, row.last_error) == (
+        DeliveryStatus.CANCELLED,
+        1,
+        "moot: tenant gone",
+    )
+
+
+def test_exit_sees_a_moot_and_on_failure_is_not_told(settings: Any) -> None:
+    answer = Moot("token gone")
+    told: list[DeliveryFailure] = []
+
+    def moot(event: Unheard) -> None:
+        raise answer
+
+    receiver(Unheard, key="probe.moot", on_failure=told.append)(moot)
+    _hook(settings, "recording")
+    row = _owed("probe.moot")
+
+    assert deliver_one(row.pk) == DeliveryStatus.CANCELLED
+    assert [(exc_type, exc) for exc_type, exc, _ in _exits()] == [(Moot, answer)]
+    assert told == []

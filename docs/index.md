@@ -96,8 +96,8 @@ python manage.py deliver_events
   retry.
 - [Scheduled reactions](scheduling.md) - work due a set time after a committed
   change, declared on the receiver with `due=`, `NotYet` for work that
-  turns out not to be due yet, and `cancel_deliveries` for work known to be
-  moot before it runs.
+  turns out not to be due yet, `Moot` for work found moot when it runs, and
+  `cancel_deliveries` for work known to be moot before it runs.
 - [Scope and attribution](scope.md) - `attributed()`, `suppressed()`, causation
   chains, and the one rule that matters for threads.
 - [Operations](operations.md) - prune, replay, requeue, cancel, and running the
