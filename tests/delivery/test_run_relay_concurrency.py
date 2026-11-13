@@ -17,10 +17,11 @@ from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery import deliver as deliver_module
 from django_domain_events.delivery import run_relay as run_relay_module
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.lane_rate import LaneRate
 from django_domain_events.delivery.lane_workers import LaneWorkers, Result
 from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.run_relay import run_relay
-from django_domain_events.delivery.utils import GIVEN_BACK
+from django_domain_events.delivery.utils import GIVEN_BACK, lane_threads
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.lane_pause_record import LanePauseRecord
 from django_domain_events.types.delivery_mode import DeliveryMode
@@ -220,12 +221,13 @@ def _mail_says(func: Callable[[Mail], None]) -> Any:
         ({"lane": "push", "lane_concurrency": {"push": 0}}, "must be a positive int"),
         ({"lane": "push", "lane_concurrency": {"push": 2.0}}, "must be a positive int"),
         ({"lane": "push", "lane_concurrency": {"push": True}}, "must be a positive int"),
-        ({"lane": "push", "lane_rates": {"push": 0}}, "must be a number above 0"),
-        ({"lane": "push", "lane_rates": {"push": -1.5}}, "must be a number above 0"),
-        ({"lane": "push", "lane_rates": {"push": float("inf")}}, "must be a number above 0"),
-        ({"lane": "push", "lane_rates": {"push": float("nan")}}, "must be a number above 0"),
-        ({"lane": "push", "lane_rates": {"push": "5"}}, "must be a number above 0"),
-        ({"lane": "push", "lane_rates": {"push": False}}, "must be a number above 0"),
+        ({"lane": "push", "lane_rates": {"push": 0}}, "must be a finite number above 0"),
+        ({"lane": "push", "lane_rates": {"push": -1.5}}, "must be a finite number above 0"),
+        ({"lane": "push", "lane_rates": {"push": float("inf")}}, "must be a finite number above 0"),
+        ({"lane": "push", "lane_rates": {"push": float("nan")}}, "must be a finite number above 0"),
+        ({"lane": "push", "lane_rates": {"push": "5"}}, "must be a finite number above 0"),
+        ({"lane": "push", "lane_rates": {"push": False}}, "must be a finite number above 0"),
+        ({"lane": "push", "lane_rates": {"push": True}}, "must be a finite number above 0"),
     ],
 )
 def test_a_threaded_lane_the_relay_cannot_serve_is_refused_at_start(
@@ -233,6 +235,16 @@ def test_a_threaded_lane_the_relay_cannot_serve_is_refused_at_start(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         run_relay(worker_id="w1", passes=0, **kwargs, **UNSAFE)
+
+
+def test_every_lane_is_one_lane_threaded_when_the_project_has_only_one(
+    lanes: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(registry, "lanes", lambda: ("mail",))
+    threads = lane_threads(
+        None, lane_concurrency={"mail": 2}, lane_rates=None, batch_size=None, lane_batch_sizes=None
+    )
+    assert threads == ("mail", 2, None)
 
 
 def test_one_worker_and_no_rate_is_todays_loop_and_keeps_its_batch_size(
@@ -823,6 +835,97 @@ def test_an_idle_threaded_lane_sweeps_on_its_interval_and_waits(
 # --- Real threads, on a backend that skips locked rows -----------------------
 
 
+def _defer_the_first_for_an_hour(evt: Mail) -> None:
+    CALLS.append(evt.value)
+    if evt.value == 0:
+        raise RetryAfter(3600, reason="quota", counts=False)
+
+
+def _run_on(clock: _Clock, passes: int, **kwargs: Any) -> dict[DeliveryStatus, int]:
+    return run_relay(
+        worker_id="w1",
+        passes=passes,
+        lane="mail",
+        now=clock,
+        sleep=clock.sleep,
+        wait=clock.wait,
+        monotonic=clock.monotonic,
+        **{"lane_concurrency": {"mail": 2}, **kwargs},
+        **UNSAFE,
+    )
+
+
+def test_this_relays_recorded_pause_holds_past_the_next_shared_reads(
+    lanes: None, inline: type[_InlineWorkers]
+) -> None:
+    _fire(2)
+    clock = _Clock(step=2)
+    with _mail_says(_defer_the_first_for_an_hour):
+        _run_on(clock, passes=6)
+    assert CALLS == [0]
+    assert clock.mono > 2 * run_relay_module._PAUSE_READ_SECONDS
+
+
+def test_a_pause_whose_write_failed_still_holds_this_relay(
+    lanes: None, inline: type[_InlineWorkers], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(run_relay_module, "_record_pause_or_survive", lambda *args: False)
+    _fire(2)
+    clock = _Clock(step=2)
+    with _mail_says(_defer_the_first_for_an_hour):
+        _run_on(clock, passes=6)
+    assert CALLS == [0]
+    assert not LanePauseRecord.objects.exists()
+
+
+def test_another_relays_pause_holds_a_threaded_lane(
+    lanes: None, inline: type[_InlineWorkers]
+) -> None:
+    _fire(1)
+    clock = _Clock(step=2)
+    LanePauseRecord.objects.create(
+        lane="mail",
+        worker_id="other",
+        paused_at=in_project_time(clock()),
+        until=in_project_time(clock() + timedelta(hours=1)),
+    )
+    _run_on(clock, passes=4)
+    assert CALLS == []
+
+
+def test_a_failed_second_pause_write_still_forgets_the_first_at_the_end(
+    lanes: None, inline: type[_InlineWorkers], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inline.prompt = False
+    _fire(2)
+    real = run_relay_module._record_pause_or_survive
+    writes = iter([real, lambda *args: False])
+    monkeypatch.setattr(
+        run_relay_module, "_record_pause_or_survive", lambda *args: next(writes)(*args)
+    )
+
+    def mail(evt: Mail) -> None:
+        raise RetryAfter(60 if evt.value == 0 else 3600, reason="quota", counts=False)
+
+    clock = _Clock()
+    with _mail_says(mail):
+        _run_on(clock, passes=3)
+    assert not LanePauseRecord.objects.exists()
+
+
+def test_a_stop_waits_for_the_lease_of_the_last_row_claimed(
+    lanes: None, inline: type[_InlineWorkers]
+) -> None:
+    inline.prompt = False
+    _fire(2)
+    clock = _Clock()
+    before = time.monotonic()
+    _run_on(clock, passes=3, lane_rates={"mail": 1})
+    assert clock.sleeps == [1.0]
+    (deadline,) = inline.made[0].deadlines
+    assert deadline > before + 33 - 0.5
+
+
 def _until(condition: Callable[[], bool], seconds: float = 20.0) -> Callable[[], bool]:
     """A ``stop`` true once ``condition`` holds, or after ``seconds`` so a bug cannot hang CI."""
     deadline = time.monotonic() + seconds
@@ -898,7 +1001,19 @@ def test_threads_no_row_lapses_at_ten_workers_and_five_a_second(lanes: None) -> 
         time.sleep(0.4)
         CALLS.append(evt.value)
 
-    with _mail_has("lease_seconds", 1), _mail_says(mail):
+    gated: list[float] = []
+    real_started = LaneRate.started
+
+    def started(gate: LaneRate) -> None:
+        gated.append(time.monotonic())
+        real_started(gate)
+
+    with (
+        _mail_has("lease_seconds", 1),
+        _mail_says(mail),
+        pytest.MonkeyPatch.context() as patch,
+    ):
+        patch.setattr(LaneRate, "started", started)
         counts = run_relay(
             worker_id="w1",
             lane="mail",
@@ -911,7 +1026,9 @@ def test_threads_no_row_lapses_at_ten_workers_and_five_a_second(lanes: None) -> 
     assert sorted(CALLS) == list(range(12))
     assert {(row.status, row.attempts) for row in rows} == {(DeliveryStatus.SUCCEEDED, 1)}
     starts.sort()
-    assert min(later - earlier for earlier, later in zip(starts, starts[5:], strict=False)) >= 0.95
+    gaps = [later - earlier for earlier, later in zip(gated, gated[5:], strict=False)]
+    assert min(gaps) >= 1.0
+    assert min(later - earlier for earlier, later in zip(starts, starts[5:], strict=False)) >= 0.9
 
 
 @pytest.mark.usefixtures("skip_locked_backend")

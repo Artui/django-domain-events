@@ -133,7 +133,7 @@ def run_relay(
     refused at start. One worker and no rate is the loop described above.
 
     On a threaded lane a ``RetryAfter`` deferral pauses the lane as above: no
-    row is started after it, the claimed rows not yet started are handed back,
+    row is started once this thread hears it, the claimed rows not yet started are handed back,
     and the rows already running record their own outcomes. The shared pauses
     are read at most once a second rather than once a pass, so a ``pause_lane``
     takes hold within a second plus the deliveries in flight. ``stop``, a spent

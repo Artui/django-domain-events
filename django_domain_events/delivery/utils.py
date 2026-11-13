@@ -82,12 +82,12 @@ def lane_threads(
     for name, rate in sorted((lane_rates or {}).items()):
         _require_served("lane_rates", name, served)
         if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not 0 < rate < inf:
-            raise ValueError(f"lane_rates[{name!r}] must be a number above 0, got {rate!r}")
+            raise ValueError(f"lane_rates[{name!r}] must be a finite number above 0, got {rate!r}")
         rates[name] = float(rate)
     threaded = sorted({name for name, count in workers.items() if count > 1} | rates.keys())
     if not threaded:
         return None
-    if lanes is None or len(lanes) > 1:
+    if len(served) > 1:
         raise ValueError(
             f"Lane {threaded[0]!r} has worker threads or a rate, which a relay serving "
             f"several lanes cannot give it: serve that lane alone."

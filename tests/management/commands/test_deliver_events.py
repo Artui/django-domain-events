@@ -645,7 +645,7 @@ def test_a_malformed_lane_concurrency_or_rate_is_refused(
         ),
         (
             ["--lane", "mail", "--lane-rate", "mail=nan"],
-            "lane_rates['mail'] must be a number above 0, got nan",
+            "lane_rates['mail'] must be a finite number above 0, got nan",
         ),
     ],
     ids=[
