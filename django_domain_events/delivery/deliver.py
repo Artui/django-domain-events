@@ -17,6 +17,7 @@ from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.fire import call_receiver, run_to_completion
 from django_domain_events.delivery.hand_back import hand_back
+from django_domain_events.delivery.moot import Moot
 from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.permanent_failure import PermanentFailure
 from django_domain_events.delivery.retry_after import RetryAfter
@@ -79,6 +80,11 @@ def deliver_one(
     A receiver answering ``NotYet`` has its row moved to the time it named,
     with no attempt spent, and this returns ``PENDING``: the one outcome that
     leaves the row owed and not failed.
+
+    A receiver answering ``Moot`` has its work rolled back and its row settled
+    ``CANCELLED`` with that attempt, ``last_error`` reading ``moot: <reason>``
+    and no ``succeeded_at``; ``on_failure`` is not called. This returns
+    ``CANCELLED``.
 
     ``claimed_by`` and ``claimed_at`` are the claim a task message carries, as
     the relay passed them to ``TaskBackend.enqueue``. Given them, this call
@@ -262,6 +268,8 @@ def _deliver_one(
         around.raised = exc
         if isinstance(exc, NotYet):
             return _reschedule(fence, delivery, exc)
+        if isinstance(exc, Moot):
+            return _settle_moot(fence, delivery, exc, attempt)
         if isinstance(exc, RetryAfter) and not exc.counts:
             return _defer(fence, delivery, receiver, exc, attempt, on_deferral)
         return _fail(
@@ -548,6 +556,23 @@ def _reschedule(fence: _Fence, row: Any, exc: NotYet) -> DeliveryStatus | None:
         available_at=exc.until,
         due_at=exc.until,
         completed_at=None,
+    )
+
+
+def _settle_moot(fence: _Fence, row: Any, exc: Moot, attempt: int) -> DeliveryStatus | None:
+    """Settle a row its receiver found moot as CANCELLED: neither a success nor a failure."""
+    logger.debug(
+        "receiver %s found delivery %s moot on attempt %s: %s",
+        row.receiver_key,
+        row.pk,
+        attempt,
+        exc.reason,
+    )
+    return fence.write(
+        status=DeliveryStatus.CANCELLED,
+        attempts=attempt,
+        last_error=f"moot: {exc.reason}"[:2000],
+        completed_at=timezone.now(),
     )
 
 

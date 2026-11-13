@@ -18,6 +18,6 @@ class DeliveryStatus(models.TextChoices):
     """Addressed to a receiver key the registry no longer has."""
 
     CANCELLED = "cancelled", "Cancelled"
-    """Settled by ``cancel_deliveries`` before it ran: the work was known to be
-    moot ahead of time, so it never will. Not a success, because the receiver
-    did not run, and not a dead letter, because nothing failed."""
+    """The work was moot: known ahead of time (``cancel_deliveries``) or found when
+    it ran (``Moot``). Not a success, because the work was not done, and not a dead
+    letter, because nothing failed."""

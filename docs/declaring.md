@@ -165,7 +165,7 @@ depends on. Everything else about the delivery is unchanged:
   So `await Model.objects.acreate(...)` commits with the acknowledgement and is
   rolled back with it when the receiver raises, exactly as a sync receiver's
   write is.
-- **It reads its verdicts the same way.** `RetryAfter`, `NotYet` and
+- **It reads its verdicts the same way.** `RetryAfter`, `NotYet`, `Moot` and
   `PermanentFailure` raised from a coroutine reach the relay as the same
   object, and an `INLINE` coroutine's raise reaches `fire()`'s caller.
 - **Causation reaches it.** An event it fires through

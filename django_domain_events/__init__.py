@@ -11,6 +11,7 @@ from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.deliver import deliver_one, deliver_pending
 from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.moot import Moot
 from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.permanent_failure import PermanentFailure
 from django_domain_events.delivery.retry_after import RetryAfter
@@ -70,6 +71,7 @@ __all__ = [
     "INLINE",
     "LaneBacklog",
     "LanePause",
+    "Moot",
     "NotYet",
     "ON_COMMIT",
     "OutboxHealth",

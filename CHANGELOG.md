@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overrun in seconds. Another relay could have claimed the row meanwhile; the success
   stands. A late failure, `NotYet` or `RetryAfter` logs no such line. Raise
   `lease_seconds=` on that receiver.
+- `Moot(reason)`, exported from the package: a durable receiver that finds nothing to do
+  (the token is gone, the row deleted, the work stale) raises it instead of returning. Its
+  writes are rolled back and its row is settled `cancelled` with that attempt,
+  `last_error` reading `moot: <reason>`, and no `succeeded_at`; `on_failure` is not called
+  and it is logged at DEBUG. Returning recorded a success, which inflated success counts
+  and let `quiet_receivers` read a receiver that skips every row as alive. No new status
+  and no migration: replay, prune and `outbox_health` treat the row as any cancelled one.
+  From an `INLINE` or `ON_COMMIT` receiver it is an ordinary exception, as `NotYet` is.
 
 ### Changed
 - A `NotYet` answer is now logged at DEBUG instead of INFO: it says the work is scheduled,

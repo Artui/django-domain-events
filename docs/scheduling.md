@@ -18,7 +18,7 @@ from datetime import timedelta
 
 from django.utils import timezone
 
-from django_domain_events import DeliveryContext, NotYet, receiver
+from django_domain_events import DeliveryContext, Moot, NotYet, receiver
 
 
 @receiver(OfferMade, key="waitlist.send_offer")
@@ -30,7 +30,7 @@ def send_offer(evt: OfferMade) -> None:
 def expire_offer(evt: OfferMade, ctx: DeliveryContext) -> None:
     offer = Offer.objects.get(pk=evt.offer_id)
     if offer.accepted:
-        return  # the world moved on: nothing to do, and that is a success
+        raise Moot("the offer was accepted")  # the world moved on: nothing to do
     if offer.expires_at > max(ctx.due_at, timezone.now()):
         raise NotYet(offer.expires_at, reason="the offer was extended")
     offer.expire()
@@ -128,14 +128,49 @@ the invoice was paid, the activity was cancelled. There are two cases, and they
 have different answers.
 
 **Found moot when it runs.** The receiver re-reads current state, finds nothing
-to do and **returns, which is an ordinary success**. "Nothing to do" is not a
-different outcome from the relay's point of view - the delivery ran and its work
-is done. This is the case nobody announced, and it is why a scheduled receiver
-always re-checks.
+to do and **raises `Moot`**, below. This is the case nobody announced, and it is
+why a scheduled receiver always re-checks.
 
 **Known moot ahead of time.** The code that accepts the offer knows the expiry
-is pointless. Waiting for it to run and succeed records a success for work that
-was never done; cancelling it is the answer, below.
+is pointless. Waiting for it to run records an outcome for work that was never
+done; cancelling it is the answer, below.
+
+Both settle the row as `cancelled`. Returning instead would record a success,
+which counts work that was not done and keeps a receiver that skips every row
+looking alive to [`quiet_receivers`](introspection.md#quiet-receivers).
+
+## Found moot when it runs: `Moot`
+
+```python
+if offer.accepted:
+    raise Moot("the offer was accepted")
+```
+
+The receiver above raises it when the offer was accepted first. `Moot(reason)`
+settles the row as `cancelled` on the attempt that raised it:
+
+- **Its writes are rolled back**, as with any raise: the receiver runs inside
+  the transaction that carries the acknowledgement.
+- **It is not a success.** `succeeded_at` stays empty, so the delivery does not
+  count as a success, and [`quiet_receivers`](introspection.md#quiet-receivers)
+  reads a receiver whose every delivery was moot as quiet.
+- **It is not a failure.** `on_failure` is not called and nothing is retried.
+  `last_error` reads `moot: <reason>`, truncated like any other error, so the
+  row says why. `completed_at` is when it settled, and `attempts` counts the
+  attempt that raised it.
+- **It is logged at DEBUG**, as `NotYet` is: work found moot is not something
+  an operator acts on.
+
+The row is then exactly as a cancelled one: health does not count it, prune
+treats it as consumed, and [replay](#replay) reopens it. A direct
+`deliver_one()` returns `cancelled`, and a receiver on a
+[task backend](operations.md#handing-delivery-to-a-task-queue) is settled the same
+way.
+
+Only the relay reads `Moot`, as only it reads `NotYet`: an `INLINE` receiver
+raising it fails the caller's transaction like any other exception, and an
+`ON_COMMIT` one has it logged. Neither has a row to settle. Return from those
+when there is nothing to do.
 
 ## Cancelling work known to be moot
 
@@ -161,8 +196,8 @@ could not, as `{"cancelled": n, "in_flight": m}`.
   receiver now. It is counted in `in_flight`, and the receiver's own re-check is
   what stops it: cancelling does not replace the re-check, it saves the run.
 
-`cancelled` is a settled status of its own, distinct from a success (the receiver
-never ran) and from a dead letter (nothing failed). Health does not count it,
+`cancelled` is a settled status of its own, distinct from a success (the work
+was not done) and from a dead letter (nothing failed). Health does not count it,
 prune treats it as consumed under either retention policy, and
 [replay](#replay) reopens it - the way back for work withdrawn by mistake.
 
