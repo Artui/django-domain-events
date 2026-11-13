@@ -5,17 +5,20 @@ import signal
 import socket
 from collections.abc import Callable
 from types import FrameType, TracebackType
-from typing import Any
+from typing import Any, TypeVar
 
 from django.core.management.base import BaseCommand, CommandError, OutputWrapper
 
 from django_domain_events.delivery.deliver import deliver_pending
 from django_domain_events.delivery.run_relay import run_relay
+from django_domain_events.delivery.utils import lane_threads
 from django_domain_events.settings import get_relay_startup
 from django_domain_events.types.registered_receiver import DEFAULT_LANE
 
 # What a container runtime sends to ask for a stop, and what Ctrl-C sends.
 _STOPPING = (signal.SIGTERM, signal.SIGINT)
+
+_Value = TypeVar("_Value", int, float)
 
 
 class Command(BaseCommand):
@@ -59,19 +62,63 @@ class Command(BaseCommand):
                 "Repeat it for each lane to size."
             ),
         )
+        parser.add_argument(
+            "--lane-concurrency",
+            action="append",
+            default=None,
+            metavar="LANE=N",
+            help=(
+                "Deliver up to N rows of the lane at once, on N worker threads with a "
+                "connection each. The lane must be the only one served, and takes no "
+                "--batch-size or --lane-batch-size."
+            ),
+        )
+        parser.add_argument(
+            "--lane-rate",
+            action="append",
+            default=None,
+            metavar="LANE=R",
+            help=(
+                "Start at most R deliveries of the lane a second in this process, R a "
+                "number such as 0.5. The lane must be the only one served."
+            ),
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
         worker_id = options["worker_id"] or f"{socket.gethostname()}:{os.getpid()}"
         lanes: list[str] = options["lane"] or [DEFAULT_LANE]
         # The relay has no total to cap, so a --limit beside it would be read by nothing.
         lane: str | list[str] = lanes[0] if len(lanes) == 1 else lanes
-        lane_batch_sizes = _lane_batch_sizes(options["lane_batch_size"])
+        lane_batch_sizes = _per_lane(
+            "--lane-batch-size", options["lane_batch_size"], int, "sizes", "N"
+        )
+        lane_concurrency = _per_lane(
+            "--lane-concurrency", options["lane_concurrency"], int, "sizes", "N"
+        )
+        lane_rates = _per_lane("--lane-rate", options["lane_rate"], float, "rates", "R")
         if options["limit"] is not None and not options["once"]:
             raise CommandError(
                 "--limit caps a single pass and needs --once; the relay delivers until "
                 "it is stopped. Bound a relay with --passes, or size its claims with "
                 "--batch-size."
             )
+        if options["once"] and (lane_concurrency is not None or lane_rates is not None):
+            raise CommandError(
+                "--lane-concurrency and --lane-rate shape a relay's worker threads, and "
+                "--once delivers one row at a time without them: drop --once to run "
+                "the relay."
+            )
+        if not options["once"]:
+            try:
+                lane_threads(
+                    tuple(sorted(set(lanes))),
+                    lane_concurrency=lane_concurrency,
+                    lane_rates=lane_rates,
+                    batch_size=options["batch_size"],
+                    lane_batch_sizes=lane_batch_sizes,
+                )
+            except ValueError as exc:
+                raise CommandError(str(exc)) from None
         startup = get_relay_startup()
         if startup is not None:
             startup(worker_id=worker_id, lanes=list(lanes))
@@ -92,6 +139,8 @@ class Command(BaseCommand):
                     lane=lane,
                     batch_size=options["batch_size"],
                     lane_batch_sizes=lane_batch_sizes,
+                    lane_concurrency=lane_concurrency,
+                    lane_rates=lane_rates,
                 )
         if not counts:
             self.stdout.write("Nothing owed.")
@@ -100,27 +149,30 @@ class Command(BaseCommand):
             self.stdout.write(f"{status.value}: {count}")
 
 
-def _lane_batch_sizes(values: list[str] | None) -> dict[str, int] | None:
-    """Each ``--lane-batch-size LANE=N``, as the mapping ``lane_batch_sizes`` takes."""
+def _per_lane(
+    flag: str, values: list[str] | None, kind: type[_Value], verb: str, metavar: str
+) -> dict[str, _Value] | None:
+    """Each ``LANE=VALUE`` given to ``flag``, as the per-lane mapping ``run_relay`` takes."""
     if values is None:
         return None
-    sizes: dict[str, int] = {}
+    parsed: dict[str, _Value] = {}
+    noun = "an integer" if kind is int else "a number"
     for value in values:
-        name, equals, size = value.rpartition("=")
+        name, equals, raw = value.rpartition("=")
         if not equals:
-            raise CommandError(f"--lane-batch-size takes LANE=N, got {value!r}.")
+            raise CommandError(f"{flag} takes LANE={metavar}, got {value!r}.")
         if not name:
-            raise CommandError(f"--lane-batch-size {value!r} names no lane.")
+            raise CommandError(f"{flag} {value!r} names no lane.")
         try:
-            rows = int(size)
+            parsed_value = kind(raw)
         except ValueError:
             raise CommandError(
-                f"--lane-batch-size {value!r} sizes lane {name!r} with {size!r}, not an integer."
+                f"{flag} {value!r} {verb} lane {name!r} with {raw!r}, not {noun}."
             ) from None
-        if name in sizes:
-            raise CommandError(f"--lane-batch-size sizes lane {name!r} twice.")
-        sizes[name] = rows
-    return sizes
+        if name in parsed:
+            raise CommandError(f"{flag} {verb} lane {name!r} twice.")
+        parsed[name] = parsed_value
+    return parsed
 
 
 class _StopOnSignal:

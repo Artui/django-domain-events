@@ -82,6 +82,9 @@ you can run as many as you like:
   and **hands back** the rest of its batch. Another relay can claim those rows at
   once instead of waiting for the lease to lapse. See
   [Stopping it](operations.md#stopping-it).
+- A relay can deliver a lane **several rows at a time** on worker threads,
+  `--lane-concurrency mail=6`, and cap its starts with `--lane-rate mail=5`.
+  See [Worker threads in a lane](operations.md#worker-threads-in-a-lane).
 - A relay whose database goes away **stays up**: it closes the dead connection,
   backs off and claims again. See
   [When the database goes away](operations.md#when-the-database-goes-away).
@@ -543,7 +546,8 @@ long the row has been owed.
 The relay that ran the deferral pauses the lane at once, measured on its own clock,
 and records the pause in the `LanePauseRecord` table - the lane, its `worker_id`,
 when it paused and until when. Every relay reads the unexpired pauses of the lanes it
-serves once per pass, in one query on that small table, and claims nothing in a lane
+serves once per pass (a lane on [worker threads](operations.md#worker-threads-in-a-lane)
+at most once a second), in one query on that small table, and claims nothing in a lane
 any of them holds: so the first deferral costs one call, and the other relays serving
 the lane learn of the throttle without making their own. A relay takes the lane up
 again at its first turn after the latest pause of it ends: within `POLL_SECONDS` for a

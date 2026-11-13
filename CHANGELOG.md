@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Worker threads and a start rate per lane. `deliver_events --lane-concurrency LANE=N`,
+  or `run_relay(lane_concurrency={lane: N})`, delivers up to N rows of a lane at once from
+  one process, each on a worker thread with its own connection, so the process holds 1 + N
+  connections; each claim takes as many rows as there are idle workers and leaves out the
+  rows in flight. On Postgres six workers deliver a lane of 250 ms calls about 5.7 times as
+  fast as one. `--lane-rate LANE=R`, or `lane_rates={lane: R}`, starts at most R rows a
+  second in this process, R a float, counting every start, a `site="task"` enqueue
+  included; replicas together start up to replicas x R. Each row runs in a copy of the
+  context the relay started in, so a `ContextVar` set by `RELAY_STARTUP` reaches every row
+  and a thread-local does not; receivers, `AROUND_DELIVERY` and `on_failure` run
+  concurrently with themselves. A deferral stops new starts and hands back the unstarted
+  rows, and a stop waits for the rows in flight until the last of their leases ends, which
+  by default outlasts Kubernetes' 30-second grace period. A threaded or rated lane must be
+  the only lane served and takes no batch size: the command refuses those pairs before
+  `RELAY_STARTUP` runs, and refuses both flags with `--once`. One worker and no rate is
+  the serial relay, unchanged.
+
 ## [0.16.0] — 2026-11-13
 
 ### Added
