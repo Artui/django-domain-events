@@ -785,6 +785,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#django_domain_events.delivery.moot.Moot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Moot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#django_domain_events.delivery.wake.notify_relay" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1160,6 +1171,28 @@
     <span class="md-ellipsis">
       
         receiver_key
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_context.DeliveryContext.occurred_at" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        occurred_at
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_context.DeliveryContext.correlation_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        correlation_id
       
     </span>
   </a>
@@ -2236,6 +2269,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#django_domain_events.delivery.moot.Moot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Moot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#django_domain_events.delivery.wake.notify_relay" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2611,6 +2655,28 @@
     <span class="md-ellipsis">
       
         receiver_key
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_context.DeliveryContext.occurred_at" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        occurred_at
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#django_domain_events.types.delivery_context.DeliveryContext.correlation_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        correlation_id
       
     </span>
   </a>
@@ -3818,7 +3884,9 @@ raises, or answers with anything but an aware datetime, this raises.</p>
 is refused, with <code>ValueError</code>, for an event declared to delete on
 consumption: the key is unique on the row, so it would protect only until
 the prune deleted it. A <code>dedupe_key</code> longer than the column that stores it
-is refused with <code>ValueError</code> before anything is written.</p>
+is refused with <code>ValueError</code> before anything is written. Both refusals
+come after suppression: an event suppressed with <code>record=False</code> returns
+<code>None</code> unchecked.</p>
 
 
     </div>
@@ -4152,6 +4220,10 @@ repeat committed work, resurrect a dead letter past its budget, ignore a
 <p>A receiver answering <code>NotYet</code> has its row moved to the time it named,
 with no attempt spent, and this returns <code>PENDING</code>: the one outcome that
 leaves the row owed and not failed.</p>
+<p>A receiver answering <code>Moot</code> has its work rolled back and its row settled
+<code>CANCELLED</code> with that attempt, <code>last_error</code> reading <code>moot: &lt;reason&gt;</code>
+and no <code>succeeded_at</code>; <code>on_failure</code> is not called. This returns
+<code>CANCELLED</code>.</p>
 <p><code>claimed_by</code> and <code>claimed_at</code> are the claim a task message carries, as
 the relay passed them to <code>TaskBackend.enqueue</code>. Given them, this call
 first <em>takes</em> the row: one conditional update, committed before anything
@@ -4603,6 +4675,56 @@ like any other exception
 
 </div>
 
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="django_domain_events.delivery.moot.Moot" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">Moot</span>
+
+
+<a href="#django_domain_events.delivery.moot.Moot" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="Exception">Exception</span></code></p>
+
+
+
+        <p>Raised by a durable receiver that found nothing to do: the row is settled CANCELLED,
+its writes rolled back, with <code>moot: &lt;reason&gt;</code> as <code>last_error</code>, not as a success and
+not as a failure. Read by the relay alone: from INLINE or ON_COMMIT it is any exception.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
 <div class="doc doc-object doc-function">
 
 
@@ -4638,7 +4760,9 @@ than waiting for it.</p>
 
 </div><p>The hook around each durable attempt is a setting rather than a symbol: see
 <a href="../settings/#around_delivery"><code>AROUND_DELIVERY</code></a>. It is handed the
-<code>DeliveryContext</code> below, whose <code>receiver_key</code> names the receiver.</p>
+<code>DeliveryContext</code> below, whose <code>receiver_key</code> names the receiver. So is the
+per-process hook <code>deliver_events</code> calls before its first claim: see
+<a href="../settings/#relay_startup"><code>RELAY_STARTUP</code></a>.</p>
 <h2 id="operations">Operations<a class="headerlink" href="#operations" title="Permanent link">&para;</a></h2>
 
 
@@ -4663,8 +4787,8 @@ than waiting for it.</p>
         <p>Withdraw the owed deliveries of these events, so they never run.</p>
 <p>The scheduled case is the one this exists for: an offer accepted before its
 expiry is due, a reminder for an order already paid. A receiver that finds
-nothing to do and returns is still the answer when the world moved on and
-nobody said so; this is the answer when the application knows ahead of
+nothing to do and raises <code>Moot</code> is still the answer when the world moved
+on and nobody said so; this is the answer when the application knows ahead of
 time, and wants neither the run nor a success recorded for work that was
 never done.</p>
 <p>A delivery is withdrawn if it is <strong>unclaimed and owed</strong>: pending, which is
@@ -5388,9 +5512,9 @@ ever failed" is answerable without reading the attempt count.</p>
 
     <div class="doc doc-contents ">
 
-        <p>Settled by <code>cancel_deliveries</code> before it ran: the work was known to be
-moot ahead of time, so it never will. Not a success, because the receiver
-did not run, and not a dead letter, because nothing failed.</p>
+        <p>The work was moot: known ahead of time (<code>cancel_deliveries</code>) or found when
+it ran (<code>Moot</code>). Not a success, because the work was not done, and not a dead
+letter, because nothing failed.</p>
 
     </div>
 
@@ -5475,9 +5599,9 @@ running it.</p>
 <p>A dead or orphaned delivery keeps its event under the ordinary
 <code>RETENTION_DAYS</code> window, so the dead letter stays inspectable and
 <code>requeue_dead</code> still has a row to reopen. A cancelled one does not: it
-was withdrawn on purpose by <code>cancel_deliveries</code>, nothing failed and
-nothing is left to requeue, so with every other row succeeded every row of
-the event is done.</p>
+was moot, withdrawn by <code>cancel_deliveries</code> or found so by a receiver
+raising <code>Moot</code>, nothing failed and nothing is left to requeue, so with
+every other row succeeded every row of the event is done.</p>
 
     </div>
 
@@ -5541,7 +5665,7 @@ for <code>requeue_dead</code> or the dead-letter counts to find.</p>
 
 
         <p>Delivery metadata, passed to receivers declaring <code>takes_context</code>.</p>
-<p>Also to a <code>targets=</code> callable, at fire time, and to the
+<p>Also to a <code>targets=</code> callable, at fire time and at replay, and to the
 <code>AROUND_DELIVERY</code> hook, once per durable attempt.</p>
 <p>Frozen data read off the event row, never a live handle: a durable delivery
 can run in another process hours after the scope that produced it has gone.</p>
@@ -5684,6 +5808,63 @@ callable is asked with. What an <code>AROUND_DELIVERY</code> hook labels a span,
 metric or a log line by, since the hook is handed this context and not the
 receiver. Blank only on a context built by hand. Optional and last for the
 same reason as <code>target</code>.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="django_domain_events.types.delivery_context.DeliveryContext.occurred_at" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">occurred_at</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+<a href="#django_domain_events.types.delivery_context.DeliveryContext.occurred_at" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">occurred_at</span><span class="p">:</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>When the event happened: <code>fire(occurred_at=)</code>, as the event row stores it.</p>
+<p>Read back the way the relay reads it, so an <code>INLINE</code> receiver sees the
+same value: in UTC under <code>USE_TZ = True</code>.</p>
+<p>What an audit trail records, and what a <code>NotYet</code> receiver can bound its
+own wait with: stop deferring once the event is older than it allows. None
+only on a context built by hand. Optional and last for the same reason as
+<code>target</code>.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="django_domain_events.types.delivery_context.DeliveryContext.correlation_id" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">correlation_id</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+<a href="#django_domain_events.types.delivery_context.DeliveryContext.correlation_id" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">correlation_id</span><span class="p">:</span> <span class="n">UUID</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>The correlation id the event was recorded with, or None if it had none.</p>
+<p>Optional and last for the same reason as <code>target</code>.</p>
 
     </div>
 

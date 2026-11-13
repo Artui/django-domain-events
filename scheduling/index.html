@@ -455,6 +455,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#found-moot-when-it-runs-moot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Found moot when it runs: Moot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#cancelling-work-known-to-be-moot" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -773,6 +784,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#found-moot-when-it-runs-moot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Found moot when it runs: Moot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#cancelling-work-known-to-be-moot" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -885,7 +907,7 @@ its due time on.</p>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">timezone</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeliveryContext</span><span class="p">,</span> <span class="n">NotYet</span><span class="p">,</span> <span class="n">receiver</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeliveryContext</span><span class="p">,</span> <span class="n">Moot</span><span class="p">,</span> <span class="n">NotYet</span><span class="p">,</span> <span class="n">receiver</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OfferMade</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="s2">"waitlist.send_offer"</span><span class="p">)</span>
@@ -897,7 +919,7 @@ its due time on.</p>
 </span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="k">def</span><span class="w"> </span><span class="nf">expire_offer</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OfferMade</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DeliveryContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 </span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    <span class="n">offer</span> <span class="o">=</span> <span class="n">Offer</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">pk</span><span class="o">=</span><span class="n">evt</span><span class="o">.</span><span class="n">offer_id</span><span class="p">)</span>
 </span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    <span class="k">if</span> <span class="n">offer</span><span class="o">.</span><span class="n">accepted</span><span class="p">:</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>        <span class="k">return</span>  <span class="c1"># the world moved on: nothing to do, and that is a success</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>        <span class="k">raise</span> <span class="n">Moot</span><span class="p">(</span><span class="s2">"the offer was accepted"</span><span class="p">)</span>  <span class="c1"># the world moved on: nothing to do</span>
 </span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    <span class="k">if</span> <span class="n">offer</span><span class="o">.</span><span class="n">expires_at</span> <span class="o">&gt;</span> <span class="nb">max</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">due_at</span><span class="p">,</span> <span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">()):</span>
 </span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>        <span class="k">raise</span> <span class="n">NotYet</span><span class="p">(</span><span class="n">offer</span><span class="o">.</span><span class="n">expires_at</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"the offer was extended"</span><span class="p">)</span>
 </span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    <span class="n">offer</span><span class="o">.</span><span class="n">expire</span><span class="p">()</span>
@@ -1018,20 +1040,49 @@ is due rather than when it was scheduled.</p>
 the invoice was paid, the activity was cancelled. There are two cases, and they
 have different answers.</p>
 <p><strong>Found moot when it runs.</strong> The receiver re-reads current state, finds nothing
-to do and <strong>returns, which is an ordinary success</strong>. "Nothing to do" is not a
-different outcome from the relay's point of view - the delivery ran and its work
-is done. This is the case nobody announced, and it is why a scheduled receiver
-always re-checks.</p>
+to do and <strong>raises <code>Moot</code></strong>, below. This is the case nobody announced, and it is
+why a scheduled receiver always re-checks.</p>
 <p><strong>Known moot ahead of time.</strong> The code that accepts the offer knows the expiry
-is pointless. Waiting for it to run and succeed records a success for work that
-was never done; cancelling it is the answer, below.</p>
+is pointless. Waiting for it to run records an outcome for work that was never
+done; cancelling it is the answer, below.</p>
+<p>Both settle the row as <code>cancelled</code>. Returning instead would record a success,
+which counts work that was not done and keeps a receiver that skips every row
+looking alive to <a href="../introspection/#quiet-receivers"><code>quiet_receivers</code></a>.</p>
+<h2 id="found-moot-when-it-runs-moot">Found moot when it runs: <code>Moot</code><a class="headerlink" href="#found-moot-when-it-runs-moot" title="Permanent link">&para;</a></h2>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">if</span> <span class="n">offer</span><span class="o">.</span><span class="n">accepted</span><span class="p">:</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="k">raise</span> <span class="n">Moot</span><span class="p">(</span><span class="s2">"the offer was accepted"</span><span class="p">)</span>
+</span></code></pre></div>
+<p>The receiver above raises it when the offer was accepted first. <code>Moot(reason)</code>
+settles the row as <code>cancelled</code> on the attempt that raised it:</p>
+<ul>
+<li><strong>Its writes are rolled back</strong>, as with any raise: the receiver runs inside
+  the transaction that carries the acknowledgement.</li>
+<li><strong>It is not a success.</strong> <code>succeeded_at</code> stays empty, so the delivery does not
+  count as a success, and <a href="../introspection/#quiet-receivers"><code>quiet_receivers</code></a>
+  reads a receiver whose every delivery was moot as quiet.</li>
+<li><strong>It is not a failure.</strong> <code>on_failure</code> is not called and nothing is retried.
+  <code>last_error</code> reads <code>moot: &lt;reason&gt;</code>, truncated like any other error, so the
+  row says why. <code>completed_at</code> is when it settled, and <code>attempts</code> counts the
+  attempt that raised it.</li>
+<li><strong>It is logged at DEBUG</strong>, as <code>NotYet</code> is: work found moot is not something
+  an operator acts on.</li>
+</ul>
+<p>The row is then exactly as a cancelled one: health does not count it, prune
+treats it as consumed, and <a href="#replay">replay</a> reopens it. A direct
+<code>deliver_one()</code> returns <code>cancelled</code>, and a receiver on a
+<a href="../operations/#handing-delivery-to-a-task-queue">task backend</a> is settled the same
+way.</p>
+<p>Only the relay reads <code>Moot</code>, as only it reads <code>NotYet</code>: an <code>INLINE</code> receiver
+raising it fails the caller's transaction like any other exception, and an
+<code>ON_COMMIT</code> one has it logged. Neither has a row to settle. Return from those
+when there is nothing to do.</p>
 <h2 id="cancelling-work-known-to-be-moot">Cancelling work known to be moot<a class="headerlink" href="#cancelling-work-known-to-be-moot" title="Permanent link">&para;</a></h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django.db</span><span class="w"> </span><span class="kn">import</span> <span class="n">transaction</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">cancel_deliveries</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="k">with</span> <span class="n">transaction</span><span class="o">.</span><span class="n">atomic</span><span class="p">():</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">offer</span><span class="o">.</span><span class="n">accept</span><span class="p">()</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="n">cancel_deliveries</span><span class="p">([</span><span class="n">offer</span><span class="o">.</span><span class="n">made_event_id</span><span class="p">],</span> <span class="n">receiver_key</span><span class="o">=</span><span class="s2">"offers.expire_offer"</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django.db</span><span class="w"> </span><span class="kn">import</span> <span class="n">transaction</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">cancel_deliveries</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="k">with</span> <span class="n">transaction</span><span class="o">.</span><span class="n">atomic</span><span class="p">():</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    <span class="n">offer</span><span class="o">.</span><span class="n">accept</span><span class="p">()</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>    <span class="n">cancel_deliveries</span><span class="p">([</span><span class="n">offer</span><span class="o">.</span><span class="n">made_event_id</span><span class="p">],</span> <span class="n">receiver_key</span><span class="o">=</span><span class="s2">"offers.expire_offer"</span><span class="p">)</span>
 </span></code></pre></div>
 <p><a href="../operations/#cancel-owed-work"><code>cancel_deliveries</code></a> settles the event's owed
 rows for that receiver as <code>cancelled</code>, so the relay never claims them, at the due
@@ -1046,8 +1097,8 @@ could not, as <code>{"cancelled": n, "in_flight": m}</code>.</p>
   receiver now. It is counted in <code>in_flight</code>, and the receiver's own re-check is
   what stops it: cancelling does not replace the re-check, it saves the run.</li>
 </ul>
-<p><code>cancelled</code> is a settled status of its own, distinct from a success (the receiver
-never ran) and from a dead letter (nothing failed). Health does not count it,
+<p><code>cancelled</code> is a settled status of its own, distinct from a success (the work
+was not done) and from a dead letter (nothing failed). Health does not count it,
 prune treats it as consumed under either retention policy, and
 <a href="#replay">replay</a> reopens it - the way back for work withdrawn by mistake.</p>
 <p>The event id is what <code>fire()</code> returned. Keep it where the work's subject lives -
@@ -1068,13 +1119,17 @@ have the same shape.</p>
 <p><code>NotYet(until, reason="")</code> is the answer. The receiver recomputes the due time
 from current state, compares it with <code>DeliveryContext.due_at</code> - the time the row
 came due with - and raises when the work has moved later:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">if</span> <span class="n">offer</span><span class="o">.</span><span class="n">expires_at</span> <span class="o">&gt;</span> <span class="nb">max</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">due_at</span><span class="p">,</span> <span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">()):</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="k">raise</span> <span class="n">NotYet</span><span class="p">(</span><span class="n">offer</span><span class="o">.</span><span class="n">expires_at</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"the offer was extended"</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">if</span> <span class="n">offer</span><span class="o">.</span><span class="n">expires_at</span> <span class="o">&gt;</span> <span class="nb">max</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">due_at</span><span class="p">,</span> <span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">()):</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="k">raise</span> <span class="n">NotYet</span><span class="p">(</span><span class="n">offer</span><span class="o">.</span><span class="n">expires_at</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"the offer was extended"</span><span class="p">)</span>
 </span></code></pre></div>
 <p>The clock term is there because a late run must proceed rather than fail: a
 row that runs after the moved time has nothing left to wait for, and
 <code>NotYet</code> refuses a time already come, so comparing against <code>ctx.due_at</code> alone
 would raise that refusal as an ordinary failure on every retry.</p>
+<p>A receiver that must not wait forever bounds its own wait with <code>ctx.occurred_at</code>,
+the time the event happened: stop answering <code>NotYet</code> once
+<code>timezone.now() - ctx.occurred_at</code> passes what the work tolerates. The library
+has no setting for this; the receiver decides.</p>
 <p>The relay writes <code>until</code> to the row's <code>available_at</code> and <code>due_at</code> together, sets
 it back to <code>pending</code>, and does nothing else:</p>
 <ul>
@@ -1184,13 +1239,13 @@ alone.</p>
 <p><code>drain_outbox()</code> skips the backoff, and <strong>never skips a schedule</strong>: a row whose
 due time has not come is left alone, so a test that makes an offer does not
 expire it in the same breath. Pass <code>now=</code> to move forward instead:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_an_unanswered_offer_expires</span><span class="p">():</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="n">offer</span> <span class="o">=</span> <span class="n">make_offer</span><span class="p">()</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="n">drain_outbox</span><span class="p">()</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="k">assert</span> <span class="ow">not</span> <span class="n">offer_expired</span><span class="p">(</span><span class="n">offer</span><span class="p">)</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">drain_outbox</span><span class="p">(</span><span class="n">now</span><span class="o">=</span><span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">()</span> <span class="o">+</span> <span class="n">timedelta</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">48</span><span class="p">))</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="k">assert</span> <span class="n">offer_expired</span><span class="p">(</span><span class="n">offer</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_an_unanswered_offer_expires</span><span class="p">():</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="n">offer</span> <span class="o">=</span> <span class="n">make_offer</span><span class="p">()</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="n">drain_outbox</span><span class="p">()</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="k">assert</span> <span class="ow">not</span> <span class="n">offer_expired</span><span class="p">(</span><span class="n">offer</span><span class="p">)</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="n">drain_outbox</span><span class="p">(</span><span class="n">now</span><span class="o">=</span><span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">()</span> <span class="o">+</span> <span class="n">timedelta</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">48</span><span class="p">))</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="k">assert</span> <span class="n">offer_expired</span><span class="p">(</span><span class="n">offer</span><span class="p">)</span>
 </span></code></pre></div>
 <p><code>now=</code> is the moment every claim of the call is made at - what is due, which
 backoff has run out and which lease has lapsed are all read against it.

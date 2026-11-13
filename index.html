@@ -806,8 +806,8 @@ run the relay:</p>
   retry.</li>
 <li><a href="scheduling/">Scheduled reactions</a> - work due a set time after a committed
   change, declared on the receiver with <code>due=</code>, <code>NotYet</code> for work that
-  turns out not to be due yet, and <code>cancel_deliveries</code> for work known to be
-  moot before it runs.</li>
+  turns out not to be due yet, <code>Moot</code> for work found moot when it runs, and
+  <code>cancel_deliveries</code> for work known to be moot before it runs.</li>
 <li><a href="scope/">Scope and attribution</a> - <code>attributed()</code>, <code>suppressed()</code>, causation
   chains, and the one rule that matters for threads.</li>
 <li><a href="operations/">Operations</a> - prune, replay, requeue, cancel, and running the

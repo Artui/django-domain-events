@@ -784,11 +784,14 @@ whatever that worker happens to be in the middle of.</p>
 <p><code>AnonymousUser</code> is not an actor and is not recorded as one.</p>
 <h2 id="nesting">Nesting<a class="headerlink" href="#nesting" title="Permanent link">&para;</a></h2>
 <p>Blocks merge. An inner block adds to and overrides the outer one, rather than
-replacing it:</p>
+replacing it (the actor is the exception, below):</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">with</span> <span class="n">attributed</span><span class="p">(</span><span class="n">source</span><span class="o">=</span><span class="s2">"checkout"</span><span class="p">):</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="k">with</span> <span class="n">attributed</span><span class="p">(</span><span class="n">tenant</span><span class="o">=</span><span class="n">org</span><span class="o">.</span><span class="n">id</span><span class="p">):</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>        <span class="n">fire</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>  <span class="c1"># scope == {"source": "checkout", "tenant": org.id}</span>
 </span></code></pre></div>
+<p>The actor is the exception. Naming any of <code>actor</code>, <code>actor_key</code> or <code>actor_label</code> in an
+inner block replaces the whole actor, so the outer user is not recorded beside a key
+from the inner block: that would describe two actors.</p>
 <p><code>current_scope()</code> returns the scope in force right now, as a fresh value each
 call - never a shared instance, so a receiver that mutates what it is given
 cannot poison the next unattributed event in the process.</p>

@@ -672,6 +672,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#relay_startup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RELAY_STARTUP
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -893,6 +904,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#relay_startup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RELAY_STARTUP
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1043,6 +1065,11 @@ are changing.</p>
 <td><code>AROUND_DELIVERY</code></td>
 <td><code>None</code></td>
 <td>Dotted path to a callable taking a <code>DeliveryContext</code> and returning a context manager, entered around each durable attempt.</td>
+</tr>
+<tr>
+<td><code>RELAY_STARTUP</code></td>
+<td><code>None</code></td>
+<td>Dotted path to a callable taking <code>worker_id</code> and <code>lanes</code>, called once by <code>deliver_events</code> before its first claim.</td>
 </tr>
 </tbody>
 </table>
@@ -1199,6 +1226,18 @@ level (<code>SET search_path</code>, <code>SET ROLE</code>) and reset it on exit
 <code>SET LOCAL</code>.</p>
 <p>The rules, and what it never wraps, are in
 <a href="../delivery/#a-hook-around-each-delivery">A hook around each delivery</a>.</p>
+<h3 id="relay_startup"><code>RELAY_STARTUP</code><a class="headerlink" href="#relay_startup" title="Permanent link">&para;</a></h3>
+<p>A dotted path to a callable that <code>deliver_events</code> calls once per process, on the
+main thread, with the keyword arguments <code>worker_id: str</code> and <code>lanes: list[str]</code>,
+after it has parsed its options and before its first claim, with <code>--once</code> and as
+a relay. Its return value is ignored. An exception from it propagates and stops
+the command before anything is claimed. A <code>--lane</code> no receiver declares, and a
+relay on a database without <code>SKIP LOCKED</code>, are refused after it has run.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="s2">"RELAY_STARTUP"</span><span class="p">:</span> <span class="s2">"myproject.relay.startup"</span><span class="p">,</span>
+</span></code></pre></div>
+<p>Only the command calls it: <code>run_relay()</code>, <code>deliver_pending()</code> and
+<code>drain_outbox()</code> called from Python do not. See
+<a href="../operations/#setting-up-the-process-before-it-delivers">Setting up the process before it delivers</a>.</p>
 <h2 id="use_tz-false"><code>USE_TZ = False</code><a class="headerlink" href="#use_tz-false" title="Permanent link">&para;</a></h2>
 <p>Supported. Every datetime the package writes or compares follows the project's
 setting: "now" is <code>django.utils.timezone.now()</code>, so it is aware under
@@ -1217,9 +1256,9 @@ argument to <code>drain_outbox</code>, <code>deliver_pending</code>, <code>outbo
   <code>NotYet</code> and <code>due=</code> accept one rather than refusing it as they do under
   <code>True</code>.</li>
 </ul>
-<p>What the package hands back is in the same form: <code>DeliveryContext.due_at</code>,
-<code>outbox_health().oldest_owed_at</code> and every timestamp on the rows are naive local
-time under <code>False</code>. Compare them with <code>timezone.now()</code>, not
+<p>What the package hands back is in the same form: <code>DeliveryContext.due_at</code> and
+<code>occurred_at</code>, <code>outbox_health().oldest_owed_at</code> and every timestamp on the rows
+are naive local time under <code>False</code>. Compare them with <code>timezone.now()</code>, not
 <code>datetime.now(timezone.utc)</code>.</p>
 <p>The documented <code>NotYet</code> pattern, <code>if moved &gt; max(ctx.due_at, timezone.now())</code>,
 works unchanged under either setting. Clock changes still bend naive arithmetic
@@ -1237,11 +1276,11 @@ as standard time, and an ambiguous one as the later of its two instants.</p>
 <p>Everything that opens a transaction asks the router for the alias, rather than
 hardcoding <code>default</code>. Give the event log its own database and the guarantee still
 holds:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">EventRouter</span><span class="p">:</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">db_for_write</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="o">**</span><span class="n">hints</span><span class="p">):</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>        <span class="k">if</span> <span class="n">model</span><span class="o">.</span><span class="n">_meta</span><span class="o">.</span><span class="n">app_label</span> <span class="o">==</span> <span class="s2">"django_domain_events"</span><span class="p">:</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>            <span class="k">return</span> <span class="s2">"events"</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>        <span class="k">return</span> <span class="kc">None</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">EventRouter</span><span class="p">:</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">db_for_write</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="o">**</span><span class="n">hints</span><span class="p">):</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>        <span class="k">if</span> <span class="n">model</span><span class="o">.</span><span class="n">_meta</span><span class="o">.</span><span class="n">app_label</span> <span class="o">==</span> <span class="s2">"django_domain_events"</span><span class="p">:</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>            <span class="k">return</span> <span class="s2">"events"</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>        <span class="k">return</span> <span class="kc">None</span>
 </span></code></pre></div>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>

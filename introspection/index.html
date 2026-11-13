@@ -928,7 +928,8 @@ climbing, while one wedged receiver has a backlog and everything else fine.</p>
 </tr>
 </tbody>
 </table>
-<p>A <a href="../operations/#cancel-owed-work">cancelled</a> delivery is settled, so it appears
+<p>A cancelled delivery, <a href="../operations/#cancel-owed-work">withdrawn</a> or found moot
+by its receiver, is settled, so it appears
 in none of these: not owed, not scheduled and not dead. An outbox holding only
 cancelled work reads as drained.</p>
 <p><strong>The age of <code>oldest_owed_at</code> is the number to alert on</strong>, and it is measured
@@ -1151,7 +1152,8 @@ run teaches the reader to skip the output.</p>
   owed per event, <strong>Replay selected events</strong>, and <strong>Cancel owed deliveries of
   selected events</strong>.</li>
 <li><strong>Delivery records</strong> - the dead-letter queue, filterable by status and
-  receiver - <code>cancelled</code> included, so withdrawn work can be listed on its own -
+  receiver - <code>cancelled</code> included, so moot work, withdrawn or found when it ran, can be
+  listed on its own -
   with <strong>Requeue selected dead deliveries</strong> and <strong>Cancel selected deliveries</strong>.
   Each row shows its
   target, and the search covers the receiver key, the target and the last error,

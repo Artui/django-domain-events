@@ -1009,6 +1009,11 @@ compares against before answering an early run with
 <a href="../scheduling/#when-the-work-is-not-due-yet-notyet"><code>NotYet</code></a>. For any other
 row it is when the row became owed, the moment a replay or requeue reopened it
 or else when its event was recorded, and it is <code>None</code> wherever <code>delivery_id</code> is.</p>
+<p><code>ctx.occurred_at</code> and <code>ctx.correlation_id</code> are the event's own: when it happened,
+<code>fire(occurred_at=)</code> as the event row stores it, in UTC under <code>USE_TZ = True</code>
+(what an audit log records), and the correlation id it was recorded with, or
+<code>None</code>. Both are set on every context the library builds, <code>INLINE</code>, <code>ON_COMMIT</code>
+and <code>targets=</code> included, and are the same on each of them.</p>
 <div class="admonition note">
 <p class="admonition-title">A long receiver needs <code>lease_seconds</code>, not a heartbeat</p>
 <p>A receiver still working when its lease lapses has its row taken by another
@@ -1054,7 +1059,7 @@ depends on. Everything else about the delivery is unchanged:</p>
   So <code>await Model.objects.acreate(...)</code> commits with the acknowledgement and is
   rolled back with it when the receiver raises, exactly as a sync receiver's
   write is.</li>
-<li><strong>It reads its verdicts the same way.</strong> <code>RetryAfter</code>, <code>NotYet</code> and
+<li><strong>It reads its verdicts the same way.</strong> <code>RetryAfter</code>, <code>NotYet</code>, <code>Moot</code> and
   <code>PermanentFailure</code> raised from a coroutine reach the relay as the same
   object, and an <code>INLINE</code> coroutine's raise reaches <code>fire()</code>'s caller.</li>
 <li><strong>Causation reaches it.</strong> An event it fires through

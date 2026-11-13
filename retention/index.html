@@ -778,11 +778,12 @@ or claimed is still owed, and no form deletes an event that is still owed. An
 event with no durable deliveries - nothing durable listens, or it was recorded inside
 <a href="../scope/"><code>suppressed()</code></a> - is consumed as soon as it commits, so under either
 <code>Retention</code> policy its row goes at the next prune, suppression reason and all.</p>
-<p>A <a href="../operations/#cancel-owed-work">cancelled</a> delivery counts as consumed under
-<code>Retention.SUCCEEDED</code> as well as under <code>Retention.SETTLED</code>. It is not a success -
-the receiver never ran - but it was withdrawn on purpose: nothing failed, nothing
-is left to inspect or requeue, and every row of the event is done, so holding the
-event for the window would keep it for no reader.</p>
+<p>A cancelled delivery counts as consumed under <code>Retention.SUCCEEDED</code> as well as
+under <code>Retention.SETTLED</code>, whether it was <a href="../operations/#cancel-owed-work">withdrawn</a>
+before it ran or its receiver found it moot and raised
+<a href="../scheduling/#found-moot-when-it-runs-moot"><code>Moot</code></a>. It is not a success - the work was not done - but it was
+moot: nothing failed, nothing is left to inspect or requeue, and every row of the
+event is done, so holding the event for the window would keep it for no reader.</p>
 <p>A window of its own may be longer than <code>RETENTION_DAYS</code> as well as shorter: the
 default is a default, not a ceiling. It has to be a whole number of seconds, from
 one second to about 68 years, which is what the event row can record; anything
