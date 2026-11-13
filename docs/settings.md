@@ -239,9 +239,10 @@ The rules, and what it never wraps, are in
 
 A dotted path to a callable that `deliver_events` calls once per process, on the
 main thread, with the keyword arguments `worker_id: str` and `lanes: list[str]`,
-after its options are validated and before its first claim, with `--once` and as
+after it has parsed its options and before its first claim, with `--once` and as
 a relay. Its return value is ignored. An exception from it propagates and stops
-the command before anything is claimed.
+the command before anything is claimed. A `--lane` no receiver declares, and a
+relay on a database without `SKIP LOCKED`, are refused after it has run.
 
 ```python
 "RELAY_STARTUP": "myproject.relay.startup",

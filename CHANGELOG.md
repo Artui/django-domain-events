@@ -11,14 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `RELAY_STARTUP` setting: a dotted path to a callable that `deliver_events` calls once per
-  process with `worker_id` and `lanes`, after validating its options and before its first
+  process with `worker_id` and `lanes`, after parsing its options and before its first
   claim, with `--once` and as a relay. It is where per-process setup such as feature flags
   goes, so a project no longer copies the command to add it. An exception from it stops the
   command before anything is claimed. `run_relay()`, `deliver_pending()` and `drain_outbox()`
   called from Python do not call it.
-- A delivery whose receiver finishes after its lease ran out, while the row is still its
-  own, now logs one WARNING naming the worker, the delivery, the receiver and the overrun in
-  seconds. Another relay could have claimed the row meanwhile; the outcome is unchanged. Raise
+- A delivery whose receiver succeeds after its lease ran out, while the row is still its
+  worker's, now logs one WARNING naming the worker, the delivery, the receiver and the
+  overrun in seconds. Another relay could have claimed the row meanwhile; the success
+  stands. A late failure, `NotYet` or `RetryAfter` logs no such line. Raise
   `lease_seconds=` on that receiver.
 
 ### Changed

@@ -18,7 +18,7 @@ from django_domain_events.delivery.hand_back import hand_back
 from django_domain_events.delivery.utils import OnDeferral, lane_claim_sizes, served_lanes
 from django_domain_events.delivery.wake import wait_for_work
 from django_domain_events.delivery.write_alias import write_alias
-from django_domain_events.operations.prune_events import prune_with_counts
+from django_domain_events.operations.prune_with_counts import prune_with_counts
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import DEFAULT_LANE

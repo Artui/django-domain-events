@@ -1214,9 +1214,11 @@ def _short_lease_receiver() -> RegisteredReceiver:
     )
 
 
-def _run_short_lease(monkeypatch: pytest.MonkeyPatch, *, run_for: float) -> list[logging.LogRecord]:
-    """Deliver a 60 s lease receiver whose run the clock sees as ``run_for`` seconds long."""
-    entry = _short_lease_receiver()
+def _run_short_lease(
+    monkeypatch: pytest.MonkeyPatch, *, run_for: float, lease_seconds: int = 60
+) -> list[logging.LogRecord]:
+    """Deliver, on a 60 s claim, a receiver whose run the clock sees as ``run_for`` s long."""
+    entry = dataclasses.replace(_short_lease_receiver(), lease_seconds=lease_seconds)
     skew = {"seconds": 0.0}
     real_now = django_timezone.now
     monkeypatch.setattr(
@@ -1254,7 +1256,7 @@ def test_a_receiver_that_finishes_past_its_lease_and_still_owns_the_row_warns_on
     text = warnings[0].getMessage()
     assert "worker w1" in text
     assert "tests.short_lease" in text
-    assert re.search(r"finished \d+ ", text)
+    assert re.search(r"finished delivery \d+ ", text)
     assert re.search(r"(2\d|3\d)\.\d s past its lease", text)
     assert "lease_seconds=" in text
 
@@ -1263,3 +1265,9 @@ def test_a_receiver_that_finishes_inside_its_lease_logs_no_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert _run_short_lease(monkeypatch, run_for=10.0) == []
+
+
+def test_an_overrun_is_measured_against_the_lease_the_row_was_extended_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert _run_short_lease(monkeypatch, run_for=90.0, lease_seconds=600) == []

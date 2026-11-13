@@ -12,7 +12,10 @@ from django.core.management import CommandError, call_command
 from django.db import connection, transaction
 
 from django_domain_events.delivery.claim_batch import claim_batch
+from django_domain_events.delivery.deliver import deliver_pending
+from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.run_relay import run_relay
 from django_domain_events.management.commands import deliver_events
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.types.delivery_mode import DeliveryMode
@@ -464,3 +467,29 @@ def test_relay_startup_does_not_run_for_an_invalid_command(
         call_command("deliver_events", "--limit", "1")
 
     assert steps == []
+
+
+def test_relay_startup_runs_before_an_unknown_lane_is_refused(
+    settings, steps: list[tuple[str, object]]
+) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_STARTUP": f"{__name__}.startup"}
+
+    with pytest.raises(ValueError, match="nosuch"):
+        call_command("deliver_events", "--once", "--lane", "nosuch", stdout=StringIO())
+
+    assert [step for step, _ in steps] == ["startup"]
+
+
+def test_the_delivery_functions_called_from_python_never_call_relay_startup(
+    order: OrderPlaced, record: list[str], settings, steps: list[tuple[str, object]]
+) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_STARTUP": f"{__name__}.startup"}
+    with transaction.atomic():
+        fire(order)
+
+    deliver_pending()
+    drain_outbox()
+    run_relay(worker_id="w1", passes=1, wait=lambda _: False, allow_unsafe_concurrency=True)
+
+    assert steps == []
+    assert record, "nothing was delivered, so the functions proved nothing"

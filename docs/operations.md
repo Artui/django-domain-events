@@ -44,10 +44,11 @@ def startup(*, worker_id: str, lanes: list[str]) -> None:
 ```
 
 `deliver_events` calls it once per process, on the main thread, after it has
-validated its options and resolved the worker id and lanes, and before the first
+parsed its options and resolved the worker id and lanes, and before the first
 claim, with `--once` and as a relay alike. An exception from it stops the command
-before anything is claimed, so a process never starts half set up. A relay run on
-SQLite refuses to start after it has run.
+before anything is claimed, so a process never starts half set up. Two refusals come
+after it has run: a `--lane` no receiver declares, and a relay on a database
+without `SKIP LOCKED`, such as SQLite.
 
 It is the command's hook, not the delivery functions': `run_relay()`,
 `deliver_pending()` and `drain_outbox()` called from Python do not call it. Code
@@ -872,10 +873,11 @@ check the names against the relays running.
 The relay logs at `WARNING` when a worker loses a delivery - either before
 running it, or after finishing work whose lease had already lapsed. The second
 names the receiver and suggests `lease_seconds=`, because that is the fix. A
-worker that finishes past its lease while the row is still its own keeps the
-outcome, since nothing took the row, and logs one `WARNING`, `worker W finished
-D X.X s past its lease`, naming the receiver whose `lease_seconds=` to raise:
-another relay could have claimed the row meanwhile. It also logs every failed
+receiver that succeeds past its lease while the row is still its worker's keeps
+the success, since nothing took the row, and logs one `WARNING`, `worker W
+finished delivery D X.X s past its lease`, naming the receiver whose
+`lease_seconds=` to raise: another relay could have claimed the row meanwhile.
+A late failure, `NotYet` or `RetryAfter` logs no such line. It also logs every failed
 attempt it records, at `WARNING`, one line each - see
 [the failure log](delivery.md#the-failure-log). A receiver answering `NotYet`
 is logged at `DEBUG`, not `INFO`: the row is scheduled, and there is nothing to

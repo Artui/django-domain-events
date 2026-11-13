@@ -240,7 +240,7 @@ def _deliver_one(
                 transaction.set_rollback(True, using=write_alias())
             elif fence.lease_expires_at is not None and acknowledged > fence.lease_expires_at:
                 logger.warning(
-                    "worker %s finished %s %.1f s past its lease; another relay could "
+                    "worker %s finished delivery %s %.1f s past its lease; another relay could "
                     "have claimed it meanwhile. Raise lease_seconds= on receiver %s",
                     worker_id,
                     delivery_id,
