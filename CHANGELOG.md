@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   correlation id, set on every context the library builds: the relay and task deliveries,
   `INLINE` and `ON_COMMIT` receivers, and the context a `targets=` callable gets at fire
   time and at replay. A `NotYet` receiver can bound its own wait with `ctx.occurred_at`.
+  A naive `fire(occurred_at=)` under `USE_TZ = True`, which Django warns about and stores
+  in `TIME_ZONE`, is read that way at fire time too, so a `due=` timedelta receiver no
+  longer raises `TypeError` on one.
 
 ### Changed
 - A `NotYet` answer is now logged at DEBUG instead of INFO: it says the work is scheduled,

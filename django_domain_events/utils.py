@@ -111,9 +111,11 @@ def as_stored(value: datetime) -> datetime:
     """``value`` as the database hands it back: in UTC, or as it is under ``USE_TZ = False``."""
     if not settings.USE_TZ:
         return value
-    return (timezone.make_aware(value) if timezone.is_naive(value) else value).astimezone(
-        dt_timezone.utc
-    )
+    return (
+        timezone.make_aware(value, timezone.get_default_timezone())
+        if timezone.is_naive(value)
+        else value
+    ).astimezone(dt_timezone.utc)
 
 
 def require_aware_where_stored_aware(value: datetime, refusal: str) -> None:

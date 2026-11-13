@@ -8,6 +8,7 @@ from datetime import timezone as dt_timezone
 from typing import Any
 
 import pytest
+from django.utils import timezone
 
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.utils import (
@@ -137,8 +138,9 @@ def test_the_blank_target_has_a_digest_like_any_other() -> None:
 def test_as_stored_reads_a_value_back_in_utc_under_use_tz(settings: Any) -> None:
     settings.USE_TZ, settings.TIME_ZONE = True, "Asia/Tokyo"
     naive = datetime(2026, 1, 2, 9, 0)
-    assert as_stored(naive) == datetime(2026, 1, 2, 0, 0, tzinfo=dt_timezone.utc)
-    assert as_stored(naive).tzinfo is dt_timezone.utc
+    with timezone.override("America/Chicago"):
+        assert as_stored(naive) == datetime(2026, 1, 2, 0, 0, tzinfo=dt_timezone.utc)
+        assert as_stored(naive).tzinfo is dt_timezone.utc
 
 
 def test_as_stored_leaves_a_value_alone_without_use_tz(settings: Any) -> None:
