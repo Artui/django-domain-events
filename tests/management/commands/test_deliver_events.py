@@ -629,23 +629,31 @@ def test_a_malformed_lane_concurrency_or_rate_is_refused(
         ),
         (
             ["--lane", "mail", "--lane-concurrency", "mail=4", "--batch-size", "5"],
-            "drop batch_size and lane_batch_sizes",
+            "drop --batch-size and --lane-batch-size",
         ),
         (
             ["--lane", "mail", "--lane-rate", "mail=2", "--lane-batch-size", "mail=5"],
-            "drop batch_size and lane_batch_sizes",
+            "drop --batch-size and --lane-batch-size",
         ),
         (
             ["--lane", "mail", "--lane-concurrency", "push=4"],
-            "lane_concurrency names lane 'push', which is not served here",
+            "--lane-concurrency names lane 'push', which is not served here",
         ),
         (
             ["--lane", "mail", "--lane-concurrency", "mail=0"],
-            "lane_concurrency['mail'] must be a positive int, got 0",
+            "--lane-concurrency mail=N must be a positive int, got 0",
         ),
         (
             ["--lane", "mail", "--lane-rate", "mail=nan"],
-            "lane_rates['mail'] must be a finite number above 0, got nan",
+            "--lane-rate mail=R must be a finite number above 0, got nan",
+        ),
+        (
+            ["--lane", "mail", "--lane-rate", "mail=inf"],
+            "--lane-rate mail=R must be a finite number above 0, got inf",
+        ),
+        (
+            ["--lane", "mail", "--lane-rate", "push=1"],
+            "--lane-rate names lane 'push', which is not served here",
         ),
     ],
     ids=[
@@ -656,6 +664,8 @@ def test_a_malformed_lane_concurrency_or_rate_is_refused(
         "not-served",
         "no-workers",
         "nan-rate",
+        "inf-rate",
+        "rate-not-served",
     ],
 )
 def test_threads_the_relay_refuses_are_a_command_line_error_before_startup(

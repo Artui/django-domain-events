@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connections; each claim takes as many rows as there are idle workers and leaves out the
   rows in flight. On Postgres six workers deliver a lane of 250 ms calls about 5.7 times as
   fast as one. `--lane-rate LANE=R`, or `lane_rates={lane: R}`, starts at most R rows a
-  second in this process, R a float, counting every start, a `site="task"` enqueue
+  second in this process, R a float, spaced at the hand-off to a worker rather than at
+  the provider, counting every start, a `site="task"` enqueue
   included; replicas together start up to replicas x R. Each row runs in a copy of the
   context the relay started in, so a `ContextVar` set by `RELAY_STARTUP` reaches every row
   and a thread-local does not; receivers, `AROUND_DELIVERY` and `on_failure` run

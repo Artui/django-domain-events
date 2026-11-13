@@ -143,7 +143,8 @@ lane costs the others
 ([one relay, several lanes](operations.md#one-relay-several-lanes)).
 A lane with [worker threads or a rate](operations.md#worker-threads-in-a-lane)
 takes neither: each claim takes as many rows as it has idle workers, and either
-size beside it is refused.
+size beside it is refused. A rate spaces the starts 1/R apart as the relay hands
+each row to a worker, not at the provider: leave headroom under a strict quota.
 
 ### `PRUNE_BATCH_ROWS`
 

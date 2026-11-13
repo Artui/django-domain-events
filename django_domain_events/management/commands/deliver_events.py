@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import signal
 import socket
 from collections.abc import Callable
@@ -80,7 +81,8 @@ class Command(BaseCommand):
             metavar="LANE=R",
             help=(
                 "Start at most R deliveries of the lane a second in this process, R a "
-                "number such as 0.5. The lane must be the only one served."
+                "number such as 0.5, spaced at the hand-off to a worker, not at the "
+                "provider. The lane must be the only one served."
             ),
         )
 
@@ -108,17 +110,16 @@ class Command(BaseCommand):
                 "--once delivers one row at a time without them: drop --once to run "
                 "the relay."
             )
-        if not options["once"]:
-            try:
-                lane_threads(
-                    tuple(sorted(set(lanes))),
-                    lane_concurrency=lane_concurrency,
-                    lane_rates=lane_rates,
-                    batch_size=options["batch_size"],
-                    lane_batch_sizes=lane_batch_sizes,
-                )
-            except ValueError as exc:
-                raise CommandError(str(exc)) from None
+        try:
+            lane_threads(
+                tuple(sorted(set(lanes))),
+                lane_concurrency=lane_concurrency,
+                lane_rates=lane_rates,
+                batch_size=options["batch_size"],
+                lane_batch_sizes=lane_batch_sizes,
+            )
+        except ValueError as exc:
+            raise CommandError(_in_flags(str(exc))) from None
         startup = get_relay_startup()
         if startup is not None:
             startup(worker_id=worker_id, lanes=list(lanes))
@@ -209,3 +210,17 @@ class _StopOnSignal:
         for signum, previous in self.previous.items():
             # A None handler from getsignal cannot be restored, so the default stands in for it.
             signal.signal(signum, previous or signal.SIG_DFL)
+
+
+def _in_flags(message: str) -> str:
+    """``run_relay``'s refusal, naming this command's flags in place of its keywords."""
+    message = re.sub(r"lane_concurrency\['([^']*)'\]", r"--lane-concurrency \1=N", message)
+    message = re.sub(r"lane_rates\['([^']*)'\]", r"--lane-rate \1=R", message)
+    for keyword, flag in (
+        ("lane_batch_sizes", "--lane-batch-size"),
+        ("batch_size", "--batch-size"),
+        ("lane_concurrency", "--lane-concurrency"),
+        ("lane_rates", "--lane-rate"),
+    ):
+        message = message.replace(keyword, flag)
+    return message

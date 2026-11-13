@@ -83,8 +83,9 @@ you can run as many as you like:
   once instead of waiting for the lease to lapse. See
   [Stopping it](operations.md#stopping-it).
 - A relay can deliver a lane **several rows at a time** on worker threads,
-  `--lane-concurrency mail=6`, and cap its starts with `--lane-rate mail=5`.
-  See [Worker threads in a lane](operations.md#worker-threads-in-a-lane).
+  `--lane-concurrency mail=6`, and cap its starts with `--lane-rate mail=5`,
+  spaced 1/R apart as it hands each row to a worker, not at the provider: leave
+  headroom under a strict quota. See [Worker threads in a lane](operations.md#worker-threads-in-a-lane).
 - A relay whose database goes away **stays up**: it closes the dead connection,
   backs off and claims again. See
   [When the database goes away](operations.md#when-the-database-goes-away).
