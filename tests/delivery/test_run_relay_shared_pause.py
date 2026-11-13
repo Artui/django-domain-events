@@ -306,9 +306,10 @@ def test_a_pause_whose_record_was_never_written_ends_on_the_relays_clock(
 
 
 def test_a_pause_that_ends_between_the_read_and_the_lanes_turn(
-    lane: Callable[[int], None],
+    lane: Callable[[int], None], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Each stop check moves the clock two seconds, so the pause ends after the pass's read."""
+    monkeypatch.setattr("django_domain_events.delivery.deliver.random.random", lambda: 0.5)
     lane(1)
     _fire(2)
     clock = _Clock(step=3597)
