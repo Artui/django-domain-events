@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from django.db import transaction
@@ -13,7 +14,9 @@ from django_domain_events.declaration.receiver import receiver
 from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.deliver import deliver_one
+from django_domain_events.delivery.drain_outbox import drain_outbox
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.run_relay import run_relay
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
@@ -130,3 +133,44 @@ def test_a_context_built_by_hand_with_the_old_arguments_still_works() -> None:
         event_id=1, event_name="x", attempt=1, actor_key="", actor_label="", scope={}
     )
     assert (context.occurred_at, context.correlation_id) == (None, None)
+
+
+@pytest.mark.parametrize(
+    "given",
+    [
+        pytest.param(HAPPENED.astimezone(ZoneInfo("Asia/Tokyo")), id="aware-not-utc"),
+        pytest.param(HAPPENED.replace(tzinfo=None), id="naive"),
+    ],
+)
+@pytest.mark.filterwarnings("ignore:DateTimeField .* received a naive datetime")
+def test_inline_and_relay_hand_the_occurred_at_the_row_stores(
+    given: datetime, settings: Any
+) -> None:
+    inline = _watch("probe.inline", mode=DeliveryMode.INLINE)
+    relay = _watch("probe.relay")
+    with transaction.atomic():
+        fire(Unheard(value=1), occurred_at=given)
+    run_relay(worker_id="w1", passes=1, allow_unsafe_concurrency=True)
+    stored = EventRecord.objects.get().occurred_at
+    assert [(c.occurred_at, c.occurred_at.isoformat()) for c in inline + relay] == [
+        (stored, stored.isoformat())
+    ] * 2
+    if settings.USE_TZ:
+        assert inline[0].occurred_at.tzinfo is not None
+
+
+def test_a_not_yet_reschedule_keeps_occurred_at_and_moves_due_at() -> None:
+    until = timezone.now() + timedelta(hours=1)
+    seen: list[DeliveryContext] = []
+
+    def defer_once(event: Unheard, context: DeliveryContext) -> None:
+        seen.append(context)
+        if len(seen) == 1:
+            raise NotYet(until)
+
+    receiver(Unheard, key="probe.wait", takes_context=True)(defer_once)
+    _fire()
+    drain_outbox()
+    drain_outbox(now=until)
+    assert [(c.occurred_at, c.due_at) for c in seen][1] == (HAPPENED, until)
+    assert seen[0].occurred_at == HAPPENED

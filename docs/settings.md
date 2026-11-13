@@ -272,9 +272,9 @@ argument to `drain_outbox`, `deliver_pending`, `outbox_health`,
   `NotYet` and `due=` accept one rather than refusing it as they do under
   `True`.
 
-What the package hands back is in the same form: `DeliveryContext.due_at`,
-`outbox_health().oldest_owed_at` and every timestamp on the rows are naive local
-time under `False`. Compare them with `timezone.now()`, not
+What the package hands back is in the same form: `DeliveryContext.due_at` and
+`occurred_at`, `outbox_health().oldest_owed_at` and every timestamp on the rows
+are naive local time under `False`. Compare them with `timezone.now()`, not
 `datetime.now(timezone.utc)`.
 
 The documented `NotYet` pattern, `if moved > max(ctx.due_at, timezone.now())`,

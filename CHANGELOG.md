@@ -29,13 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and let `quiet_receivers` read a receiver that skips every row as alive. No new status
   and no migration: replay, prune and `outbox_health` treat the row as any cancelled one.
   From an `INLINE` or `ON_COMMIT` receiver it is an ordinary exception, as `NotYet` is.
-- `DeliveryContext.occurred_at` and `correlation_id`, last and defaulted to `None` like
-  `target` and `due_at`, so a context built by hand with the old arguments still works. They
-  are the event's own `occurred_at` (what `fire(occurred_at=)` set, the time an audit log
-  wants) and its correlation id, set on every context the library builds: the relay and
-  task deliveries, `INLINE` and `ON_COMMIT` receivers, and the context a `targets=` callable
-  gets at fire time and at replay. A `NotYet` receiver can bound its own wait with
-  `ctx.occurred_at`.
+- `DeliveryContext.occurred_at` and `correlation_id`, last and optional like `target` and
+  `due_at`, so a context built by hand with the old arguments still works. They are the
+  event's own `occurred_at` (what `fire(occurred_at=)` set, as the row stores it: in UTC
+  under `USE_TZ = True`, the same on every path; the time an audit log wants) and its
+  correlation id, set on every context the library builds: the relay and task deliveries,
+  `INLINE` and `ON_COMMIT` receivers, and the context a `targets=` callable gets at fire
+  time and at replay. A `NotYet` receiver can bound its own wait with `ctx.occurred_at`.
 
 ### Changed
 - A `NotYet` answer is now logged at DEBUG instead of INFO: it says the work is scheduled,

@@ -3,11 +3,15 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone as dt_timezone
+from typing import Any
 
 import pytest
 
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.utils import (
+    as_stored,
     label_for,
     require_frozen_dataclass,
     resolve_targets,
@@ -127,3 +131,17 @@ def test_a_target_digest_is_the_32_raw_bytes_of_its_sha256() -> None:
 
 def test_the_blank_target_has_a_digest_like_any_other() -> None:
     assert target_digest("") == hashlib.sha256(b"").digest()
+
+
+@pytest.mark.filterwarnings("ignore:DateTimeField")
+def test_as_stored_reads_a_value_back_in_utc_under_use_tz(settings: Any) -> None:
+    settings.USE_TZ, settings.TIME_ZONE = True, "Asia/Tokyo"
+    naive = datetime(2026, 1, 2, 9, 0)
+    assert as_stored(naive) == datetime(2026, 1, 2, 0, 0, tzinfo=dt_timezone.utc)
+    assert as_stored(naive).tzinfo is dt_timezone.utc
+
+
+def test_as_stored_leaves_a_value_alone_without_use_tz(settings: Any) -> None:
+    settings.USE_TZ = False
+    naive = datetime(2026, 1, 2, 9, 0)
+    assert as_stored(naive) is naive

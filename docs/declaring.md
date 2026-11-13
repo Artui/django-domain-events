@@ -120,9 +120,10 @@ row it is when the row became owed, the moment a replay or requeue reopened it
 or else when its event was recorded, and it is `None` wherever `delivery_id` is.
 
 `ctx.occurred_at` and `ctx.correlation_id` are the event's own: when it happened,
-as `fire(occurred_at=)` set it (what an audit log records), and the correlation id
-it was recorded with, or `None`. Both are set on every context the library
-builds, `INLINE`, `ON_COMMIT` and `targets=` included.
+`fire(occurred_at=)` as the event row stores it, in UTC under `USE_TZ = True`
+(what an audit log records), and the correlation id it was recorded with, or
+`None`. Both are set on every context the library builds, `INLINE`, `ON_COMMIT`
+and `targets=` included, and are the same on each of them.
 
 !!! note "A long receiver needs `lease_seconds`, not a heartbeat"
     A receiver still working when its lease lapses has its row taken by another
