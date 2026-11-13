@@ -763,7 +763,7 @@ def test_a_failed_claim_closes_the_connection_and_backs_off(
     closed: list[bool] = []
     monkeypatch.setattr(run_relay_module, "claim_batch", flaky)
     monkeypatch.setattr(
-        run_relay_module, "_close_after", lambda exc, conn, worker: closed.append(True)
+        run_relay_module, "close_after", lambda exc, conn, worker, log: closed.append(True)
     )
     clock = _Clock()
     counts = run_relay(

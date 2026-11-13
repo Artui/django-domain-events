@@ -5,11 +5,11 @@ import queue
 import threading
 import time
 from contextvars import Context
-from typing import Any
 
-from django.db import Error, connections
+from django.db import connections
 
 from django_domain_events.delivery.deliver import dispatch_one
+from django_domain_events.delivery.utils import close_after
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.types.delivery_status import DeliveryStatus
 
@@ -106,7 +106,7 @@ class LaneWorkers:
             )
         except Exception as exc:
             logger.exception("relay %s could not deliver %s", self._worker_id, delivery_id)
-            _close_after(exc, self._worker_id)
+            close_after(exc, connections[write_alias()], self._worker_id, logger)
             return (delivery_id, None, None)
         return (delivery_id, status, deferral[-1] if deferral else None)
 
@@ -114,14 +114,3 @@ class LaneWorkers:
         with self._lock:
             self._busy -= 1
         self._done.put(result)
-
-
-def _close_after(exc: Exception, worker_id: str) -> None:
-    """Close on a DB error; raw driver class: test_db_error_closes_own_connection[raw_driver]"""
-    connection: Any = connections[write_alias()]
-    if not isinstance(exc, (Error, connection.Database.Error)):
-        return
-    try:
-        connection.close()
-    except Exception:
-        logger.exception("relay %s could not close its worker connection", worker_id)

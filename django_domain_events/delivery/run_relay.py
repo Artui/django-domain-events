@@ -9,7 +9,7 @@ from contextlib import suppress
 from datetime import datetime, timedelta
 from typing import Any
 
-from django.db import Error, connections
+from django.db import connections
 from django.utils import timezone
 
 from django_domain_events.declaration.registry import registry
@@ -21,6 +21,7 @@ from django_domain_events.delivery.lane_rate import LaneRate
 from django_domain_events.delivery.lane_workers import LaneWorkers, Result
 from django_domain_events.delivery.utils import (
     OnDeferral,
+    close_after,
     lane_claim_sizes,
     lane_pauses,
     lane_threads,
@@ -284,7 +285,7 @@ def run_relay(
             except Exception as exc:
                 failed_claims += 1
                 logger.exception("relay %s could not claim", worker_id)
-                _close_after(exc, connection, worker_id)
+                close_after(exc, connection, worker_id, logger)
                 sleep(
                     backoff(
                         failed_claims, base=poll, cap=_CLAIM_BACKOFF_CAP_SECONDS, jitter=1.0
@@ -422,7 +423,7 @@ class _ThreadedLane:
         except Exception as exc:
             self.failed_claims += 1
             logger.exception("relay %s could not claim", self.worker_id)
-            _close_after(exc, self.connection, self.worker_id)
+            close_after(exc, self.connection, self.worker_id, logger)
             self.sleep(
                 backoff(
                     self.failed_claims, base=self.poll, cap=_CLAIM_BACKOFF_CAP_SECONDS, jitter=1.0
@@ -523,7 +524,7 @@ def _wait_or_survive(
         wait(poll)
     except Exception as exc:
         logger.exception("relay %s could not wait for work", worker_id)
-        _close_after(exc, connection, worker_id)
+        close_after(exc, connection, worker_id, logger)
         sleep(poll)
 
 
@@ -534,7 +535,7 @@ def _sweep_or_survive(worker_id: str, connection: Any, stop: Callable[[], bool])
         pruned = prune_with_counts(stop=stop)
     except Exception as exc:
         logger.exception("relay %s could not prune", worker_id)
-        _close_after(exc, connection, worker_id)
+        close_after(exc, connection, worker_id, logger)
         return
     if pruned.events or pruned.deliveries:
         logger.info(
@@ -554,7 +555,7 @@ def _deliver_or_survive(
         return dispatch_one(delivery_id, worker_id=worker_id, on_deferral=on_deferral)
     except Exception as exc:
         logger.exception("relay %s could not deliver %s", worker_id, delivery_id)
-        _close_after(exc, connection, worker_id)
+        close_after(exc, connection, worker_id, logger)
         return None
 
 
@@ -572,7 +573,7 @@ def _set_aside_or_survive(
             lane,
             len(unstarted),
         )
-        _close_after(exc, connection, worker_id)
+        close_after(exc, connection, worker_id, logger)
         return
     logger.info(
         "relay %s paused lane %s after a deferral; handed back %d unstarted rows",
@@ -590,7 +591,7 @@ def _read_pauses_or_survive(
         return lane_pauses(lanes, moment)
     except Exception as exc:
         logger.exception("relay %s could not read the lane pauses", worker_id)
-        _close_after(exc, connection, worker_id)
+        close_after(exc, connection, worker_id, logger)
         return None
 
 
@@ -606,13 +607,13 @@ def _record_pause_or_survive(
         )
     except Exception as exc:
         logger.exception("relay %s could not record the pause of lane %s", worker_id, lane)
-        _close_after(exc, connection, worker_id)
+        close_after(exc, connection, worker_id, logger)
         return False
     try:
         LanePauseRecord.objects.filter(until__lte=paused_at).delete()
     except Exception as exc:
         logger.exception("relay %s could not delete the pauses that have passed", worker_id)
-        _close_after(exc, connection, worker_id)
+        close_after(exc, connection, worker_id, logger)
     return True
 
 
@@ -626,7 +627,7 @@ def _forget_pauses_or_survive(lanes: Collection[str], worker_id: str, connection
         LanePauseRecord.objects.filter(worker_id=worker_id, lane__in=sorted(lanes)).delete()
     except Exception as exc:
         logger.exception("relay %s could not delete its pause records", worker_id)
-        _close_after(exc, connection, worker_id)
+        close_after(exc, connection, worker_id, logger)
 
 
 def _hand_back_or_survive(
@@ -637,16 +638,6 @@ def _hand_back_or_survive(
         given = hand_back(delivery_ids, worker_id=worker_id, claimed_at=claimed_at)
     except Exception as exc:
         logger.exception("relay %s could not hand back %d rows", worker_id, len(delivery_ids))
-        _close_after(exc, connection, worker_id)
+        close_after(exc, connection, worker_id, logger)
         return
     logger.info("relay %s stopping; handed back %d unstarted rows", worker_id, given)
-
-
-def _close_after(exc: Exception, connection: Any, worker_id: str) -> None:
-    """Close the write connection if ``exc`` came from the database."""
-    if not isinstance(exc, (Error, connection.Database.Error)):
-        return
-    try:
-        connection.close()
-    except Exception:
-        logger.exception("relay %s could not close its connection", worker_id)

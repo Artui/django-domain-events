@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from math import inf
 from typing import Any
 
+from django.db import Error
+
 from django_domain_events.declaration.registry import registry
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_failure import DeliveryFailure
@@ -107,6 +109,16 @@ def _require_served(kwarg: str, name: str, served: Collection[str]) -> None:
             f"{kwarg} names lane {name!r}, which is not served here. "
             f"Served lanes: {', '.join(served)}."
         )
+
+
+def close_after(exc: Exception, connection: Any, worker_id: str, log: logging.Logger) -> None:
+    """Close ``connection`` if ``exc`` came from the database; raw driver errors count too."""
+    if not isinstance(exc, (Error, connection.Database.Error)):
+        return
+    try:
+        connection.close()
+    except Exception:
+        log.exception("relay %s could not close its connection", worker_id)
 
 
 def lane_pauses(lanes: Collection[str], moment: datetime) -> dict[str, datetime]:
