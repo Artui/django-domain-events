@@ -4,7 +4,7 @@ from django.db import models
 
 
 class LanePauseRecord(models.Model):
-    """A lane one relay has paused after a deferral, for operators to see."""
+    """A lane paused by a relay after a deferral, or by an operator, which every relay honours."""
 
     lane = models.CharField(max_length=255)
     worker_id = models.CharField(max_length=255)

@@ -159,8 +159,8 @@ The relay visits its lanes in sorted order, one claim each, and claims each
 lane's batch immediately before delivering it, so no batch burns its lease
 while another lane delivers. Each claim is that lane's alone: under its own
 lease ([the lease a claim stamps](#the-lease-a-claim-stamps)) and its own batch
-size. A lane paused after a [deferral](delivery.md#the-pause-is-per-process)
-is skipped without a query while the others go on. One rotation is one pass,
+size. A [paused](#pausing-a-lane) lane is skipped without a claim while the
+others go on. One rotation is one pass,
 so `--passes` counts rotations, and a pass is idle - it waits for work, and may
 [prune](retention.md#how-the-prune-runs) - only when every lane in it was empty
 or paused. A stop is read before each lane's turn as well as before each row.
@@ -345,6 +345,40 @@ started from any other thread, it says so on stderr and runs until `--passes`
 is spent, and stopping it is up to whatever started the thread. An embedding
 process can pass its own callable as `run_relay(stop=...)`. The relay reads it
 before every claim and before every delivery.
+
+### Pausing a lane
+
+Every relay stops claiming a lane while any unexpired pause of it is recorded, and
+takes it up again within one poll of the last one ending or being lifted. The relays
+record a pause themselves when a receiver
+[defers without counting](delivery.md#a-deferral-that-spends-no-attempt), so one
+relay's deferral holds the lane in all of them. An operator records one by hand, for a
+provider outage announced ahead or a destination being migrated:
+
+```bash
+python manage.py pause_lane mail --for 1800
+python manage.py pause_lane mail --until 2026-11-14T06:00:00+00:00
+python manage.py resume_lane mail
+```
+
+`pause_lane` needs `--for` seconds or `--until` a time, and refuses a pause with no
+end: the relays delete a pause record whose `until` has passed, which is what keeps a
+pause left by a relay that died from holding the lane past it. An `--until` with no
+offset is read in `TIME_ZONE`. A lane no receiver declares is refused, since a typo
+would pause nothing. Pausing again moves the operator's pause rather than adding a
+second.
+
+`resume_lane` lifts every pause of the lane, the operator's and every relay's alike,
+including one a relay is honouring for its own deferral, and including a lane no
+receiver declares any more. The relays see the lift at their next pass, so within
+`POLL_SECONDS` for an idle one. A lifted throttle that is still in force costs one
+deferral, after which the lane is paused again.
+
+Rows already claimed when the pause lands are not handed back: each relay finishes
+the batch in hand. Nor does a pause reach a row already given to a
+[task backend](#handing-delivery-to-a-task-queue). `outbox_health()` and
+`events_status` list the pause under the lane, the operator's as
+`paused by operator` ([introspection](introspection.md#is-the-outbox-keeping-up)).
 
 ### When the database goes away
 

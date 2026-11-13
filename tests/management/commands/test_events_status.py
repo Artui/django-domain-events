@@ -215,3 +215,14 @@ def test_the_text_lists_the_lanes_of_a_drained_outbox_too(
     output = _run()
     assert "\nlanes\n  default\towed=0\tdead=0\tscheduled=0\tclaimed=0\toldest=-\n" in output
     assert output.index("\nlanes\n") < output.index("nothing owed and nothing dead")
+
+
+def test_an_operators_pause_reads_as_paused_by_operator() -> None:
+    call_command("pause_lane", "default", "--for", "600", stdout=StringIO())
+
+    output = _run()
+    (paused,) = json.loads(_run("--format", "json"))["lanes"][0]["paused"]
+
+    assert "    paused by operator for 59" in output
+    assert paused["worker_id"] == "operator"
+    assert 590 < paused["paused_for_seconds"] <= 600

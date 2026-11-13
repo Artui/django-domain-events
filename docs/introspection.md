@@ -221,15 +221,15 @@ since been deleted is counted in the default lane, which is where it drains.
 Its `oldest_owed_at` is the number to alert on per lane
 ([knowing it is working](operations.md#knowing-it-is-working)), against a
 threshold sized to that lane's work rather than one shared by all of them. A
-lane's `pauses` come from the
-records relays write when a receiver defers
-([the pause is per process](delivery.md#the-pause-is-per-process)); a lane no
-receiver declares any more is listed while a relay still holds it paused, as
-happens when a lane is renamed mid-rollout. A pause names its relay because
-one that died leaves its record showing until `until` passes: check the
-`worker_id` and `paused_at` against the relays running and when they started,
-since a relay restarted under the same `worker_id` takes the old record over
-only at its own first deferral.
+lane's `pauses` are the records every relay reads before claiming
+([the pause is shared](delivery.md#the-pause-is-shared)): one per relay that
+deferred, and one with the `worker_id` `operator` for a
+[`pause_lane`](operations.md#pausing-a-lane). A lane no receiver declares any
+more is listed while a pause of it is recorded, as happens when a lane is
+renamed mid-rollout. A pause names its relay because one that died leaves its
+record holding the lane until `until` passes: check the `worker_id` and
+`paused_at` against the relays running and when they started, and lift a
+leftover with `resume_lane`.
 
 Every figure here is answered from an index and none of them scans the
 delivery table, so the call is cheap enough to scrape on an interval. It sends

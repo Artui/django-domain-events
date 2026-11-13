@@ -145,24 +145,28 @@ def run_relay(
     (``test_a_relay_on_an_aware_clock_claims_and_delivers``).
 
     A receiver deferring with ``RetryAfter(seconds, counts=False)`` pauses its
-    lane in this process for ``seconds``, measured on ``now``: the unstarted
-    rest of the batch, every row of which is in that lane, is handed back
-    rather than attempted - each would cost a call to learn what the first
-    already said - and is claimable by any worker at once. While the pause
-    lasts the relay does not claim the lane at all, and goes on to the next
-    lane it serves. The pause is per process and shares nothing: every relay in
-    the lane learns of the throttle from its own first deferral, at the cost of
-    one call each. It ends at the lane's first turn at or after ``seconds``, so
-    within ``POLL_SECONDS`` of it for a relay with nothing else to do.
-
-    So that operators can see a pause, the relay writes it to
+    lane for ``seconds``, measured on ``now``: the unstarted rest of the batch,
+    every row of which is in that lane, is handed back rather than attempted -
+    each would cost a call to learn what the first already said - and is
+    claimable by any worker at once. The relay writes the pause to
     ``LanePauseRecord`` - its lane, this ``worker_id``, when and until when -
     deleting in the same call every record, whoever wrote it, whose pause has
-    passed. It deletes its own when the pause ends and when it returns. No
-    relay reads the table, and a relay that never defers never touches it.
-    Every one of those writes is logged and survived if it fails: the pause in
-    this process still governs the relay, and the record is only a window
-    onto it.
+    passed, and deletes its own when the pause ends and when it returns.
+
+    The pause is shared. Each pass starts by reading the unexpired records of
+    the lanes it serves, in one query, and a lane any of them holds is not
+    claimed: the relay goes on to the next lane it serves. So every relay in the
+    lane honours the first deferral, an operator's ``pause_lane`` stops them
+    all, and a ``resume_lane`` that deletes the records restarts them at their
+    next pass, the relay that recorded the pause included. A lane is taken up
+    again at its first turn at or after its latest pause ends, so within
+    ``POLL_SECONDS`` of it for a relay with nothing else to do.
+
+    Every one of those reads and writes is logged and survived if it fails. A
+    relay whose write failed still holds its own pause until it ends on its
+    clock, though no other relay sees it; a relay whose read failed goes on with
+    the pauses it already holds, and drops one of its own only when a read that
+    succeeded finds the record it wrote gone.
     """
     connection = connections[write_alias()]
     if not (allow_unsafe_concurrency or connection.features.has_select_for_update_skip_locked):
@@ -181,10 +185,19 @@ def run_relay(
     counts: dict[DeliveryStatus, int] = {}
     failed_claims = 0
     paused: dict[str, datetime] = {}
+    recorded: set[str] = set()
     deferred: list[tuple[str, float]] = []
     for _ in itertools.count() if passes is None else range(passes):
         claimed = False
-        for this_lane in registry.lanes() if lanes is None else lanes:
+        this_pass = registry.lanes() if lanes is None else lanes
+        shared = _read_pauses_or_survive(this_pass, in_project_time(now()), worker_id, connection)
+        if shared is not None and recorded - shared.keys():
+            gone = recorded - shared.keys()
+            recorded -= gone
+            for each in gone:
+                del paused[each]
+            _forget_pauses_or_survive(gone, worker_id, connection)
+        for this_lane in this_pass:
             if stop():
                 _forget_pauses_or_survive(paused, worker_id, connection)
                 return counts
@@ -194,7 +207,11 @@ def run_relay(
                 if until > claimed_at:
                     continue
                 del paused[this_lane]
+                recorded.discard(this_lane)
                 _forget_pauses_or_survive([this_lane], worker_id, connection)
+            held = (shared or {}).get(this_lane)
+            if held is not None and held > claimed_at:
+                continue
             try:
                 ids = claim_batch(
                     worker_id=worker_id,
@@ -239,9 +256,10 @@ def run_relay(
                     deferred_lane, seconds = deferred.pop()
                     paused_at = in_project_time(now())
                     paused[deferred_lane] = paused_at + timedelta(seconds=seconds)
-                    _record_pause_or_survive(
+                    if _record_pause_or_survive(
                         deferred_lane, paused_at, paused[deferred_lane], worker_id, connection
-                    )
+                    ):
+                        recorded.add(deferred_lane)
                     _set_aside_or_survive(
                         unstarted, deferred_lane, worker_id, claimed_at, connection
                     )
@@ -333,10 +351,32 @@ def _set_aside_or_survive(
     )
 
 
+def _read_pauses_or_survive(
+    lanes: Collection[str], moment: datetime, worker_id: str, connection: Any
+) -> dict[str, datetime] | None:
+    """The latest unexpired pause of each of ``lanes``, by any writer; None if unreadable."""
+    from django_domain_events.models.lane_pause_record import LanePauseRecord
+
+    try:
+        rows = list(
+            LanePauseRecord.objects.filter(until__gt=moment, lane__in=sorted(lanes)).values_list(
+                "lane", "until"
+            )
+        )
+    except Exception as exc:
+        logger.exception("relay %s could not read the lane pauses", worker_id)
+        _close_after(exc, connection, worker_id)
+        return None
+    held: dict[str, datetime] = {}
+    for lane, until in rows:
+        held[lane] = max(until, held.get(lane, until))
+    return held
+
+
 def _record_pause_or_survive(
     lane: str, paused_at: datetime, until: datetime, worker_id: str, connection: Any
-) -> None:
-    """Write this relay's pause of ``lane`` where operators can see it."""
+) -> bool:
+    """Write this relay's pause of ``lane`` for every relay to read; False if it failed."""
     from django_domain_events.models.lane_pause_record import LanePauseRecord
 
     try:
@@ -347,6 +387,8 @@ def _record_pause_or_survive(
     except Exception as exc:
         logger.exception("relay %s could not record the pause of lane %s", worker_id, lane)
         _close_after(exc, connection, worker_id)
+        return False
+    return True
 
 
 def _forget_pauses_or_survive(lanes: Collection[str], worker_id: str, connection: Any) -> None:
