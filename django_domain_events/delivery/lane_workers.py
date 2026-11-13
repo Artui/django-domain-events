@@ -111,13 +111,13 @@ class LaneWorkers:
         return (delivery_id, status, deferral[-1] if deferral else None)
 
     def _report(self, result: Result) -> None:
-        self._done.put(result)
         with self._lock:
             self._busy -= 1
+        self._done.put(result)
 
 
 def _close_after(exc: Exception, worker_id: str) -> None:
-    """Close this thread's write connection if ``exc`` came from the database."""
+    """Close on a DB error; raw driver class: test_db_error_closes_own_connection[raw_driver]"""
     connection: Any = connections[write_alias()]
     if not isinstance(exc, (Error, connection.Database.Error)):
         return

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import queue
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -89,7 +90,8 @@ def test_six_slow_rows_on_six_workers_take_about_one_row(
     elapsed = time.monotonic() - began
 
     assert sorted(got) == [(i, DeliveryStatus.SUCCEEDED, None) for i in range(1, 7)]
-    assert elapsed < 0.75, f"six 250 ms rows took {elapsed:.3f} s, so they did not overlap"
+    assert elapsed < 0.45, f"six 250 ms rows took {elapsed:.3f} s, so they did not overlap"
+    assert all(thread.daemon for thread in workers._threads), "a worker thread is not a daemon"
 
 
 def test_dispatch_gets_the_worker_id_and_a_deferral_hook(
@@ -120,6 +122,68 @@ def test_idle_slots_count_rows_given_and_not_finished(
     release.set()
     _collect(workers, 2)
     assert workers.idle_slots() == 3
+
+
+class _SlowPut(queue.SimpleQueue[Result]):
+    """A done queue whose ``put`` lingers after the row is visible."""
+
+    def put(self, item: Result, block: bool = True, timeout: float | None = None) -> None:
+        super().put(item)
+        time.sleep(0.05)
+
+
+def test_a_reported_row_is_never_counted_busy(
+    stub: Callable[[Dispatch], None], started: Callable[[int], LaneWorkers]
+) -> None:
+    stub(lambda delivery_id, **_: DeliveryStatus.SUCCEEDED)
+    workers = started(2)
+    workers._done = _SlowPut()
+    workers.give(1)
+
+    assert workers.results(timeout=5) == [(1, DeliveryStatus.SUCCEEDED, None)]
+    assert workers.idle_slots() == 2, "results returned a row whose worker still counted busy"
+
+
+def test_one_results_call_returns_every_row_already_done(
+    stub: Callable[[Dispatch], None], started: Callable[[int], LaneWorkers]
+) -> None:
+    stub(lambda delivery_id, **_: DeliveryStatus.SUCCEEDED)
+    workers = started(2)
+    workers.give(1)
+    workers.give(2)
+    while workers._done.qsize() < 2:
+        time.sleep(0.005)
+
+    assert sorted(workers.results()) == [
+        (1, DeliveryStatus.SUCCEEDED, None),
+        (2, DeliveryStatus.SUCCEEDED, None),
+    ]
+
+
+def test_stop_spends_one_deadline_across_every_worker(
+    stub: Callable[[Dispatch], None], started: Callable[[int], LaneWorkers]
+) -> None:
+    release = threading.Event()
+    entered: queue.SimpleQueue[int] = queue.SimpleQueue()
+
+    def blocked(delivery_id: int, **_: Any) -> None:
+        entered.put(delivery_id)
+        release.wait(10)
+
+    stub(blocked)
+    workers = started(4)
+    for delivery_id in range(1, 5):
+        workers.give(delivery_id)
+    for _ in range(4):
+        entered.get(timeout=5)
+    began = time.monotonic()
+    try:
+        workers.stop(began + 0.2)
+        elapsed = time.monotonic() - began
+    finally:
+        release.set()
+
+    assert elapsed < 0.5, f"stop took {elapsed:.3f} s past a 0.2 s deadline over four workers"
 
 
 def test_a_full_lane_refuses_another_row(
@@ -197,10 +261,20 @@ def test_a_worker_survives_a_receiver_exception(
     assert closed == [], "a receiver error that is not the database closed the connection"
 
 
-def test_a_database_error_closes_the_workers_connection_not_the_main_threads(
+@pytest.mark.parametrize(
+    "make_error",
+    [
+        pytest.param(lambda: OperationalError("the server went away"), id="wrapped"),
+        pytest.param(
+            lambda: connection.Database.OperationalError("the server went away"), id="raw_driver"
+        ),
+    ],
+)
+def test_db_error_closes_own_connection(
     stub: Callable[[Dispatch], None],
     started: Callable[[int], LaneWorkers],
     monkeypatch: pytest.MonkeyPatch,
+    make_error: Callable[[], Exception],
 ) -> None:
     main = connections[write_alias()]
     main.ensure_connection()
@@ -214,7 +288,7 @@ def test_a_database_error_closes_the_workers_connection_not_the_main_threads(
         real_close = own.close
         own.close = lambda: (closed.append(own), real_close())
         worker_side.append(own)
-        raise OperationalError("the server went away")
+        raise make_error()
 
     stub(broken)
     workers = started(1)
@@ -381,6 +455,37 @@ def test_no_connection_is_left_after_stop(
     while _backends() > before and time.monotonic() < deadline:
         time.sleep(0.02)
     assert _backends() == before, "a worker's connection outlived stop"
+
+
+def test_no_connection_is_left_after_a_worker_raises_a_base_exception(
+    stub: Callable[[Dispatch], None], started: Callable[[int], LaneWorkers]
+) -> None:
+    if connection.vendor != "postgresql":
+        pytest.skip("pg_stat_activity is Postgres")
+    pids: list[int] = []
+
+    def querying_then_fatal(delivery_id: int, **_: Any) -> None:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_backend_pid()")
+            pids.append(cursor.fetchone()[0])
+        raise _Boom("receiver called sys.exit")
+
+    stub(querying_then_fatal)
+    workers = started(1)
+    workers.give(1)
+    assert _collect(workers, 1) == [(1, None, None)]
+    with pytest.raises(_Boom):
+        workers.stop(time.monotonic() + 5)
+
+    def alive() -> int:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM pg_stat_activity WHERE pid = %s", pids)
+            return cursor.fetchone()[0]
+
+    deadline = time.monotonic() + 3
+    while alive() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert not alive(), "a worker's connection outlived its BaseException"
 
 
 def test_results_waits_up_to_its_timeout_for_the_first_row(
