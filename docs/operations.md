@@ -348,7 +348,9 @@ relay takes it, it is counted in `outbox_health().lapsed_leases`.
 
 A second signal exits at once, with status 128 plus the signal number. The
 receiver running at that moment is interrupted and its transaction rolls back.
-Its row is reclaimed when the lease lapses, as a crashed worker's would be.
+Nothing is given back: its row and the unstarted rest of the batch are
+reclaimed when the lease lapses, as a crashed worker's would be, and each
+[spends an attempt](#a-lapse-spends-an-attempt) then.
 
 An `async def` receiver is the exception: its transaction rolls back, but the
 coroutine runs on an event loop in another thread that a signal cannot reach,
