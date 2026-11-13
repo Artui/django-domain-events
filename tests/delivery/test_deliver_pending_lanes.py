@@ -488,3 +488,16 @@ def test_a_pause_that_has_ended_at_the_calls_now_holds_nothing(lanes: None) -> N
     assert deliver_pending(lane="sms") == {}
     later = django_timezone.now() + timedelta(hours=2)
     assert deliver_pending(lane="sms", now=later) == {DeliveryStatus.SUCCEEDED: 1}
+
+
+def test_a_pause_ending_at_the_calls_now_has_ended(lanes: None) -> None:
+    """A pause holds while its ``until`` is after the moment read, not at it."""
+    _fire(Sms)
+    moment = django_timezone.now()
+    LanePauseRecord.objects.create(
+        lane="sms", worker_id="host:1", paused_at=moment, until=moment + timedelta(hours=1)
+    )
+
+    assert deliver_pending(lane="sms", now=moment + timedelta(hours=1)) == {
+        DeliveryStatus.SUCCEEDED: 1
+    }
