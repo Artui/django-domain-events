@@ -386,6 +386,42 @@ def test_a_rate_claims_one_row_at_a_time_spaced_on_the_monotonic_clock(
     assert starts == [0.0, 0.5, 1.0, 1.5]
 
 
+class _Enqueued:
+    """A task backend that keeps the monotonic moment each id was handed to it."""
+
+    clock: _Clock | None = None
+    at: list[float] = []
+
+    def enqueue(self, delivery_id: int, **claim: object) -> None:
+        assert _Enqueued.clock is not None
+        _Enqueued.at.append(_Enqueued.clock.monotonic())
+
+
+def test_a_task_enqueue_counts_against_the_rate(
+    lanes: None, inline: type[_InlineWorkers], settings: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"TASK_BACKEND": f"{__name__}._Enqueued"}
+    _fire(3)
+    clock = _Clock()
+    monkeypatch.setattr(_Enqueued, "clock", clock)
+    monkeypatch.setattr(_Enqueued, "at", [])
+    with _mail_has("site", "task"):
+        run_relay(
+            worker_id="w1",
+            passes=10,
+            lane="mail",
+            lane_concurrency={"mail": 3},
+            lane_rates={"mail": 2},
+            now=clock,
+            sleep=clock.sleep,
+            wait=clock.wait,
+            monotonic=clock.monotonic,
+            **UNSAFE,
+        )
+    assert _Enqueued.at == [0.0, 0.5, 1.0]
+    assert CALLS == []
+
+
 def test_a_slow_rate_sleeps_in_slices_that_let_a_stop_through(
     lanes: None, inline: type[_InlineWorkers], settings: Any
 ) -> None:
@@ -794,15 +830,15 @@ def _until(condition: Callable[[], bool], seconds: float = 20.0) -> Callable[[],
 
 
 @contextmanager
-def _mail_lease(seconds: int) -> Iterator[None]:
-    """Give the mail receiver a short lease, so a row can outlive it."""
+def _mail_has(field: str, value: Any) -> Iterator[None]:
+    """Set one field of the frozen mail receiver for the length of the block."""
     entry = registry.receiver_for_key("tests.mail")
-    original = entry.lease_seconds
-    object.__setattr__(entry, "lease_seconds", seconds)
+    original = getattr(entry, field)
+    object.__setattr__(entry, field, value)
     try:
         yield
     finally:
-        object.__setattr__(entry, "lease_seconds", original)
+        object.__setattr__(entry, field, original)
 
 
 @pytest.mark.usefixtures("skip_locked_backend")
@@ -862,7 +898,7 @@ def test_threads_no_row_lapses_at_ten_workers_and_five_a_second(lanes: None) -> 
         time.sleep(0.4)
         CALLS.append(evt.value)
 
-    with _mail_lease(1), _mail_says(mail):
+    with _mail_has("lease_seconds", 1), _mail_says(mail):
         counts = run_relay(
             worker_id="w1",
             lane="mail",
@@ -889,7 +925,7 @@ def test_threads_a_row_outliving_its_lease_is_not_reclaimed_while_in_flight(
         CALLS.append(evt.value)
         time.sleep(1.8)
 
-    with _mail_lease(1), _mail_says(mail):
+    with _mail_has("lease_seconds", 1), _mail_says(mail):
         counts = run_relay(
             worker_id="w1",
             lane="mail",
@@ -898,3 +934,35 @@ def test_threads_a_row_outliving_its_lease_is_not_reclaimed_while_in_flight(
         )
     assert CALLS == [0]
     assert counts == {DeliveryStatus.SUCCEEDED: 1}
+
+
+@pytest.mark.usefixtures("skip_locked_backend")
+def test_threads_a_lapse_is_reported_on_the_main_thread_and_rows_run_on_workers(
+    lanes: None,
+) -> None:
+    lapsed, fresh = _fire(2)
+    long_ago = django_timezone.now() - timedelta(hours=1)
+    DeliveryRecord.objects.filter(pk=lapsed).update(
+        status=DeliveryStatus.CLAIMED,
+        claimed_by="dead",
+        claimed_at=long_ago,
+        lease_expires_at=long_ago,
+        available_at=long_ago,
+        attempts=5,
+    )
+    told: list[threading.Thread] = []
+    ran: list[threading.Thread] = []
+    tell = lambda failure: told.append(threading.current_thread())  # noqa: E731
+    with (
+        _mail_has("on_failure", tell),
+        _mail_says(lambda e: ran.append(threading.current_thread())),
+    ):
+        run_relay(
+            worker_id="w1",
+            lane="mail",
+            lane_concurrency={"mail": 2},
+            stop=_until(lambda: _settled(fresh)),
+        )
+    assert DeliveryRecord.objects.get(pk=lapsed).status == DeliveryStatus.DEAD
+    assert told == [threading.main_thread()]
+    assert len(ran) == 1 and ran[0] is not threading.main_thread()
