@@ -17,7 +17,7 @@ are changing.
 | --- | --- | --- |
 | `CODEC` | `...DataclassCodec` | Encodes and decodes payloads. See [codecs](declaring.md#codecs). |
 | `WARN_OUTSIDE_ATOMIC` | `True` | Warn when `fire()` is called with no transaction open. |
-| `BATCH_SIZE` | `50` | Rows per claim and per requeue chunk. A relay may override it for its claims, and per lane. |
+| `BATCH_SIZE` | `50` | Rows per claim and per requeue chunk. A relay may override it for its claims, and per lane; a lane with worker threads is sized by its idle workers instead. |
 | `LEASE_SECONDS` | `300` | The lease a delivery needs where its receiver declares none; a claim stamps its lane's lease x 1.1 ([operations](operations.md#the-lease-a-claim-stamps)). |
 | `POLL_SECONDS` | `1.0` | Relay poll interval, and the floor under `LISTEN`/`NOTIFY`. |
 | `WAKE` | `"notify"` | `"notify"` or `"poll"`. `"poll"` sends no `NOTIFY` and the relay does not `LISTEN`; latency is then `POLL_SECONDS`. |
@@ -141,6 +141,10 @@ names takes that size, and every other lane `--batch-size`, or `BATCH_SIZE`
 where that is not given. In a shared relay that size is what one turn of the
 lane costs the others
 ([one relay, several lanes](operations.md#one-relay-several-lanes)).
+A lane with [worker threads or a rate](operations.md#worker-threads-in-a-lane)
+takes neither: each claim takes as many rows as it has idle workers, and either
+size beside it is refused. A rate spaces the starts 1/R apart as the relay hands
+each row to a worker, not at the provider: leave headroom under a strict quota.
 
 ### `PRUNE_BATCH_ROWS`
 
@@ -249,7 +253,10 @@ relay on a database without `SKIP LOCKED`, are refused after it has run.
 ```
 
 Only the command calls it: `run_relay()`, `deliver_pending()` and
-`drain_outbox()` called from Python do not. See
+`drain_outbox()` called from Python do not. A lane with
+[worker threads](operations.md#worker-threads-in-a-lane) still calls it once,
+on the main thread: a `ContextVar` it sets reaches every row through a copy of
+the main thread's context, and a thread-local it sets reaches none. See
 [Setting up the process before it delivers](operations.md#setting-up-the-process-before-it-delivers).
 
 ## `USE_TZ = False`

@@ -4,6 +4,9 @@ import re
 import signal
 import threading
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 
@@ -19,8 +22,9 @@ from django_domain_events.delivery.run_relay import run_relay
 from django_domain_events.management.commands import deliver_events
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.types.delivery_mode import DeliveryMode
+from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
-from tests.conftest import receiver_registered, receiver_replaced
+from tests.conftest import event_registered, receiver_registered, receiver_replaced
 from tests.testapp.events import OrderPlaced
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -523,3 +527,259 @@ def test_once_holds_off_a_lane_an_operator_paused_until_resume_lane(
 
     assert paused.getvalue().strip() == "Nothing owed."
     assert "succeeded: 2" in resumed.getvalue()
+
+
+def test_a_relay_without_threads_is_handed_none_for_both(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _captured(monkeypatch, "run_relay")
+
+    call_command("deliver_events", stdout=StringIO())
+
+    assert (seen[0]["lane_concurrency"], seen[0]["lane_rates"]) == (None, None)
+
+
+def test_lane_concurrency_and_rate_are_passed_to_the_relay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen = _captured(monkeypatch, "run_relay")
+
+    call_command(
+        "deliver_events",
+        "--lane",
+        "mail",
+        "--lane-concurrency",
+        "mail=6",
+        "--lane-rate",
+        "mail=0.5",
+        stdout=StringIO(),
+    )
+
+    assert (seen[0]["lane"], seen[0]["lane_concurrency"], seen[0]["lane_rates"]) == (
+        "mail",
+        {"mail": 6},
+        {"mail": 0.5},
+    )
+
+
+def test_a_lane_named_twice_still_takes_threads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lanes are a set, as ``run_relay`` reads them, so a repeat is not a second lane."""
+    seen = _captured(monkeypatch, "run_relay")
+
+    call_command(
+        "deliver_events", "--lane", "mail", "--lane", "mail", "--lane-concurrency", "mail=3"
+    )
+
+    assert seen[0]["lane_concurrency"] == {"mail": 3}
+
+
+@pytest.mark.parametrize(
+    "flag",
+    [["--lane-concurrency", "default=1"], ["--lane-rate", "default=2"]],
+    ids=["concurrency", "rate"],
+)
+def test_once_refuses_lane_concurrency_and_rate(
+    flag: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = _captured(monkeypatch, "deliver_pending")
+
+    with pytest.raises(CommandError, match="--once delivers one row at a time without them"):
+        call_command("deliver_events", "--once", *flag)
+
+    assert seen == []
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (["--lane-concurrency", "mail"], "--lane-concurrency takes LANE=N, got 'mail'"),
+        (["--lane-rate", "mail"], "--lane-rate takes LANE=R, got 'mail'"),
+        (["--lane-rate", "=5"], "--lane-rate '=5' names no lane"),
+        (
+            ["--lane-concurrency", "mail=2.5"],
+            "--lane-concurrency 'mail=2.5' sizes lane 'mail' with '2.5', not an integer",
+        ),
+        (
+            ["--lane-rate", "mail=fast"],
+            "--lane-rate 'mail=fast' rates lane 'mail' with 'fast', not a number",
+        ),
+        (["--lane-rate", "mail=1", "--lane-rate", "mail=2"], "--lane-rate rates lane 'mail' twice"),
+    ],
+    ids=["no-equals", "rate-no-equals", "no-lane", "not-an-integer", "not-a-number", "twice"],
+)
+def test_a_malformed_lane_concurrency_or_rate_is_refused(
+    argv: list[str], message: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = _captured(monkeypatch, "run_relay")
+
+    with pytest.raises(CommandError, match=re.escape(message)):
+        call_command("deliver_events", "--lane", "mail", *argv)
+
+    assert seen == []
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (
+            ["--lane", "default", "--lane", "mail", "--lane-concurrency", "mail=4"],
+            "Lane 'mail' has worker threads or a rate, which a relay serving several lanes",
+        ),
+        (
+            ["--lane", "default", "--lane", "mail", "--lane-rate", "mail=0.5"],
+            "Lane 'mail' has worker threads or a rate, which a relay serving several lanes",
+        ),
+        (
+            ["--lane", "mail", "--lane-concurrency", "mail=4", "--batch-size", "5"],
+            "drop --batch-size and --lane-batch-size",
+        ),
+        (
+            ["--lane", "mail", "--lane-rate", "mail=2", "--lane-batch-size", "mail=5"],
+            "drop --batch-size and --lane-batch-size",
+        ),
+        (
+            ["--lane", "mail", "--lane-concurrency", "push=4"],
+            "--lane-concurrency names lane 'push', which is not served here",
+        ),
+        (
+            ["--lane", "mail", "--lane-concurrency", "mail=0"],
+            "--lane-concurrency mail=N must be a positive int, got 0",
+        ),
+        (
+            ["--lane", "mail", "--lane-rate", "mail=nan"],
+            "--lane-rate mail=R must be a finite number above 0, got nan",
+        ),
+        (
+            ["--lane", "mail", "--lane-rate", "mail=inf"],
+            "--lane-rate mail=R must be a finite number above 0, got inf",
+        ),
+        (
+            ["--lane", "mail", "--lane-rate", "push=1"],
+            "--lane-rate names lane 'push', which is not served here",
+        ),
+    ],
+    ids=[
+        "several-lanes",
+        "several-lanes-rate",
+        "batch-size",
+        "lane-batch-size",
+        "not-served",
+        "no-workers",
+        "nan-rate",
+        "inf-rate",
+        "rate-not-served",
+    ],
+)
+def test_threads_the_relay_refuses_are_a_command_line_error_before_startup(
+    argv: list[str],
+    message: str,
+    monkeypatch: pytest.MonkeyPatch,
+    settings,
+    steps: list[tuple[str, object]],
+) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_STARTUP": f"{__name__}.startup"}
+    seen = _captured(monkeypatch, "run_relay")
+
+    with pytest.raises(CommandError, match=re.escape(message)):
+        call_command("deliver_events", *argv)
+
+    assert (seen, steps) == ([], [])
+
+
+def test_one_worker_and_no_rate_keeps_a_batch_size_and_several_lanes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen = _captured(monkeypatch, "run_relay")
+
+    call_command(
+        "deliver_events",
+        "--lane",
+        "default",
+        "--lane",
+        "mail",
+        "--lane-concurrency",
+        "mail=1",
+        "--batch-size",
+        "5",
+    )
+
+    assert (seen[0]["batch_size"], seen[0]["lane_concurrency"]) == (5, {"mail": 1})
+
+
+_TENANT: ContextVar[str | None] = ContextVar("_TENANT", default=None)
+_LOCAL = threading.local()
+_SEEN: list[tuple[str | None, str | None, bool]] = []
+_THREADS: list[tuple[str, int]] = []
+
+
+@dataclass(frozen=True, slots=True)
+class Pinged:
+    value: int
+
+
+def tenant_startup(**kwargs: object) -> None:
+    _TENANT.set("acme")
+    _LOCAL.tenant = "acme"
+
+
+def _ping(evt: Pinged) -> None:
+    on_main = threading.current_thread() is threading.main_thread()
+    _SEEN.append((_TENANT.get(), getattr(_LOCAL, "tenant", None), on_main))
+    transaction.on_commit(lambda: _THREADS.append(("on_commit", threading.get_ident())))
+
+
+@contextmanager
+def thread_around(ctx: object) -> Iterator[None]:
+    _THREADS.append(("enter", threading.get_ident()))
+    yield
+    _THREADS.append(("exit", threading.get_ident()))
+
+
+@pytest.mark.usefixtures("skip_locked_backend")
+def test_threaded_rows_see_relay_startups_context_vars_but_not_its_thread_locals(
+    settings,
+) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {
+        "RELAY_STARTUP": f"{__name__}.tenant_startup",
+        "AROUND_DELIVERY": f"{__name__}.thread_around",
+    }
+    _SEEN.clear()
+    _THREADS.clear()
+    entry = RegisteredReceiver(
+        key="tests.ping",
+        event_class=Pinged,
+        func=_ping,
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=5,
+        eager=False,
+        site="relay",
+        lane="ping",
+        give_up_after=timedelta(days=1),
+    )
+    out = StringIO()
+    with event_registered(Pinged, "tests.Pinged"), receiver_registered(entry):
+        with transaction.atomic():
+            fire(Pinged(value=1))
+            fire(Pinged(value=2))
+        try:
+            call_command(
+                "deliver_events",
+                "--lane",
+                "ping",
+                "--lane-concurrency",
+                "ping=2",
+                "--passes",
+                "3",
+                stdout=out,
+            )
+        finally:
+            _TENANT.set(None)
+            vars(_LOCAL).clear()
+
+    assert _SEEN == [("acme", None, False), ("acme", None, False)]
+    by_thread: dict[int, list[str]] = {}
+    for step, ident in _THREADS:
+        by_thread.setdefault(ident, []).append(step)
+    assert threading.get_ident() not in by_thread
+    triple = ["enter", "on_commit", "exit"]
+    assert sorted(by_thread.values()) in ([triple, triple], [triple * 2])
+    assert f"{DeliveryStatus.SUCCEEDED.value}: 2" in out.getvalue()

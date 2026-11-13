@@ -3,7 +3,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Collection, Mapping
 from datetime import datetime, timezone
+from math import inf
 from typing import Any
+
+from django.db import Error
 
 from django_domain_events.declaration.registry import registry
 from django_domain_events.settings import setting
@@ -59,6 +62,63 @@ def lane_claim_sizes(
             )
         overrides[name] = claim_size(size, name=f"lane_batch_sizes[{name!r}]")
     return lambda name: overrides.get(name, default)
+
+
+def lane_threads(
+    lanes: tuple[str, ...] | None,
+    *,
+    lane_concurrency: Mapping[str, int] | None,
+    lane_rates: Mapping[str, float] | None,
+    batch_size: int | None,
+    lane_batch_sizes: Mapping[str, int] | None,
+) -> tuple[str, int, float | None] | None:
+    """A relay's one threaded lane, its workers and its rate, or None for today's loop."""
+    served = registry.lanes() if lanes is None else lanes
+    workers: dict[str, int] = {}
+    rates: dict[str, float] = {}
+    for name, count in sorted((lane_concurrency or {}).items()):
+        _require_served("lane_concurrency", name, served)
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            raise ValueError(f"lane_concurrency[{name!r}] must be a positive int, got {count!r}")
+        workers[name] = count
+    for name, rate in sorted((lane_rates or {}).items()):
+        _require_served("lane_rates", name, served)
+        if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not 0 < rate < inf:
+            raise ValueError(f"lane_rates[{name!r}] must be a finite number above 0, got {rate!r}")
+        rates[name] = float(rate)
+    threaded = sorted({name for name, count in workers.items() if count > 1} | rates.keys())
+    if not threaded:
+        return None
+    if len(served) > 1:
+        raise ValueError(
+            f"Lane {threaded[0]!r} has worker threads or a rate, which a relay serving "
+            f"several lanes cannot give it: serve that lane alone."
+        )
+    if batch_size is not None or lane_batch_sizes:
+        raise ValueError(
+            f"Lane {threaded[0]!r} has worker threads or a rate, so its claims are sized "
+            f"by its free workers: drop batch_size and lane_batch_sizes."
+        )
+    return threaded[0], workers.get(threaded[0], 1), rates.get(threaded[0])
+
+
+def _require_served(kwarg: str, name: str, served: Collection[str]) -> None:
+    """Refuse a per-lane setting for a lane this relay does not serve."""
+    if name not in served:
+        raise ValueError(
+            f"{kwarg} names lane {name!r}, which is not served here. "
+            f"Served lanes: {', '.join(served)}."
+        )
+
+
+def close_after(exc: Exception, connection: Any, worker_id: str, log: logging.Logger) -> None:
+    """Close ``connection`` if ``exc`` came from the database; raw driver errors count too."""
+    if not isinstance(exc, (Error, connection.Database.Error)):
+        return
+    try:
+        connection.close()
+    except Exception:
+        log.exception("relay %s could not close its connection", worker_id)
 
 
 def lane_pauses(lanes: Collection[str], moment: datetime) -> dict[str, datetime]:

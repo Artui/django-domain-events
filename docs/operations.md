@@ -16,6 +16,8 @@ python manage.py deliver_events --lane mail              # only receivers in lan
 python manage.py deliver_events --batch-size 5           # rows per claim, this process
 python manage.py deliver_events --lane default --lane mail   # both lanes, each in turn
 python manage.py deliver_events --lane default --lane mail --lane-batch-size mail=5
+python manage.py deliver_events --lane mail --lane-concurrency mail=6   # six at once
+python manage.py deliver_events --lane mail --lane-rate mail=5          # five starts a second
 ```
 
 `--limit` caps a single pass, so it needs `--once`: a relay delivers until it is
@@ -105,13 +107,16 @@ python manage.py deliver_events --lane mail --batch-size 5
   lane: the lane decides which relay picks up what eager delivery did not
   finish.
 
-**Concurrency is the number of processes.** Deliveries are serial within a
-relay, so a lane that has to go faster runs more relays with the same `--lane`,
-and they share its rows through the same skipped locks as any other relays. At
-0.1 to 1 second per send, one process delivers 1 to 10 a second; a provider
-allowing 18 a second takes somewhere between two and eighteen mail relays. The
-package does not limit the rate across them - it is not a distributed rate
-limiter - so the number of processes is the limit. A destination that throttles
+**Concurrency is processes times threads.** Deliveries are serial within a
+relay unless its lane has [worker threads](#worker-threads-in-a-lane), so a lane
+that has to go faster runs more relays with the same `--lane`, more threads in
+each, or both, and the relays share its rows through the same skipped locks as
+any other relays. At 0.1 to 1 second per send, one serial process delivers 1 to
+10 a second; a provider allowing 18 a second takes somewhere between two and
+eighteen serial mail relays, or fewer relays with threads. `--lane-rate` caps
+the starts of one process; the package does not limit the rate across
+processes - it is not a distributed rate limiter - so the number of processes
+times each one's rate is the limit. A destination that throttles
 anyway costs attempts unless the receiver
 [defers without counting](delivery.md#a-deferral-that-spends-no-attempt), which
 also pauses the lane in the relay that heard it and hands back the rest of its
@@ -233,6 +238,89 @@ receiver-key index rather than the owed rows in order. The noisy lane's own
 claim costs what it would in a relay of its own. That was a single run on
 synthetic data in which every row belonged to one event, so treat it as
 directional.
+
+### Worker threads in a lane
+
+A lane whose receivers wait on the network - a mail provider, a webhook - spends
+most of each delivery idle. `--lane-concurrency LANE=N` delivers up to N of its
+rows at once from one process, each on a worker thread of its own:
+
+```bash
+python manage.py deliver_events --lane mail --lane-concurrency mail=6
+python manage.py deliver_events --lane mail --lane-concurrency mail=10 --lane-rate mail=5
+```
+
+or from Python, `run_relay(worker_id="box-1", lane="mail", lane_concurrency={"mail": 6})`.
+The main thread claims, pauses, sweeps and waits; the workers only deliver. Each
+claim takes as many rows as there are idle workers, never more, so no row waits
+behind another while its lease runs, and a row still in flight is never claimed
+again. On Postgres, six workers deliver a lane of 250 ms calls about 5.7 times
+as fast as one; the suite holds them to at least four times.
+
+**One lane per process, sized by its workers.** A lane with more than one
+worker, or with a rate, must be the only lane the relay serves, and takes no
+`--batch-size` or `--lane-batch-size`: a row claimed ahead of a free worker
+would spend its lease waiting. The command refuses both pairs before
+[`RELAY_STARTUP`](settings.md#relay_startup) runs, and `run_relay` refuses them
+with a `ValueError`. `--once` refuses both flags: a single pass, like
+`deliver_pending()` and `drain_outbox()`, delivers one row at a time.
+`--lane-concurrency mail=1` with no rate is the serial relay, and keeps its
+batch size and its other lanes.
+
+**`--lane-rate LANE=R` caps the starts** at R a second in this process, R a
+number, so `0.5` is one start every two seconds. Starts are spaced at least
+1/R seconds apart as the relay hands each row to a worker, and every start
+counts, a `site="task"` enqueue included. A worker loads its row before it
+calls the receiver, so a provider can see two calls a few milliseconds closer
+than 1/R: leave a little headroom under a strict quota. The rate is per
+process, so four replicas at `--lane-rate mail=5` start up to twenty a second.
+A rate runs the lane on threads even at one worker, claiming a row at a time.
+
+**Connections: 1 + N.** Each worker holds its own connection to the database
+the relay writes to, beside the main thread's, so a threaded lane uses 1 + N
+connections, and its Deployment replicas x (1 + N): size `max_connections` and
+any pool in front of it for that. An [`async def` receiver](declaring.md#async-receivers)
+that reaches the database through `sync_to_async(thread_sensitive=False)` runs
+that call on another thread again, and can open more. A worker closes its
+connection after a database error and when the relay stops.
+
+**What has to be thread-safe.** A lane's receivers run concurrently with
+themselves, N at a time, so module-level state they share needs a lock or has
+to go. [`AROUND_DELIVERY`](settings.md#around_delivery) and `on_failure` are
+called concurrently too. Each hook is entered and exited on one thread, so a
+thread-local set in `__enter__` is still there in `__exit__`. The `on_failure`
+call for a [lapsed lease](#a-lapse-spends-an-attempt) runs on the main thread,
+from the claim that found it. `transaction.on_commit()` callbacks a receiver
+registers run on its worker's thread.
+
+**`RELAY_STARTUP` runs once, on the main thread.** Every delivery runs in a
+copy of the context the relay started in, so a `ContextVar` the startup hook
+set is seen by every row, and a value one row sets is seen by no other row. A
+thread-local the hook sets is not: the workers are other threads. There is no
+per-thread startup hook.
+
+**A deferral pauses the lane at once.** The relay starts no further row, hands
+back the rows it claimed and had not started, and writes the
+[shared pause](delivery.md#the-pause-is-shared). The rows already running
+finish and record their own outcomes, so a throttle can cost up to N - 1 more
+calls. A threaded relay reads the other relays' pauses at most once a second,
+so a [`pause_lane`](#pausing-a-lane) takes hold within a second plus the
+deliveries in flight.
+
+**A stop waits for the rows in flight.** On `SIGTERM` the relay starts nothing
+more, hands back the rows it has not started, and waits for each running row
+until the last of their leases ends. With the default lease that is up to 330
+seconds, and Kubernetes' default grace period is 30: a pod killed first leaves
+its running rows to their lease, and each lapse
+[spends an attempt](#a-lapse-spends-an-attempt). Set
+`terminationGracePeriodSeconds` above your slowest receiver, or declare the
+lane's receivers with a `lease_seconds` short enough to fit the grace period.
+A receiver that raises `SystemExit` or another `BaseException` stops the relay
+the same way, and the exception is re-raised once the wait is over.
+
+Threads suit an I/O-bound lane in one process. For isolation from the relay,
+CPU-bound receivers or scale past one process's connections, hand the lane
+[to a task queue](#threads-or-a-task-queue) instead.
 
 ### The lease a claim stamps
 
@@ -371,6 +459,9 @@ How long a stop takes:
   system's TCP timeout, often minutes, because libpq sets no `connect_timeout`
   by default. Set one in `DATABASES[...]["OPTIONS"]`, for example
   `{"connect_timeout": 5}`.
+
+A lane with [worker threads](#worker-threads-in-a-lane) finishes every row in
+flight rather than one, waiting at most until the last of their leases ends.
 
 The stop applies to the relay. `deliver_events --once` does not handle signals:
 it is one pass, and a signal ends it the way it ends any other command.
@@ -789,6 +880,17 @@ still the debt, so a lost task is still owed.
 
 `DjangoTasksBackend` targets `django.tasks` on Django 6.0+ and falls back to the
 `django_tasks` backport on 4.2-5.2.
+
+### Threads or a task queue
+
+[Worker threads](#worker-threads-in-a-lane) and a task queue both deliver a lane
+several rows at a time. Threads need nothing beside the relay: N deliveries of
+one lane in one process, at 1 + N connections, with the rate capped per
+process. A task queue gives the receiver a process of its own - isolation from
+the relay, room for CPU-bound work, and scale past what one process's threads
+and connections allow - at the price of a broker and its workers. A
+`site="task"` row on a threaded lane only enqueues, so threads there speed up
+the enqueueing, not the work.
 
 ### Celery
 

@@ -35,7 +35,9 @@ The hook around each durable attempt is a setting rather than a symbol: see
 [`AROUND_DELIVERY`](settings.md#around_delivery). It is handed the
 `DeliveryContext` below, whose `receiver_key` names the receiver. So is the
 per-process hook `deliver_events` calls before its first claim: see
-[`RELAY_STARTUP`](settings.md#relay_startup).
+[`RELAY_STARTUP`](settings.md#relay_startup). `run_relay`'s `lane_concurrency`
+and `lane_rates` are `deliver_events --lane-concurrency` and `--lane-rate`: see
+[Worker threads in a lane](operations.md#worker-threads-in-a-lane).
 
 ## Operations
 
