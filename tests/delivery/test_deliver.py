@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import re
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -1197,3 +1198,76 @@ def test_a_write_refused_at_commit_is_still_a_failure(order: OrderPlaced) -> Non
     assert (row.status, row.attempts) == (DeliveryStatus.FAILED, 1)
     assert "IntegrityError" in row.last_error
     assert not EventRecord.objects.filter(name="probe.Dangling").exists()
+
+
+def _short_lease_receiver() -> RegisteredReceiver:
+    return RegisteredReceiver(
+        key="tests.short_lease",
+        event_class=Unheard,
+        func=lambda evt: None,
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=5,
+        eager=False,
+        site="lease",
+        lease_seconds=60,
+    )
+
+
+def _run_short_lease(
+    monkeypatch: pytest.MonkeyPatch, *, run_for: float, lease_seconds: int = 60
+) -> list[logging.LogRecord]:
+    """Deliver, on a 60 s claim, a receiver whose run the clock sees as ``run_for`` s long."""
+    entry = dataclasses.replace(_short_lease_receiver(), lease_seconds=lease_seconds)
+    skew = {"seconds": 0.0}
+    real_now = django_timezone.now
+    monkeypatch.setattr(
+        django_timezone, "now", lambda: real_now() + timedelta(seconds=skew["seconds"])
+    )
+    seen: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            seen.append(record)
+
+    handler = _Capture(level=logging.INFO)
+    deliver_module.logger.addHandler(handler)
+    try:
+        with receiver_registered(
+            dataclasses.replace(entry, func=lambda evt: skew.update(seconds=run_for))
+        ):
+            with transaction.atomic():
+                fire(Unheard(value=1))
+            row = DeliveryRecord.objects.get(receiver_key=entry.key)
+            claim_batch(worker_id="w1", now=real_now(), lease=timedelta(seconds=60), limit=10)
+            assert deliver_one(row.pk, worker_id="w1") == DeliveryStatus.SUCCEEDED
+    finally:
+        deliver_module.logger.removeHandler(handler)
+    return [r for r in seen if r.levelno >= logging.WARNING]
+
+
+def test_a_receiver_that_finishes_past_its_lease_and_still_owns_the_row_warns_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Another relay could have claimed the row meanwhile; the outcome stands."""
+    warnings = _run_short_lease(monkeypatch, run_for=90.0)
+
+    assert len(warnings) == 1
+    text = warnings[0].getMessage()
+    assert "worker w1" in text
+    assert "tests.short_lease" in text
+    assert re.search(r"finished delivery \d+ ", text)
+    assert re.search(r"(2\d|3\d)\.\d s past its lease", text)
+    assert "lease_seconds=" in text
+
+
+def test_a_receiver_that_finishes_inside_its_lease_logs_no_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert _run_short_lease(monkeypatch, run_for=10.0) == []
+
+
+def test_an_overrun_is_measured_against_the_lease_the_row_was_extended_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert _run_short_lease(monkeypatch, run_for=90.0, lease_seconds=600) == []

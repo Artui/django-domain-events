@@ -119,6 +119,12 @@ compares against before answering an early run with
 row it is when the row became owed, the moment a replay or requeue reopened it
 or else when its event was recorded, and it is `None` wherever `delivery_id` is.
 
+`ctx.occurred_at` and `ctx.correlation_id` are the event's own: when it happened,
+`fire(occurred_at=)` as the event row stores it, in UTC under `USE_TZ = True`
+(what an audit log records), and the correlation id it was recorded with, or
+`None`. Both are set on every context the library builds, `INLINE`, `ON_COMMIT`
+and `targets=` included, and are the same on each of them.
+
 !!! note "A long receiver needs `lease_seconds`, not a heartbeat"
     A receiver still working when its lease lapses has its row taken by another
     worker and its own work rolled back - correct, and entirely wasted. It
@@ -165,7 +171,7 @@ depends on. Everything else about the delivery is unchanged:
   So `await Model.objects.acreate(...)` commits with the acknowledgement and is
   rolled back with it when the receiver raises, exactly as a sync receiver's
   write is.
-- **It reads its verdicts the same way.** `RetryAfter`, `NotYet` and
+- **It reads its verdicts the same way.** `RetryAfter`, `NotYet`, `Moot` and
   `PermanentFailure` raised from a coroutine reach the relay as the same
   object, and an `INLINE` coroutine's raise reaches `fire()`'s caller.
 - **Causation reaches it.** An event it fires through

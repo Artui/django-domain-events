@@ -27,11 +27,14 @@ Everything below is exported from `django_domain_events` directly.
 ::: django_domain_events.delivery.permanent_failure.PermanentFailure
 ::: django_domain_events.delivery.retry_after.RetryAfter
 ::: django_domain_events.delivery.not_yet.NotYet
+::: django_domain_events.delivery.moot.Moot
 ::: django_domain_events.delivery.wake.notify_relay
 
 The hook around each durable attempt is a setting rather than a symbol: see
 [`AROUND_DELIVERY`](settings.md#around_delivery). It is handed the
-`DeliveryContext` below, whose `receiver_key` names the receiver.
+`DeliveryContext` below, whose `receiver_key` names the receiver. So is the
+per-process hook `deliver_events` calls before its first claim: see
+[`RELAY_STARTUP`](settings.md#relay_startup).
 
 ## Operations
 

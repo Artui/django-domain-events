@@ -28,6 +28,32 @@ Run as many as you like on Postgres. On SQLite, run exactly one.
 and never let two passes overlap. For a single relay in development,
 `run_relay(..., allow_unsafe_concurrency=True)` starts it from Python.
 
+### Setting up the process before it delivers
+
+A project that needs per-process setup before the first delivery, such as
+loading feature flags as a Celery worker does in `worker_process_init`, names a
+callable in [`RELAY_STARTUP`](settings.md#relay_startup):
+
+```python
+DJANGO_DOMAIN_EVENTS = {"RELAY_STARTUP": "myproject.relay.startup"}
+```
+
+```python
+def startup(*, worker_id: str, lanes: list[str]) -> None:
+    load_feature_flags()
+```
+
+`deliver_events` calls it once per process, on the main thread, after it has
+parsed its options and resolved the worker id and lanes, and before the first
+claim, with `--once` and as a relay alike. An exception from it stops the command
+before anything is claimed, so a process never starts half set up. Two refusals come
+after it has run: a `--lane` no receiver declares, and a relay on a database
+without `SKIP LOCKED`, such as SQLite.
+
+It is the command's hook, not the delivery functions': `run_relay()`,
+`deliver_pending()` and `drain_outbox()` called from Python do not call it. Code
+that starts them does its own setup first.
+
 ### Lanes: a relay per kind of work
 
 One relay delivers one row at a time. A receiver that takes a second per
@@ -484,7 +510,9 @@ relay runs `prune_events()` with its defaults, at most once per
 interval after it starts. Every relay does, whatever its `--lane`; a relay that
 is never idle does not; and `deliver_events --once` never does. A sweep that
 fails is logged and not retried before the next interval, and a stop request
-waits for at most one prune batch of a running sweep. Set
+waits for at most one prune batch of a running sweep. A sweep that deleted
+anything logs one INFO line, `relay <id> pruned N events and M delivery rows in
+S s`, so a prune growing slow, or deleting many delivery rows, shows. Set
 [`RELAY_PRUNE`](settings.md#relay_prune) to `False` if you schedule
 `prune_events` yourself, which is also what a `--once` deployment needs; what the
 sweep costs, and when to prefer the schedule, is in
@@ -628,7 +656,9 @@ widening them, so a stale id list cannot reach another event's work.
 Called inside a transaction, it joins it: the cancel commits with the change that
 made the work moot, or not at all. A cancelled row writes `completed_at` and not
 `succeeded_at`, so it is no evidence for
-[`quiet_receivers`](introspection.md#quiet-receivers) that a receiver works.
+[`quiet_receivers`](introspection.md#quiet-receivers) that a receiver works. A
+receiver that finds its work moot only when it runs raises
+[`Moot`](scheduling.md#found-moot-when-it-runs-moot), which settles its row the same way.
 
 What else reads it:
 
@@ -844,9 +874,16 @@ check the names against the relays running.
 
 The relay logs at `WARNING` when a worker loses a delivery - either before
 running it, or after finishing work whose lease had already lapsed. The second
-names the receiver and suggests `lease_seconds=`, because that is the fix. It
-also logs every failed attempt it records, at `WARNING`, one line each - see
-[the failure log](delivery.md#the-failure-log).
+names the receiver and suggests `lease_seconds=`, because that is the fix. A
+receiver that succeeds past its lease while the row is still its worker's keeps
+the success, since nothing took the row, and logs one `WARNING`, `worker W
+finished delivery D X.X s past its lease`, naming the receiver whose
+`lease_seconds=` to raise: another relay could have claimed the row meanwhile.
+A late failure, `NotYet` or `RetryAfter` logs no such line. It also logs every failed
+attempt it records, at `WARNING`, one line each - see
+[the failure log](delivery.md#the-failure-log). A receiver answering `NotYet`
+is logged at `DEBUG`, not `INFO`: the row is scheduled, and there is nothing to
+act on.
 
 ## A cron that works
 

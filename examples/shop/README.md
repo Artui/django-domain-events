@@ -111,10 +111,11 @@ DDE_EXAMPLE_DATABASE=postgres python manage.py demo
 14. **`chase_unpaid_invoice`** - `due=timedelta(days=14)`, because a reminder
     two weeks after the invoice is a reaction to the invoice that runs later,
     and a beat job polling every minute for invoices to chase finds nothing
-    almost every time. A cancelled order makes the reminder moot, and returning
-    is an ordinary success. A customer emailed in the last three days makes it
-    not due yet, and returning would lose it, so it raises `NotYet` with the end
-    of the quiet period - comparing against `ctx.due_at` floored at the clock
+    almost every time. A cancelled order makes the reminder moot, so it raises
+    `Moot`, which settles the row `cancelled` rather than as a success. A
+    customer emailed in the last three days makes it not due yet, and
+    returning would lose it, so it raises `NotYet` with the end of the quiet
+    period - comparing against `ctx.due_at` floored at the clock
     (`max(ctx.due_at, timezone.now())`), so a reminder that runs after the quiet
     period has ended is sent rather than failing on a past `NotYet`.
 15. **`ask_for_a_review`** - `async def`, because the review platform's client

@@ -21,8 +21,8 @@ def cancel_deliveries(
 
     The scheduled case is the one this exists for: an offer accepted before its
     expiry is due, a reminder for an order already paid. A receiver that finds
-    nothing to do and returns is still the answer when the world moved on and
-    nobody said so; this is the answer when the application knows ahead of
+    nothing to do and raises ``Moot`` is still the answer when the world moved
+    on and nobody said so; this is the answer when the application knows ahead of
     time, and wants neither the run nor a success recorded for work that was
     never done.
 

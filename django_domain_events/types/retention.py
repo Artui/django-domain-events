@@ -23,9 +23,9 @@ class Retention(Enum):
     A dead or orphaned delivery keeps its event under the ordinary
     ``RETENTION_DAYS`` window, so the dead letter stays inspectable and
     ``requeue_dead`` still has a row to reopen. A cancelled one does not: it
-    was withdrawn on purpose by ``cancel_deliveries``, nothing failed and
-    nothing is left to requeue, so with every other row succeeded every row of
-    the event is done.
+    was moot, withdrawn by ``cancel_deliveries`` or found so by a receiver
+    raising ``Moot``, nothing failed and nothing is left to requeue, so with
+    every other row succeeded every row of the event is done.
     """
 
     SETTLED = "settled"

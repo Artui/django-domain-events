@@ -7,7 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-11-13
+
+### Added
+- `RELAY_STARTUP` setting: a dotted path to a callable that `deliver_events` calls once per
+  process with `worker_id` and `lanes`, after parsing its options and before its first
+  claim, with `--once` and as a relay. It is where per-process setup such as feature flags
+  goes, so a project no longer copies the command to add it. An exception from it stops the
+  command before anything is claimed. `run_relay()`, `deliver_pending()` and `drain_outbox()`
+  called from Python do not call it.
+- A delivery whose receiver succeeds after its lease ran out, while the row is still its
+  worker's, now logs one WARNING naming the worker, the delivery, the receiver and the
+  overrun in seconds. Another relay could have claimed the row meanwhile; the success
+  stands. A late failure, `NotYet` or `RetryAfter` logs no such line. Raise
+  `lease_seconds=` on that receiver.
+- `Moot(reason)`, exported from the package: a durable receiver that finds nothing to do
+  (the token is gone, the row deleted, the work stale) raises it instead of returning. Its
+  writes are rolled back and its row is settled `cancelled` with that attempt,
+  `last_error` reading `moot: <reason>`, and no `succeeded_at`; `on_failure` is not called
+  and it is logged at DEBUG. Returning recorded a success, which inflated success counts
+  and let `quiet_receivers` read a receiver that skips every row as alive. No new status
+  and no migration: replay, prune and `outbox_health` treat the row as any cancelled one.
+  From an `INLINE` or `ON_COMMIT` receiver it is an ordinary exception, as `NotYet` is.
+- `DeliveryContext.occurred_at` and `correlation_id`, last and optional like `target` and
+  `due_at`, so a context built by hand with the old arguments still works. They are the
+  event's own `occurred_at` (what `fire(occurred_at=)` set, as the row stores it: in UTC
+  under `USE_TZ = True`, the same on every path; the time an audit log wants) and its
+  correlation id, set on every context the library builds: the relay and task deliveries,
+  `INLINE` and `ON_COMMIT` receivers, and the context a `targets=` callable gets at fire
+  time and at replay. A `NotYet` receiver can bound its own wait with `ctx.occurred_at`.
+  A naive `fire(occurred_at=)` under `USE_TZ = True`, which Django warns about and stores
+  in `TIME_ZONE`, is read that way at fire time too, so a `due=` timedelta receiver no
+  longer raises `TypeError` on one.
+
 ### Changed
+- A `NotYet` answer is now logged at DEBUG instead of INFO: it says the work is scheduled,
+  which an operator does not act on, and a receiver answering it on every pass wrote tens of
+  thousands of lines a week. The `RetryAfter` lane-pause line stays at INFO.
+- The relay's sweep line now reads `relay <id> pruned N events and M delivery rows in S s`,
+  so a prune that grows slow, or deletes many delivery rows, shows in the log.
 - The API reference's docstrings are restored.
 - The operations and scope pages say when to choose the Celery backend, that `deliver_events`
   refuses to run continuously on SQLite, and that a nested `attributed()` block replaces the
@@ -1102,7 +1140,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.14.1...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/Artui/django-domain-events/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/Artui/django-domain-events/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/Artui/django-domain-events/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/Artui/django-domain-events/compare/v0.12.0...v0.13.0

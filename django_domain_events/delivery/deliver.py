@@ -17,6 +17,7 @@ from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.fire import call_receiver, run_to_completion
 from django_domain_events.delivery.hand_back import hand_back
+from django_domain_events.delivery.moot import Moot
 from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.permanent_failure import PermanentFailure
 from django_domain_events.delivery.retry_after import RetryAfter
@@ -79,6 +80,11 @@ def deliver_one(
     A receiver answering ``NotYet`` has its row moved to the time it named,
     with no attempt spent, and this returns ``PENDING``: the one outcome that
     leaves the row owed and not failed.
+
+    A receiver answering ``Moot`` has its work rolled back and its row settled
+    ``CANCELLED`` with that attempt, ``last_error`` reading ``moot: <reason>``
+    and no ``succeeded_at``; ``on_failure`` is not called. This returns
+    ``CANCELLED``.
 
     ``claimed_by`` and ``claimed_at`` are the claim a task message carries, as
     the relay passed them to ``TaskBackend.enqueue``. Given them, this call
@@ -205,6 +211,8 @@ def _deliver_one(
         delivery_id=delivery.pk,
         due_at=delivery.due_at if delivery.due_at is not None else delivery.event.recorded_at,
         receiver_key=receiver.key,
+        occurred_at=delivery.event.occurred_at,
+        correlation_id=delivery.event.correlation_id,
     )
     around = _Around(context)
     committed = False
@@ -238,6 +246,15 @@ def _deliver_one(
                     receiver.key,
                 )
                 transaction.set_rollback(True, using=write_alias())
+            elif fence.lease_expires_at is not None and acknowledged > fence.lease_expires_at:
+                logger.warning(
+                    "worker %s finished delivery %s %.1f s past its lease; another relay could "
+                    "have claimed it meanwhile. Raise lease_seconds= on receiver %s",
+                    worker_id,
+                    delivery_id,
+                    (acknowledged - fence.lease_expires_at).total_seconds(),
+                    receiver.key,
+                )
     except Exception as exc:
         if committed:
             logger.exception(
@@ -253,6 +270,8 @@ def _deliver_one(
         around.raised = exc
         if isinstance(exc, NotYet):
             return _reschedule(fence, delivery, exc)
+        if isinstance(exc, Moot):
+            return _settle_moot(fence, delivery, exc, attempt)
         if isinstance(exc, RetryAfter) and not exc.counts:
             return _defer(fence, delivery, receiver, exc, attempt, on_deferral)
         return _fail(
@@ -347,6 +366,7 @@ class _Fence:
         # The owner this call believes it is, not the one the row now names.
         self.claimed_by = worker_id if worker_id is not None else delivery.claimed_by
         self.claimed_at = delivery.claimed_at
+        self.lease_expires_at = delivery.lease_expires_at
 
     def _owned(self) -> Any:
         from django_domain_events.models.delivery_record import DeliveryRecord
@@ -367,7 +387,10 @@ class _Fence:
     def extend_lease(self, now: datetime, seconds: int | None = None) -> bool:
         """Push the lease out to cover this delivery alone."""
         lease = timedelta(seconds=seconds if seconds is not None else setting("LEASE_SECONDS"))
-        return bool(self._owned().update(lease_expires_at=now + lease))
+        extended = bool(self._owned().update(lease_expires_at=now + lease))
+        if extended:
+            self.lease_expires_at = now + lease
+        return extended
 
     def write(self, **fields: Any) -> DeliveryStatus | None:
         """Record an outcome, or return ``None`` if the row is no longer ours."""
@@ -524,7 +547,7 @@ def _defer(
 
 def _reschedule(fence: _Fence, row: Any, exc: NotYet) -> DeliveryStatus | None:
     """Move a row its receiver answered with ``NotYet`` to the time it named."""
-    logger.info(
+    logger.debug(
         "receiver %s answered delivery %s with NotYet; it is due again at %s",
         row.receiver_key,
         row.pk,
@@ -535,6 +558,23 @@ def _reschedule(fence: _Fence, row: Any, exc: NotYet) -> DeliveryStatus | None:
         available_at=exc.until,
         due_at=exc.until,
         completed_at=None,
+    )
+
+
+def _settle_moot(fence: _Fence, row: Any, exc: Moot, attempt: int) -> DeliveryStatus | None:
+    """Settle a row its receiver found moot as CANCELLED: neither a success nor a failure."""
+    logger.debug(
+        "receiver %s found delivery %s moot on attempt %s: %s",
+        row.receiver_key,
+        row.pk,
+        attempt,
+        exc.reason,
+    )
+    return fence.write(
+        status=DeliveryStatus.CANCELLED,
+        attempts=attempt,
+        last_error=f"moot: {exc.reason}"[:2000],
+        completed_at=timezone.now(),
     )
 
 

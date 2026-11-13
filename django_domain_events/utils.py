@@ -5,6 +5,7 @@ import hashlib
 import inspect
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
 from typing import Any, cast
 
 from asgiref.sync import iscoroutinefunction
@@ -104,6 +105,17 @@ def in_project_time(value: datetime) -> datetime:
     if settings.USE_TZ or timezone.is_naive(value):
         return value
     return timezone.make_naive(value)
+
+
+def as_stored(value: datetime) -> datetime:
+    """``value`` as the database hands it back: in UTC, or as it is under ``USE_TZ = False``."""
+    if not settings.USE_TZ:
+        return value
+    return (
+        timezone.make_aware(value, timezone.get_default_timezone())
+        if timezone.is_naive(value)
+        else value
+    ).astimezone(dt_timezone.utc)
 
 
 def require_aware_where_stored_aware(value: datetime, refusal: str) -> None:

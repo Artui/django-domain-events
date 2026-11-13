@@ -8,6 +8,7 @@ from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.lane_backlog import LaneBacklog
 from django_domain_events.types.lane_pause import LanePause
 from django_domain_events.types.outbox_health import OutboxHealth
+from django_domain_events.types.pruned import Pruned
 from django_domain_events.types.quiet_receiver import QuietReceiver
 from django_domain_events.types.receiver_backlog import ReceiverBacklog
 from django_domain_events.types.registered_event import RegisteredEvent
@@ -25,6 +26,7 @@ __all__ = [
     "LaneBacklog",
     "LanePause",
     "OutboxHealth",
+    "Pruned",
     "QuietReceiver",
     "ReceiverBacklog",
     "RegisteredEvent",

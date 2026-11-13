@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -23,6 +24,7 @@ from django_domain_events.models.receiver_last_success import ReceiverLastSucces
 from django_domain_events.operations.prune_events import prune_events
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.types.pruned import Pruned
 from django_domain_events.types.registered_receiver import RegisteredReceiver
 from tests.conftest import receiver_registered, receiver_replaced
 from tests.testapp.events import OrderPlaced, PinnedName, Unheard, calls
@@ -92,11 +94,11 @@ class _Sweeps:
         self.at: list[float] = []
         self.raises: list[Exception] = []
 
-    def __call__(self, *, stop: Callable[[], bool] | None = None) -> int:
+    def __call__(self, *, stop: Callable[[], bool] | None = None) -> Pruned:
         self.at.append(self.clock.t)
         if self.raises:
             raise self.raises.pop(0)
-        return 0
+        return Pruned(0, 0)
 
 
 def _relay(
@@ -104,7 +106,7 @@ def _relay(
 ) -> _Sweeps:
     """Run ``passes`` passes on ``clock`` with the prune replaced."""
     sweeps = _Sweeps(clock)
-    monkeypatch.setattr(run_relay_module, "prune_events", sweeps)
+    monkeypatch.setattr(run_relay_module, "prune_with_counts", sweeps)
     run_relay(worker_id="w1", passes=passes, monotonic=clock, wait=clock.wait, **UNSAFE, **kwargs)
     return sweeps
 
@@ -129,7 +131,7 @@ def _late_relay(monkeypatch: pytest.MonkeyPatch, passes: int = 1, **kwargs: obje
     """Clock reads zero, then 1000 s, so every idle pass is past the interval."""
     clock = _Clock()
     sweeps = _Sweeps(clock)
-    monkeypatch.setattr(run_relay_module, "prune_events", sweeps)
+    monkeypatch.setattr(run_relay_module, "prune_with_counts", sweeps)
     readings = iter([0.0])
     run_relay(
         worker_id="w1",
@@ -260,7 +262,7 @@ def test_a_sweep_that_fails_does_not_kill_the_relay_or_retry_early(
     clock = _Clock(60, 30, 30)
     sweeps = _Sweeps(clock)
     sweeps.raises.append(error)
-    monkeypatch.setattr(run_relay_module, "prune_events", sweeps)
+    monkeypatch.setattr(run_relay_module, "prune_with_counts", sweeps)
     closes: list[str] = []
     conn = run_relay_module.connections[write_alias()]
     real_close = conn.close
@@ -403,3 +405,51 @@ def test_a_stop_request_waits_for_one_batch_of_the_sweep_not_all_of_it(settings)
     )
 
     assert EventRecord.objects.count() == 4
+
+
+def test_a_sweep_logs_one_line_with_events_delivery_rows_and_duration(
+    settings, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_PRUNE_SECONDS": 0.001}
+    for _ in range(2):
+        event = _consumed_event()
+        for key in ("a", "b", "c"):
+            DeliveryRecord.objects.create(
+                event=event,
+                receiver_key=f"tests.{key}",
+                status=DeliveryStatus.SUCCEEDED,
+                available_at=django_timezone.now(),
+                succeeded_at=django_timezone.now(),
+            )
+
+    with caplog.at_level(logging.INFO, logger=run_relay_module.logger.name):
+        run_relay(worker_id="w1", passes=3, wait=lambda _: bool(time.sleep(0.01)), **UNSAFE)
+
+    lines = [r.getMessage() for r in caplog.records if "pruned" in r.getMessage()]
+    assert len(lines) == 1
+    assert re.fullmatch(r"relay w1 pruned 2 events and 6 delivery rows in \d+\.\d{3} s", lines[0])
+
+
+def test_prune_events_still_returns_the_event_count() -> None:
+    event = _consumed_event()
+    DeliveryRecord.objects.create(
+        event=event,
+        receiver_key="tests.a",
+        status=DeliveryStatus.SUCCEEDED,
+        available_at=django_timezone.now(),
+        succeeded_at=django_timezone.now(),
+    )
+
+    assert prune_events() == 1
+
+
+def test_a_sweep_that_deleted_only_delivery_rows_logs_its_line(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A stop mid-chunk deletes delivery rows and no event; the sweep still says so."""
+    monkeypatch.setattr(run_relay_module, "prune_with_counts", lambda **_: Pruned(0, 3))
+    with caplog.at_level(logging.INFO, logger=run_relay_module.logger.name):
+        run_relay_module._sweep_or_survive("w1", None, lambda: False)
+    lines = [r.getMessage() for r in caplog.records if "pruned" in r.getMessage()]
+    assert len(lines) == 1
+    assert lines[0].startswith("relay w1 pruned 0 events and 3 delivery rows in ")

@@ -27,6 +27,7 @@ from django_domain_events.declaration.registry import registry
 from django_domain_events.delivery.claim_batch import claim_batch
 from django_domain_events.delivery.deliver import deliver_one, deliver_pending, dispatch_one
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.moot import Moot
 from django_domain_events.delivery.not_yet import NotYet
 from django_domain_events.delivery.permanent_failure import PermanentFailure
 from django_domain_events.delivery.retry_after import RetryAfter
@@ -373,6 +374,10 @@ def _permanent() -> Exception:
     return PermanentFailure("410 Gone")
 
 
+def _moot() -> Exception:
+    return Moot("token gone")
+
+
 def _raising(verdict: Callable[[], Exception], is_async: bool) -> Callable[..., Any]:
     if is_async:
 
@@ -394,8 +399,9 @@ def _raising(verdict: Callable[[], Exception], is_async: bool) -> Callable[..., 
         (_retry_after, DeliveryStatus.FAILED, 1),
         (_not_yet, DeliveryStatus.PENDING, 0),
         (_permanent, DeliveryStatus.DEAD, 1),
+        (_moot, DeliveryStatus.CANCELLED, 1),
     ],
-    ids=["retry_after", "not_yet", "permanent_failure"],
+    ids=["retry_after", "not_yet", "permanent_failure", "moot"],
 )
 def test_a_verdict_raised_from_a_coroutine_is_read_as_from_a_function(
     verdict: Callable[[], Exception], status: DeliveryStatus, attempts: int, is_async: bool

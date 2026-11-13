@@ -3,13 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 
 @dataclass(frozen=True, slots=True)
 class DeliveryContext:
     """Delivery metadata, passed to receivers declaring ``takes_context``.
 
-    Also to a ``targets=`` callable, at fire time, and to the
+    Also to a ``targets=`` callable, at fire time and at replay, and to the
     ``AROUND_DELIVERY`` hook, once per durable attempt.
 
     Frozen data read off the event row, never a live handle: a durable delivery
@@ -65,3 +66,19 @@ class DeliveryContext:
     metric or a log line by, since the hook is handed this context and not the
     receiver. Blank only on a context built by hand. Optional and last for the
     same reason as ``target``."""
+
+    occurred_at: datetime | None = None
+    """When the event happened: ``fire(occurred_at=)``, as the event row stores it.
+
+    Read back the way the relay reads it, so an ``INLINE`` receiver sees the
+    same value: in UTC under ``USE_TZ = True``.
+
+    What an audit trail records, and what a ``NotYet`` receiver can bound its
+    own wait with: stop deferring once the event is older than it allows. None
+    only on a context built by hand. Optional and last for the same reason as
+    ``target``."""
+
+    correlation_id: UUID | None = None
+    """The correlation id the event was recorded with, or None if it had none.
+
+    Optional and last for the same reason as ``target``."""

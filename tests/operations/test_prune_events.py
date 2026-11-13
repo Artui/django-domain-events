@@ -13,7 +13,7 @@ from django_domain_events.delivery.fire import fire
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
 from django_domain_events.models.receiver_last_success import ReceiverLastSuccess
-from django_domain_events.operations import prune_events as prune_module
+from django_domain_events.operations import prune_with_counts as prune_module
 from django_domain_events.operations.prune_events import prune_events
 from django_domain_events.types.delivery_status import DeliveryStatus
 from tests.conftest import Plans, delivery_table_access, event_deleted, stored

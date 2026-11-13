@@ -27,6 +27,7 @@ from django_domain_events.settings import get_codec, setting
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.utils import (
+    as_stored,
     in_project_time,
     is_async_callable,
     resolve_due,
@@ -134,6 +135,7 @@ def fire(
     )
     if suppression is not None:
         return record.pk
+    record.occurred_at = as_stored(record.occurred_at)
     context = DeliveryContext(
         event_id=record.pk,
         event_name=record.name,
@@ -141,6 +143,8 @@ def fire(
         actor_key=record.actor_key,
         actor_label=record.actor_label,
         scope=record.scope,
+        occurred_at=record.occurred_at,
+        correlation_id=record.correlation_id,
     )
 
     receivers = registry.receivers_for(type(event))

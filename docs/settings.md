@@ -31,6 +31,7 @@ are changing.
 | `RELAY_PRUNE_SECONDS` | `60` | The most often a relay sweeps, in seconds above zero. |
 | `TASK_BACKEND` | `None` | Dotted path, or a `{"BACKEND": ..., **options}` mapping. |
 | `AROUND_DELIVERY` | `None` | Dotted path to a callable taking a `DeliveryContext` and returning a context manager, entered around each durable attempt. |
+| `RELAY_STARTUP` | `None` | Dotted path to a callable taking `worker_id` and `lanes`, called once by `deliver_events` before its first claim. |
 
 ## The ones worth thinking about
 
@@ -234,6 +235,23 @@ level (`SET search_path`, `SET ROLE`) and reset it on exit, rather than with
 The rules, and what it never wraps, are in
 [A hook around each delivery](delivery.md#a-hook-around-each-delivery).
 
+### `RELAY_STARTUP`
+
+A dotted path to a callable that `deliver_events` calls once per process, on the
+main thread, with the keyword arguments `worker_id: str` and `lanes: list[str]`,
+after it has parsed its options and before its first claim, with `--once` and as
+a relay. Its return value is ignored. An exception from it propagates and stops
+the command before anything is claimed. A `--lane` no receiver declares, and a
+relay on a database without `SKIP LOCKED`, are refused after it has run.
+
+```python
+"RELAY_STARTUP": "myproject.relay.startup",
+```
+
+Only the command calls it: `run_relay()`, `deliver_pending()` and
+`drain_outbox()` called from Python do not. See
+[Setting up the process before it delivers](operations.md#setting-up-the-process-before-it-delivers).
+
 ## `USE_TZ = False`
 
 Supported. Every datetime the package writes or compares follows the project's
@@ -254,9 +272,9 @@ argument to `drain_outbox`, `deliver_pending`, `outbox_health`,
   `NotYet` and `due=` accept one rather than refusing it as they do under
   `True`.
 
-What the package hands back is in the same form: `DeliveryContext.due_at`,
-`outbox_health().oldest_owed_at` and every timestamp on the rows are naive local
-time under `False`. Compare them with `timezone.now()`, not
+What the package hands back is in the same form: `DeliveryContext.due_at` and
+`occurred_at`, `outbox_health().oldest_owed_at` and every timestamp on the rows
+are naive local time under `False`. Compare them with `timezone.now()`, not
 `datetime.now(timezone.utc)`.
 
 The documented `NotYet` pattern, `if moved > max(ctx.due_at, timezone.now())`,
