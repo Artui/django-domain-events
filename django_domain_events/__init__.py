@@ -18,6 +18,7 @@ from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.run_relay import run_relay
 from django_domain_events.delivery.wake import notify_relay
 from django_domain_events.introspection.catalogue import catalogue
+from django_domain_events.introspection.delivery_tally import delivery_tally
 from django_domain_events.introspection.outbox_health import outbox_health
 from django_domain_events.introspection.quiet_receivers import quiet_receivers
 from django_domain_events.introspection.render_catalogue import render_catalogue
@@ -40,6 +41,7 @@ from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
+from django_domain_events.types.delivery_tally import DeliveryTally
 from django_domain_events.types.lane_backlog import LaneBacklog
 from django_domain_events.types.lane_pause import LanePause
 from django_domain_events.types.outbox_health import OutboxHealth
@@ -68,6 +70,7 @@ __all__ = [
     "DeliveryFailure",
     "DeliveryMode",
     "DeliveryStatus",
+    "DeliveryTally",
     "INLINE",
     "LaneBacklog",
     "LanePause",
@@ -105,6 +108,7 @@ __all__ = [
     "fire",
     "listens_for",
     "notify_relay",
+    "delivery_tally",
     "outbox_health",
     "propagate_scope",
     "prune_events",

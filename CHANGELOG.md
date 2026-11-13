@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pauses. `resume_lane` deletes every pause of the lane, the operator's and every relay's,
   and the relays take the lane up again at their next pass, within `POLL_SECONDS` for an
   idle one.
+- `delivery_tally(event_id)`, exported from the package: one event's deliveries counted by
+  outcome in a single query, as a frozen `DeliveryTally` with `owed` (pending, failed and
+  claimed), `succeeded`, `cancelled` (a `Moot` settlement included), `dead`, `orphaned` and
+  `total`. An unknown event gives all zeros.
 
 ### Changed
 - **A lane paused by one relay is now paused in every relay.** Each pass of `run_relay()`
