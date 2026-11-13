@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outcome in a single query, as a frozen `DeliveryTally` with `owed` (pending, failed and
   claimed), `succeeded`, `cancelled` (a `Moot` settlement included), `dead`, `orphaned` and
   `total`. An unknown event gives all zeros.
+- `install_celery_scope(app)`, exported from the package and needing the `[celery]` extra:
+  a task published inside `attributed()` carries the scope's actor, data and correlation id
+  in a `django_domain_events_scope` message header, and runs inside that scope, so an event
+  it fires records the publisher's actor and data and joins the publisher's chain. The
+  scope is left when the task ends, raised or not. A task published outside any scope
+  carries no header; without the call nothing changes. Installing twice connects once, and
+  another app's tasks ignore the header. Not for `django.tasks`, which has no publish
+  signal.
 
 ### Changed
 - **A lane paused by one relay is now paused in every relay.** Each pass of `run_relay()`

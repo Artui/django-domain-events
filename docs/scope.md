@@ -134,3 +134,44 @@ submits the same wrapped callable per item would raise on the second.
 Not needed for `asyncio` tasks, which inherit a copy at creation, nor across
 `sync_to_async` / `async_to_sync`, which carry context both ways. It cannot help
 across a **process** boundary - there the answer is the event row.
+
+## Celery tasks
+
+A Celery task runs in another process, so `propagate_scope()` cannot reach it,
+and an event a task fires records no actor unless the scope travels with the
+message. `install_celery_scope(app)` makes it travel. It needs the `[celery]`
+extra and is opt-in: without the call, nothing changes.
+
+```python
+from celery import Celery
+from django_domain_events import install_celery_scope
+
+app = Celery("proj")
+install_celery_scope(app)
+```
+
+Publishing a task inside `attributed()` then writes the scope into one message
+header, `django_domain_events_scope`, as JSON: the actor's key, label and user
+id, the scope data and the correlation id. The task runs inside that scope and
+leaves it when it ends, whether it returned or raised, so an event it fires
+records the publisher's actor and data and joins the publisher's chain. A task
+published from inside a receiver carries that receiver's chain too.
+
+```python
+with attributed(actor=request.user, club_id=club.id):
+    send_welcome_pack.delay(member.id)  # its events record request.user
+```
+
+- A task published outside any scope carries no header and fires with no actor.
+- `suppressed()` and the causing event id do not travel; only the chain does.
+- Installing twice is harmless. Only the apps you install run their tasks in
+  the carried scope, but the publish signal does not say which app published,
+  so once one app is installed the header rides on every message the process
+  publishes.
+- Under `task_always_eager` nothing is published: the task runs inline, inside
+  the caller's scope already.
+
+!!! note "Not for `django.tasks`"
+    Django's task framework sends no signal when a task is enqueued, so there is
+    nowhere to write the scope. Pass what the task needs as arguments and open
+    `attributed()` inside it.
