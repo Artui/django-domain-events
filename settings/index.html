@@ -999,7 +999,7 @@ are changing.</p>
 <tr>
 <td><code>BATCH_SIZE</code></td>
 <td><code>50</code></td>
-<td>Rows per claim and per requeue chunk. A relay may override it for its claims, and per lane.</td>
+<td>Rows per claim and per requeue chunk. A relay may override it for its claims, and per lane; a lane with worker threads is sized by its idle workers instead.</td>
 </tr>
 <tr>
 <td><code>LEASE_SECONDS</code></td>
@@ -1155,7 +1155,11 @@ keeps its larger statements.</p>
 names takes that size, and every other lane <code>--batch-size</code>, or <code>BATCH_SIZE</code>
 where that is not given. In a shared relay that size is what one turn of the
 lane costs the others
-(<a href="../operations/#one-relay-several-lanes">one relay, several lanes</a>).</p>
+(<a href="../operations/#one-relay-several-lanes">one relay, several lanes</a>).
+A lane with <a href="../operations/#worker-threads-in-a-lane">worker threads or a rate</a>
+takes neither: each claim takes as many rows as it has idle workers, and either
+size beside it is refused. A rate spaces the starts 1/R apart as the relay hands
+each row to a worker, not at the provider: leave headroom under a strict quota.</p>
 <h3 id="prune_batch_rows"><code>PRUNE_BATCH_ROWS</code><a class="headerlink" href="#prune_batch_rows" title="Permanent link">&para;</a></h3>
 <p>How many rows one prune transaction deletes, counting each event's delivery rows
 and the event row itself. A setting of its own, rather than <code>BATCH_SIZE</code>, because
@@ -1236,7 +1240,10 @@ relay on a database without <code>SKIP LOCKED</code>, are refused after it has r
 <div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="s2">"RELAY_STARTUP"</span><span class="p">:</span> <span class="s2">"myproject.relay.startup"</span><span class="p">,</span>
 </span></code></pre></div>
 <p>Only the command calls it: <code>run_relay()</code>, <code>deliver_pending()</code> and
-<code>drain_outbox()</code> called from Python do not. See
+<code>drain_outbox()</code> called from Python do not. A lane with
+<a href="../operations/#worker-threads-in-a-lane">worker threads</a> still calls it once,
+on the main thread: a <code>ContextVar</code> it sets reaches every row through a copy of
+the main thread's context, and a thread-local it sets reaches none. See
 <a href="../operations/#setting-up-the-process-before-it-delivers">Setting up the process before it delivers</a>.</p>
 <h2 id="use_tz-false"><code>USE_TZ = False</code><a class="headerlink" href="#use_tz-false" title="Permanent link">&para;</a></h2>
 <p>Supported. Every datetime the package writes or compares follows the project's

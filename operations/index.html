@@ -504,6 +504,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#worker-threads-in-a-lane" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Worker threads in a lane
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#the-lease-a-claim-stamps" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -696,6 +707,17 @@
   
     <nav class="md-nav" aria-label="Handing delivery to a task queue">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#threads-or-a-task-queue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Threads or a task queue
+      
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#celery" class="md-nav__link">
@@ -962,6 +984,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#worker-threads-in-a-lane" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Worker threads in a lane
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#the-lease-a-claim-stamps" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1156,6 +1189,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#threads-or-a-task-queue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Threads or a task queue
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#celery" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1271,6 +1315,8 @@ real interface; the commands are thin wrappers, so anything cron can do a
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>python<span class="w"> </span>manage.py<span class="w"> </span>deliver_events<span class="w"> </span>--batch-size<span class="w"> </span><span class="m">5</span><span class="w">           </span><span class="c1"># rows per claim, this process</span>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>python<span class="w"> </span>manage.py<span class="w"> </span>deliver_events<span class="w"> </span>--lane<span class="w"> </span>default<span class="w"> </span>--lane<span class="w"> </span>mail<span class="w">   </span><span class="c1"># both lanes, each in turn</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>python<span class="w"> </span>manage.py<span class="w"> </span>deliver_events<span class="w"> </span>--lane<span class="w"> </span>default<span class="w"> </span>--lane<span class="w"> </span>mail<span class="w"> </span>--lane-batch-size<span class="w"> </span><span class="nv">mail</span><span class="o">=</span><span class="m">5</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>python<span class="w"> </span>manage.py<span class="w"> </span>deliver_events<span class="w"> </span>--lane<span class="w"> </span>mail<span class="w"> </span>--lane-concurrency<span class="w"> </span><span class="nv">mail</span><span class="o">=</span><span class="m">6</span><span class="w">   </span><span class="c1"># six at once</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>python<span class="w"> </span>manage.py<span class="w"> </span>deliver_events<span class="w"> </span>--lane<span class="w"> </span>mail<span class="w"> </span>--lane-rate<span class="w"> </span><span class="nv">mail</span><span class="o">=</span><span class="m">5</span><span class="w">          </span><span class="c1"># five starts a second</span>
 </span></code></pre></div>
 <p><code>--limit</code> caps a single pass, so it needs <code>--once</code>: a relay delivers until it is
 stopped and has no total to cap, and the command refuses <code>--limit</code> beside it
@@ -1343,13 +1389,16 @@ rest of the outbox for hours. A lane gives it relays of its own:</p>
   lane: the lane decides which relay picks up what eager delivery did not
   finish.</li>
 </ul>
-<p><strong>Concurrency is the number of processes.</strong> Deliveries are serial within a
-relay, so a lane that has to go faster runs more relays with the same <code>--lane</code>,
-and they share its rows through the same skipped locks as any other relays. At
-0.1 to 1 second per send, one process delivers 1 to 10 a second; a provider
-allowing 18 a second takes somewhere between two and eighteen mail relays. The
-package does not limit the rate across them - it is not a distributed rate
-limiter - so the number of processes is the limit. A destination that throttles
+<p><strong>Concurrency is processes times threads.</strong> Deliveries are serial within a
+relay unless its lane has <a href="#worker-threads-in-a-lane">worker threads</a>, so a lane
+that has to go faster runs more relays with the same <code>--lane</code>, more threads in
+each, or both, and the relays share its rows through the same skipped locks as
+any other relays. At 0.1 to 1 second per send, one serial process delivers 1 to
+10 a second; a provider allowing 18 a second takes somewhere between two and
+eighteen serial mail relays, or fewer relays with threads. <code>--lane-rate</code> caps
+the starts of one process; the package does not limit the rate across
+processes - it is not a distributed rate limiter - so the number of processes
+times each one's rate is the limit. A destination that throttles
 anyway costs attempts unless the receiver
 <a href="../delivery/#a-deferral-that-spends-no-attempt">defers without counting</a>, which
 also pauses the lane in the relay that heard it and hands back the rest of its
@@ -1449,6 +1498,76 @@ receiver-key index rather than the owed rows in order. The noisy lane's own
 claim costs what it would in a relay of its own. That was a single run on
 synthetic data in which every row belonged to one event, so treat it as
 directional.</p>
+<h3 id="worker-threads-in-a-lane">Worker threads in a lane<a class="headerlink" href="#worker-threads-in-a-lane" title="Permanent link">&para;</a></h3>
+<p>A lane whose receivers wait on the network - a mail provider, a webhook - spends
+most of each delivery idle. <code>--lane-concurrency LANE=N</code> delivers up to N of its
+rows at once from one process, each on a worker thread of its own:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>deliver_events<span class="w"> </span>--lane<span class="w"> </span>mail<span class="w"> </span>--lane-concurrency<span class="w"> </span><span class="nv">mail</span><span class="o">=</span><span class="m">6</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>deliver_events<span class="w"> </span>--lane<span class="w"> </span>mail<span class="w"> </span>--lane-concurrency<span class="w"> </span><span class="nv">mail</span><span class="o">=</span><span class="m">10</span><span class="w"> </span>--lane-rate<span class="w"> </span><span class="nv">mail</span><span class="o">=</span><span class="m">5</span>
+</span></code></pre></div>
+<p>or from Python, <code>run_relay(worker_id="box-1", lane="mail", lane_concurrency={"mail": 6})</code>.
+The main thread claims, pauses, sweeps and waits; the workers only deliver. Each
+claim takes as many rows as there are idle workers, never more, so no row waits
+behind another while its lease runs, and a row still in flight is never claimed
+again. On Postgres, six workers deliver a lane of 250 ms calls about 5.7 times
+as fast as one; the suite holds them to at least four times.</p>
+<p><strong>One lane per process, sized by its workers.</strong> A lane with more than one
+worker, or with a rate, must be the only lane the relay serves, and takes no
+<code>--batch-size</code> or <code>--lane-batch-size</code>: a row claimed ahead of a free worker
+would spend its lease waiting. The command refuses both pairs before
+<a href="../settings/#relay_startup"><code>RELAY_STARTUP</code></a> runs, and <code>run_relay</code> refuses them
+with a <code>ValueError</code>. <code>--once</code> refuses both flags: a single pass, like
+<code>deliver_pending()</code> and <code>drain_outbox()</code>, delivers one row at a time.
+<code>--lane-concurrency mail=1</code> with no rate is the serial relay, and keeps its
+batch size and its other lanes.</p>
+<p><strong><code>--lane-rate LANE=R</code> caps the starts</strong> at R a second in this process, R a
+number, so <code>0.5</code> is one start every two seconds. Starts are spaced at least
+1/R seconds apart as the relay hands each row to a worker, and every start
+counts, a <code>site="task"</code> enqueue included. A worker loads its row before it
+calls the receiver, so a provider can see two calls a few milliseconds closer
+than 1/R: leave a little headroom under a strict quota. The rate is per
+process, so four replicas at <code>--lane-rate mail=5</code> start up to twenty a second.
+A rate runs the lane on threads even at one worker, claiming a row at a time.</p>
+<p><strong>Connections: 1 + N.</strong> Each worker holds its own connection to the database
+the relay writes to, beside the main thread's, so a threaded lane uses 1 + N
+connections, and its Deployment replicas x (1 + N): size <code>max_connections</code> and
+any pool in front of it for that. An <a href="../declaring/#async-receivers"><code>async def</code> receiver</a>
+that reaches the database through <code>sync_to_async(thread_sensitive=False)</code> runs
+that call on another thread again, and can open more. A worker closes its
+connection after a database error and when the relay stops.</p>
+<p><strong>What has to be thread-safe.</strong> A lane's receivers run concurrently with
+themselves, N at a time, so module-level state they share needs a lock or has
+to go. <a href="../settings/#around_delivery"><code>AROUND_DELIVERY</code></a> and <code>on_failure</code> are
+called concurrently too. Each hook is entered and exited on one thread, so a
+thread-local set in <code>__enter__</code> is still there in <code>__exit__</code>. The <code>on_failure</code>
+call for a <a href="#a-lapse-spends-an-attempt">lapsed lease</a> runs on the main thread,
+from the claim that found it. <code>transaction.on_commit()</code> callbacks a receiver
+registers run on its worker's thread.</p>
+<p><strong><code>RELAY_STARTUP</code> runs once, on the main thread.</strong> Every delivery runs in a
+copy of the context the relay started in, so a <code>ContextVar</code> the startup hook
+set is seen by every row, and a value one row sets is seen by no other row. A
+thread-local the hook sets is not: the workers are other threads. There is no
+per-thread startup hook.</p>
+<p><strong>A deferral pauses the lane at once.</strong> The relay starts no further row, hands
+back the rows it claimed and had not started, and writes the
+<a href="../delivery/#the-pause-is-shared">shared pause</a>. The rows already running
+finish and record their own outcomes, so a throttle can cost up to N - 1 more
+calls. A threaded relay reads the other relays' pauses at most once a second,
+so a <a href="#pausing-a-lane"><code>pause_lane</code></a> takes hold within a second plus the
+deliveries in flight.</p>
+<p><strong>A stop waits for the rows in flight.</strong> On <code>SIGTERM</code> the relay starts nothing
+more, hands back the rows it has not started, and waits for each running row
+until the last of their leases ends. With the default lease that is up to 330
+seconds, and Kubernetes' default grace period is 30: a pod killed first leaves
+its running rows to their lease, and each lapse
+<a href="#a-lapse-spends-an-attempt">spends an attempt</a>. Set
+<code>terminationGracePeriodSeconds</code> above your slowest receiver, or declare the
+lane's receivers with a <code>lease_seconds</code> short enough to fit the grace period.
+A receiver that raises <code>SystemExit</code> or another <code>BaseException</code> stops the relay
+the same way, and the exception is re-raised once the wait is over.</p>
+<p>Threads suit an I/O-bound lane in one process. For isolation from the relay,
+CPU-bound receivers or scale past one process's connections, hand the lane
+<a href="#threads-or-a-task-queue">to a task queue</a> instead.</p>
 <h3 id="the-lease-a-claim-stamps">The lease a claim stamps<a class="headerlink" href="#the-lease-a-claim-stamps" title="Permanent link">&para;</a></h3>
 <p>Each delivery needs its receiver's lease: its <code>lease_seconds=</code>, or
 <code>LEASE_SECONDS</code> where it declares none. A claim stamps one lease across every
@@ -1597,6 +1716,8 @@ then. Give whatever the coroutine awaits a timeout.</p>
   by default. Set one in <code>DATABASES[...]["OPTIONS"]</code>, for example
   <code>{"connect_timeout": 5}</code>.</li>
 </ul>
+<p>A lane with <a href="#worker-threads-in-a-lane">worker threads</a> finishes every row in
+flight rather than one, waiting at most until the last of their leases ends.</p>
 <p>The stop applies to the relay. <code>deliver_events --once</code> does not handle signals:
 it is one pass, and a signal ends it the way it ends any other command.</p>
 <p><strong><code>terminationGracePeriodSeconds</code> has to cover the longest receiver you run</strong>,
@@ -1618,9 +1739,9 @@ the first pass after the pause delivers it. The relays record a pause themselves
 <a href="../delivery/#a-deferral-that-spends-no-attempt">defers without counting</a>, so one
 relay's deferral holds the lane in all of them. An operator records one by hand, for a
 provider outage announced ahead or a destination being migrated:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>pause_lane<span class="w"> </span>mail<span class="w"> </span>--for<span class="w"> </span><span class="m">1800</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>pause_lane<span class="w"> </span>mail<span class="w"> </span>--until<span class="w"> </span><span class="m">2026</span>-11-14T06:00:00+00:00
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>python<span class="w"> </span>manage.py<span class="w"> </span>resume_lane<span class="w"> </span>mail
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>pause_lane<span class="w"> </span>mail<span class="w"> </span>--for<span class="w"> </span><span class="m">1800</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>pause_lane<span class="w"> </span>mail<span class="w"> </span>--until<span class="w"> </span><span class="m">2026</span>-11-14T06:00:00+00:00
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>python<span class="w"> </span>manage.py<span class="w"> </span>resume_lane<span class="w"> </span>mail
 </span></code></pre></div>
 <p><code>pause_lane</code> needs <code>--for</code> seconds or <code>--until</code> a time, and refuses a pause with no
 end: the relays delete a pause record whose <code>until</code> has passed, which is what keeps a
@@ -1699,9 +1820,9 @@ connections five times in each of two waves, sent about 36 duplicates.</p>
 It is stable across every attempt of one delivery and different for every
 other, so a destination that has already seen it can answer the retry
 without acting on it:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">takes_context</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">email_receipt</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DeliveryContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>    <span class="n">provider</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">idempotency_key</span><span class="o">=</span><span class="sa">f</span><span class="s2">"receipt-</span><span class="si">{</span><span class="n">ctx</span><span class="o">.</span><span class="n">delivery_id</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">takes_context</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">email_receipt</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DeliveryContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="n">provider</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">idempotency_key</span><span class="o">=</span><span class="sa">f</span><span class="s2">"receipt-</span><span class="si">{</span><span class="n">ctx</span><span class="o">.</span><span class="n">delivery_id</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 </span></code></pre></div>
 <p>Most mail and payment APIs take such a key. Without one, nothing on this side
 can tell a duplicate apart afterwards: the attempt whose acknowledgement was
@@ -1759,10 +1880,10 @@ the poll is the floor, but the relay gets none of the benefit. Point the relay a
 a direct or session-pooled connection to have <code>NOTIFY</code> wake it, or set <code>WAKE</code> to
 <code>"poll"</code> and lower <code>POLL_SECONDS</code> to say what is happening.</p>
 <h2 id="pruning">Pruning<a class="headerlink" href="#pruning" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>prune_events<span class="w">                </span><span class="c1"># uses RETENTION_DAYS</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>prune_events<span class="w"> </span>--days<span class="w"> </span><span class="m">30</span>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>python<span class="w"> </span>manage.py<span class="w"> </span>prune_events<span class="w"> </span>--limit<span class="w"> </span><span class="m">5000</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>python<span class="w"> </span>manage.py<span class="w"> </span>prune_events<span class="w"> </span>--batch-size<span class="w"> </span><span class="m">1000</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>prune_events<span class="w">                </span><span class="c1"># uses RETENTION_DAYS</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>prune_events<span class="w"> </span>--days<span class="w"> </span><span class="m">30</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>python<span class="w"> </span>manage.py<span class="w"> </span>prune_events<span class="w"> </span>--limit<span class="w"> </span><span class="m">5000</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>python<span class="w"> </span>manage.py<span class="w"> </span>prune_events<span class="w"> </span>--batch-size<span class="w"> </span><span class="m">1000</span>
 </span></code></pre></div>
 <p>An outbox without a prune story becomes the largest table in the database, and
 it becomes it quietly. <strong>Nothing else deletes</strong>: an event declared to be deleted
@@ -1800,8 +1921,8 @@ work cascaded away.</p>
 deletes, so <a href="../introspection/#quiet-receivers"><code>quiet_receivers()</code></a> still knows a
 receiver ran after its events are gone.</p>
 <h2 id="replay">Replay<a class="headerlink" href="#replay" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>replay_events<span class="w"> </span><span class="m">41</span><span class="w"> </span><span class="m">42</span>
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>replay_events<span class="w"> </span><span class="m">41</span><span class="w"> </span>--receiver<span class="w"> </span>orders.reserve_stock
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>replay_events<span class="w"> </span><span class="m">41</span><span class="w"> </span><span class="m">42</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>replay_events<span class="w"> </span><span class="m">41</span><span class="w"> </span>--receiver<span class="w"> </span>orders.reserve_stock
 </span></code></pre></div>
 <p>The receiver set freezes at fire time, so deploying a new receiver does not hand
 it a backlog of week-old events. Replay is the other half of that: an operation
@@ -1830,9 +1951,9 @@ its row is reopened or added due at the later of that and now, rather than at
 once: replaying this week's offers into a newly declared expiry expires each one
 when it is due, and only the ones already past it straight away.</p>
 <h2 id="requeue-from-the-dead-letter-queue">Requeue from the dead-letter queue<a class="headerlink" href="#requeue-from-the-dead-letter-queue" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>requeue_dead
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>requeue_dead<span class="w"> </span>--receiver<span class="w"> </span>orders.reserve_stock
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>python<span class="w"> </span>manage.py<span class="w"> </span>requeue_dead<span class="w"> </span>--limit<span class="w"> </span><span class="m">100</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>requeue_dead
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>requeue_dead<span class="w"> </span>--receiver<span class="w"> </span>orders.reserve_stock
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>python<span class="w"> </span>manage.py<span class="w"> </span>requeue_dead<span class="w"> </span>--limit<span class="w"> </span><span class="m">100</span>
 </span></code></pre></div>
 <p>A dead letter of an event declared with <code>Retention.SETTLED</code> is deleted with its
 event at the next prune, so it is never here to requeue; <code>Retention.SUCCEEDED</code>
@@ -1842,13 +1963,13 @@ dead-letters again on the first failure, and the operator learns nothing they di
 not already know.</p>
 <p>Scoped by receiver, because the usual reason to requeue is that one downstream
 was broken and now is not. From Python it is also scopeable by row:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="n">requeue_dead</span><span class="p">(</span><span class="n">delivery_ids</span><span class="o">=</span><span class="p">[</span><span class="mi">41</span><span class="p">,</span> <span class="mi">42</span><span class="p">])</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">requeue_dead</span><span class="p">(</span><span class="n">delivery_ids</span><span class="o">=</span><span class="p">[</span><span class="mi">41</span><span class="p">,</span> <span class="mi">42</span><span class="p">])</span>
 </span></code></pre></div>
 <p><code>limit=0</code> requeues nothing. It is an operator asking for the smallest possible
 blast radius, and reading it as "no limit" would give them the largest one.</p>
 <h2 id="cancel-owed-work">Cancel owed work<a class="headerlink" href="#cancel-owed-work" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>cancel_deliveries<span class="w"> </span><span class="m">41</span><span class="w"> </span><span class="m">42</span>
-</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>cancel_deliveries<span class="w"> </span><span class="m">41</span><span class="w"> </span>--receiver<span class="w"> </span>offers.expire_offer
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>cancel_deliveries<span class="w"> </span><span class="m">41</span><span class="w"> </span><span class="m">42</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>cancel_deliveries<span class="w"> </span><span class="m">41</span><span class="w"> </span>--receiver<span class="w"> </span>offers.expire_offer
 </span></code></pre></div>
 <p>The command prints <code>cancelled: n, in_flight: m</code> and refuses a call naming no
 events, as <code>replay_events</code> does: the smallest command an operator can type is not
@@ -1857,11 +1978,11 @@ a second <code>--receiver</code> rather than keeping the last: <code>replay_even
 flag and uses every value, and a habit carried over from it would otherwise leave
 the dropped receivers' work owed. From Python, which is where the transactional
 case lives:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">cancel_deliveries</span>
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>
-</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="n">cancel_deliveries</span><span class="p">([</span><span class="n">event_id</span><span class="p">])</span>
-</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="n">cancel_deliveries</span><span class="p">([</span><span class="n">event_id</span><span class="p">],</span> <span class="n">receiver_key</span><span class="o">=</span><span class="s2">"offers.expire_offer"</span><span class="p">)</span>
-</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="n">cancel_deliveries</span><span class="p">([</span><span class="n">event_id</span><span class="p">],</span> <span class="n">delivery_ids</span><span class="o">=</span><span class="p">[</span><span class="mi">41</span><span class="p">,</span> <span class="mi">42</span><span class="p">])</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_domain_events</span><span class="w"> </span><span class="kn">import</span> <span class="n">cancel_deliveries</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="n">cancel_deliveries</span><span class="p">([</span><span class="n">event_id</span><span class="p">])</span>
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="n">cancel_deliveries</span><span class="p">([</span><span class="n">event_id</span><span class="p">],</span> <span class="n">receiver_key</span><span class="o">=</span><span class="s2">"offers.expire_offer"</span><span class="p">)</span>
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="n">cancel_deliveries</span><span class="p">([</span><span class="n">event_id</span><span class="p">],</span> <span class="n">delivery_ids</span><span class="o">=</span><span class="p">[</span><span class="mi">41</span><span class="p">,</span> <span class="mi">42</span><span class="p">])</span>
 </span></code></pre></div>
 <p>Withdraws the owed deliveries of these events so they never run, and settles them
 as <code>cancelled</code>. It exists for <a href="../scheduling/#cancelling-work-known-to-be-moot">scheduled reactions</a>:
@@ -1929,45 +2050,54 @@ letting the replay make the work owed again. A relay's claim takes no event lock
 so the write itself is conditioned on the status: a row claimed between the lock
 and the write is left claimed.</p>
 <h2 id="handing-delivery-to-a-task-queue">Handing delivery to a task queue<a class="headerlink" href="#handing-delivery-to-a-task-queue" title="Permanent link">&para;</a></h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>    <span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend"</span><span class="p">,</span>
-</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="p">}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>    <span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend"</span><span class="p">,</span>
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>or with options:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>    <span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="p">{</span>
-</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>        <span class="s2">"BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend"</span><span class="p">,</span>
-</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>        <span class="s2">"queue_name"</span><span class="p">:</span> <span class="s2">"events"</span><span class="p">,</span>
-</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>    <span class="p">},</span>
-</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a><span class="p">}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>    <span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="p">{</span>
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>        <span class="s2">"BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.delivery.django_tasks_backend.DjangoTasksBackend"</span><span class="p">,</span>
+</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a>        <span class="s2">"queue_name"</span><span class="p">:</span> <span class="s2">"events"</span><span class="p">,</span>
+</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a>    <span class="p">},</span>
+</span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>Then declare the receiver's execution site:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">site</span><span class="o">=</span><span class="s2">"task"</span><span class="p">)</span>
-</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">call_the_slow_api</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="nd">@receiver</span><span class="p">(</span><span class="n">OrderPlaced</span><span class="p">,</span> <span class="n">site</span><span class="o">=</span><span class="s2">"task"</span><span class="p">)</span>
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">call_the_slow_api</span><span class="p">(</span><span class="n">evt</span><span class="p">:</span> <span class="n">OrderPlaced</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
 </span></code></pre></div>
 <p>The relay claims the row and enqueues its id with the claim it holds; the task
 takes the row under that claim, runs the receiver and acknowledges. The row is
 still the debt, so a lost task is still owed.</p>
 <p><code>DjangoTasksBackend</code> targets <code>django.tasks</code> on Django 6.0+ and falls back to the
 <code>django_tasks</code> backport on 4.2-5.2.</p>
+<h3 id="threads-or-a-task-queue">Threads or a task queue<a class="headerlink" href="#threads-or-a-task-queue" title="Permanent link">&para;</a></h3>
+<p><a href="#worker-threads-in-a-lane">Worker threads</a> and a task queue both deliver a lane
+several rows at a time. Threads need nothing beside the relay: N deliveries of
+one lane in one process, at 1 + N connections, with the rate capped per
+process. A task queue gives the receiver a process of its own - isolation from
+the relay, room for CPU-bound work, and scale past what one process's threads
+and connections allow - at the price of a broker and its workers. A
+<code>site="task"</code> row on a threaded lane only enqueues, so threads there speed up
+the enqueueing, not the work.</p>
 <h3 id="celery">Celery<a class="headerlink" href="#celery" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"django-domain-events[celery]"</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"django-domain-events[celery]"</span>
 </span></code></pre></div>
 <p>Choose it for a project whose workers already run Celery. Without Celery workers,
 <code>DjangoTasksBackend</code> is the lighter choice: it adds no broker to install.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>    <span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="p">{</span>
-</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>        <span class="s2">"BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.delivery.celery_backend.CeleryBackend"</span><span class="p">,</span>
-</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>        <span class="s2">"queue"</span><span class="p">:</span> <span class="s2">"events"</span><span class="p">,</span>  <span class="c1"># optional; without it Celery's own routing decides</span>
-</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>    <span class="p">},</span>
-</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a><span class="p">}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="n">DJANGO_DOMAIN_EVENTS</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>    <span class="s2">"TASK_BACKEND"</span><span class="p">:</span> <span class="p">{</span>
+</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>        <span class="s2">"BACKEND"</span><span class="p">:</span> <span class="s2">"django_domain_events.delivery.celery_backend.CeleryBackend"</span><span class="p">,</span>
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>        <span class="s2">"queue"</span><span class="p">:</span> <span class="s2">"events"</span><span class="p">,</span>  <span class="c1"># optional; without it Celery's own routing decides</span>
+</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>    <span class="p">},</span>
+</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>The worker has to import the task, because a Celery worker runs a message by
 finding its name in its own registry and <code>autodiscover_tasks()</code> only looks for a
 <code>tasks</code> module in each app. Add the module to Celery's <code>imports</code>:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="n">app</span><span class="o">.</span><span class="n">conf</span><span class="o">.</span><span class="n">imports</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"django_domain_events.delivery.celery_backend"</span><span class="p">]</span>
-</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="c1"># or, with app.config_from_object("django.conf:settings", namespace="CELERY"):</span>
-</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="n">CELERY_IMPORTS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"django_domain_events.delivery.celery_backend"</span><span class="p">]</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="n">app</span><span class="o">.</span><span class="n">conf</span><span class="o">.</span><span class="n">imports</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"django_domain_events.delivery.celery_backend"</span><span class="p">]</span>
+</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="c1"># or, with app.config_from_object("django.conf:settings", namespace="CELERY"):</span>
+</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="n">CELERY_IMPORTS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"django_domain_events.delivery.celery_backend"</span><span class="p">]</span>
 </span></code></pre></div>
 <p>A worker without it logs the message as an unregistered task and drops it. The
 row stays owed and the relay hands it off again when the lease lapses, so nothing
@@ -1979,7 +2109,7 @@ after an upgrade moves the code.</p>
 <p><code>TaskBackend</code> is a <code>Protocol</code> with one method,
 <code>enqueue(delivery_id, claimed_by, claimed_at)</code>. The relay passes the claim by
 keyword. Anything satisfying it works; the worker side has to call</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="n">deliver_one</span><span class="p">(</span><span class="n">delivery_id</span><span class="p">,</span> <span class="n">claimed_by</span><span class="o">=</span><span class="n">claimed_by</span><span class="p">,</span> <span class="n">claimed_at</span><span class="o">=</span><span class="n">claimed_at</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="n">deliver_one</span><span class="p">(</span><span class="n">delivery_id</span><span class="p">,</span> <span class="n">claimed_by</span><span class="o">=</span><span class="n">claimed_by</span><span class="p">,</span> <span class="n">claimed_at</span><span class="o">=</span><span class="n">claimed_at</span><span class="p">)</span>
 </span></code></pre></div>
 <p>with the three values exactly as it was given them. <code>claimed_at</code> is an ISO 8601
 string, so all three are JSON and any queue can carry them unchanged.</p>
@@ -2003,7 +2133,7 @@ receiver runs, unless the queue delivered it soon enough that the lease still
 is the receiver's own, so the run is covered on its own; what the hand-off
 lease has to cover is the wait in the queue, which is the backlog ahead of the
 message divided by the rate the workers drain it:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>lease_seconds &gt; messages ahead / (workers x tasks per second per worker)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>lease_seconds &gt; messages ahead / (workers x tasks per second per worker)
 </span></code></pre></div>
 <p>A burst that enqueues 28,000 tasks onto workers draining 20 a second needs
 about 1,400 seconds for the last of them to start. Under a 900-second lease the
@@ -2070,7 +2200,7 @@ strings - <code>values_list("pk", flat=True)</code>, as in the example on the de
 page - rather than a loop over model instances, which builds an object per
 target only to discard it, or a query per candidate.</p>
 <h2 id="knowing-it-is-working">Knowing it is working<a class="headerlink" href="#knowing-it-is-working" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>events_status
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>events_status
 </span></code></pre></div>
 <p>See <a href="../introspection/#is-the-outbox-keeping-up">introspection</a>. The age of
 <code>oldest_owed_at</code> is the number to alert on.</p>
@@ -2096,12 +2226,12 @@ attempt it records, at <code>WARNING</code>, one line each - see
 is logged at <code>DEBUG</code>, not <code>INFO</code>: the row is scheduled, and there is nothing to
 act on.</p>
 <h2 id="a-cron-that-works">A cron that works<a class="headerlink" href="#a-cron-that-works" title="Permanent link">&para;</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>*/5 * * * *  manage.py deliver_events --once
-</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>0    4 * * *  manage.py prune_events
+<div class="language-text highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>*/5 * * * *  manage.py deliver_events --once
+</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>0    4 * * *  manage.py prune_events
 </span></code></pre></div>
 <p>A cron serving several lanes names them, as a relay does, and visits them in
 the same rotation:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>*/5 * * * *  manage.py deliver_events --once --lane default --lane mail --limit 200
+<div class="language-text highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>*/5 * * * *  manage.py deliver_events --once --lane default --lane mail --limit 200
 </span></code></pre></div>
 <p><code>--limit</code> caps the run's total and is shared between the lanes with work, so
 a burst in one lane cannot spend every run. Each lane's claim takes what is

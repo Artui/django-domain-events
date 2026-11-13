@@ -4246,7 +4246,9 @@ travel, only the chain.</p>
 </span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">batch_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">lane_batch_sizes</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">monotonic</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[],</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="n">time_module</span><span class="o">.</span><span class="n">monotonic</span><span class="p">,</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="n">DeliveryStatus</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="n">lane_concurrency</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    <span class="n">lane_rates</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="n">DeliveryStatus</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span>
 </span></code></pre></div>
 
     <div class="doc doc-contents first">
@@ -4295,9 +4297,31 @@ and never by how much they are owed, so a burst in one lane delays another
 by what one of its batches takes. Each claim stamps its own lane's lease,
 <code>None</code> included. A failed claim ends the pass, since a database refusing
 one lane is refusing them all.</p>
-<p>Concurrency is the number of processes. Deliveries run one at a time within
-a relay, so a lane that must go faster runs more relays with the same
-<code>lane</code>; nothing here limits the rate across them.</p>
+<p>Deliveries run one at a time within a relay unless <code>lane_concurrency</code>
+gives its lane worker threads: <code>{lane: N}</code> delivers up to N rows of it at
+once, each thread on its own connection, so the process holds 1 + N. This
+thread then claims, pauses, sweeps and waits, and each claim takes only as
+many rows as there are idle workers, excluding the rows still in flight, so
+no row waits on its lease behind another. <code>lane_rates</code> caps a lane's
+starts at <code>{lane: R}</code> a second in this process, R a float, so 0.5 is one
+every two seconds; it counts every start, a task enqueue included, and runs
+the lane on threads even at one worker, claiming a row at a time. A rate is
+per process, so N relays in the lane start up to N x R a second. Each row
+runs in a copy of the context this call was made in, so a <code>ContextVar</code>
+set before it, as <code>RELAY_STARTUP</code> may, is seen by every row and a value one
+row sets is seen by no other. A lane with threads or a rate must be the only
+lane this relay serves, and takes no <code>batch_size</code> or <code>lane_batch_sizes</code>,
+since a prefetched row waiting its turn would spend its lease: both are
+refused at start. One worker and no rate is the loop described above.</p>
+<p>On a threaded lane a <code>RetryAfter</code> deferral pauses the lane as above: no
+row is started once this thread hears it, the claimed rows not yet started are handed back,
+and the rows already running record their own outcomes. The shared pauses
+are read at most once a second rather than once a pass, so a <code>pause_lane</code>
+takes hold within a second plus the deliveries in flight. <code>stop</code>, a spent
+<code>passes</code> or a worker's <code>BaseException</code> stops the claims, hands back the
+rows not yet started, and waits for those in flight until the last of their
+leases ends; a worker's <code>BaseException</code> is then re-raised here. One pass is
+one claim, or one wait when there is nothing to claim or no idle worker.</p>
 <p><code>batch_size</code> sizes this relay's claims in place of <code>BATCH_SIZE</code>, which
 also sizes prune batches and requeue chunks. <code>lane_batch_sizes</code> sizes the
 claims of the lanes it names in place of <code>batch_size</code>, and is the lever
@@ -4990,7 +5014,9 @@ than waiting for it.</p>
 <a href="../settings/#around_delivery"><code>AROUND_DELIVERY</code></a>. It is handed the
 <code>DeliveryContext</code> below, whose <code>receiver_key</code> names the receiver. So is the
 per-process hook <code>deliver_events</code> calls before its first claim: see
-<a href="../settings/#relay_startup"><code>RELAY_STARTUP</code></a>.</p>
+<a href="../settings/#relay_startup"><code>RELAY_STARTUP</code></a>. <code>run_relay</code>'s <code>lane_concurrency</code>
+and <code>lane_rates</code> are <code>deliver_events --lane-concurrency</code> and <code>--lane-rate</code>: see
+<a href="../operations/#worker-threads-in-a-lane">Worker threads in a lane</a>.</p>
 <h2 id="operations">Operations<a class="headerlink" href="#operations" title="Permanent link">&para;</a></h2>
 
 
