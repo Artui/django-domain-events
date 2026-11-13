@@ -8,8 +8,11 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone as django_timezone
 
 from django_domain_events.delivery.claim_batch import claim_batch
+from django_domain_events.delivery.deliver import dispatch_one
 from django_domain_events.delivery.fire import fire
+from django_domain_events.delivery.hand_back import hand_back
 from django_domain_events.models.delivery_record import DeliveryRecord
+from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
@@ -387,3 +390,139 @@ def test_a_cancelled_row_is_never_claimed(
     assert set(DeliveryRecord.objects.values_list("status", flat=True)) == {
         DeliveryStatus.CANCELLED
     }
+
+
+def _dying(seen: list[DeliveryFailure], max_attempts: int = 3) -> RegisteredReceiver:
+    """A receiver whose relay dies under it: its claims are left to lapse."""
+    return RegisteredReceiver(
+        key="tests.dying",
+        event_class=OrderPlaced,
+        func=lambda evt: None,
+        mode=DeliveryMode.DURABLE,
+        takes_context=False,
+        max_attempts=max_attempts,
+        eager=False,
+        site="relay",
+        on_failure=seen.append,
+    )
+
+
+def _claims_left_to_lapse(pk: int, times: int, *, limit: int = 10) -> list[list[int]]:
+    """Claim ``times`` times a minute apart under a one-second lease, never acknowledging."""
+    start = _now()
+    return [
+        claim_batch(
+            worker_id=f"w{n}",
+            now=start + timedelta(minutes=n),
+            lease=timedelta(seconds=1),
+            limit=limit,
+            only_ids=[pk],
+        )
+        for n in range(times)
+    ]
+
+
+def test_a_receiver_that_kills_its_relay_goes_dead_after_max_attempts_claims(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """The os._exit() receiver: three runs, each lapsed, and the fourth claim dead-letters it."""
+    seen: list[DeliveryFailure] = []
+    with receiver_registered(_dying(seen, max_attempts=3)):
+        with transaction.atomic():
+            fire(order)
+        row = DeliveryRecord.objects.get(receiver_key="tests.dying")
+
+        claims = _claims_left_to_lapse(row.pk, 4)
+
+    row.refresh_from_db()
+    assert claims == [[row.pk]] * 3 + [[]]
+    assert (row.status, row.attempts) == (DeliveryStatus.DEAD, 3)
+    assert row.completed_at is not None
+    assert "lease" in row.last_error and "w2" in row.last_error
+    assert [(f.status, f.attempt, f.delivery_id) for f in seen] == [
+        (DeliveryStatus.DEAD, 3, row.pk)
+    ]
+    assert seen[0].error == row.last_error
+
+
+def test_a_lapsed_claim_spends_an_attempt_when_it_is_claimed_again(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    seen: list[DeliveryFailure] = []
+    with receiver_registered(_dying(seen)):
+        with transaction.atomic():
+            fire(order)
+        row = DeliveryRecord.objects.get(receiver_key="tests.dying")
+
+        _claims_left_to_lapse(row.pk, 2)
+
+    row.refresh_from_db()
+    assert (row.status, row.attempts, row.claimed_by) == (DeliveryStatus.CLAIMED, 1, "w1")
+    assert seen == []
+
+
+def test_a_claim_then_success_records_one_attempt(order: OrderPlaced, record: list[str]) -> None:
+    with transaction.atomic():
+        fire(order)
+    ids = claim_batch(worker_id="w1", now=_now(), lease=LEASE, limit=10)
+
+    for pk in ids:
+        dispatch_one(pk, worker_id="w1")
+
+    assert set(DeliveryRecord.objects.values_list("status", "attempts")) == {
+        (DeliveryStatus.SUCCEEDED, 1)
+    }
+
+
+def test_a_lapse_then_success_records_both_attempts(order: OrderPlaced, record: list[str]) -> None:
+    """The relay that died spent one; the run that succeeded spent the second."""
+    with transaction.atomic():
+        fire(order)
+    claim_batch(worker_id="dead", now=_now(), lease=timedelta(seconds=1), limit=10)
+    later = _now() + timedelta(seconds=30)
+    ids = claim_batch(worker_id="w1", now=later, lease=LEASE, limit=10)
+
+    for pk in ids:
+        dispatch_one(pk, worker_id="w1")
+
+    assert set(DeliveryRecord.objects.values_list("status", "attempts")) == {
+        (DeliveryStatus.SUCCEEDED, 2)
+    }
+
+
+def test_a_handed_back_claim_spends_no_attempt(order: OrderPlaced, record: list[str]) -> None:
+    """A hand-back gives back rows nobody started, so claiming them again is not a lapse."""
+    with transaction.atomic():
+        fire(order)
+    claimed_at = _now()
+    ids = claim_batch(worker_id="w1", now=claimed_at, lease=LEASE, limit=10)
+    assert hand_back(ids, worker_id="w1", claimed_at=claimed_at) == 2
+
+    again = claim_batch(worker_id="w2", now=_now(), lease=LEASE, limit=10)
+
+    assert sorted(again) == sorted(ids)
+    assert set(DeliveryRecord.objects.values_list("attempts", flat=True)) == {0}
+
+
+def test_a_claim_dead_lettering_lapses_still_fills_its_limit(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    """An empty claim reads as a drained queue, so the dead rows must not take its places."""
+    seen: list[DeliveryFailure] = []
+    with receiver_registered(_dying(seen, max_attempts=1)):
+        with transaction.atomic():
+            fire(order)
+        dying = DeliveryRecord.objects.get(receiver_key="tests.dying")
+        DeliveryRecord.objects.filter(pk=dying.pk).update(
+            status=DeliveryStatus.CLAIMED,
+            claimed_by="dead",
+            claimed_at=_now() - timedelta(hours=1),
+            lease_expires_at=_now() - timedelta(minutes=30),
+            available_at=_now() - timedelta(hours=2),
+        )
+
+        ids = claim_batch(worker_id="w1", now=_now(), lease=LEASE, limit=1)
+
+    assert len(ids) == 1 and ids != [dying.pk]
+    assert DeliveryRecord.objects.get(pk=dying.pk).status == DeliveryStatus.DEAD
+    assert len(seen) == 1

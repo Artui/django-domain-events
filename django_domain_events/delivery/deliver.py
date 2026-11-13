@@ -15,7 +15,7 @@ from django.utils import timezone
 from django_domain_events.declaration.registry import LEASE_HEADROOM, registry
 from django_domain_events.delivery.backoff import backoff
 from django_domain_events.delivery.claim_batch import claim_batch
-from django_domain_events.delivery.fire import call_receiver, run_to_completion
+from django_domain_events.delivery.fire import call_receiver
 from django_domain_events.delivery.hand_back import hand_back
 from django_domain_events.delivery.moot import Moot
 from django_domain_events.delivery.not_yet import NotYet
@@ -24,13 +24,14 @@ from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.utils import (
     OnDeferral,
     lane_claim_sizes,
+    log_failure,
+    report_failure,
     served_lanes,
 )
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.scope.causation import caused_by
 from django_domain_events.settings import get_around_delivery, get_task_backend, setting
 from django_domain_events.types.delivery_context import DeliveryContext
-from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
 from django_domain_events.utils import (
@@ -191,7 +192,7 @@ def _deliver_one(
             completed_at=timezone.now(),
         )
         if outcome is not None:
-            _log_failure(
+            log_failure(
                 delivery,
                 status=DeliveryStatus.DEAD,
                 attempt=delivery.attempts + 1,
@@ -477,9 +478,7 @@ def _fail(
         available_at=now + wait,
     )
     if outcome is not None:
-        _report_failure(
-            row, status=status, attempt=attempts, error=truncated, error_type=error_type
-        )
+        report_failure(row, status=status, attempt=attempts, error=truncated, error_type=error_type)
     return outcome
 
 
@@ -514,7 +513,7 @@ def _defer(
         )[:2000]
         outcome = fence.write(status=DeliveryStatus.DEAD, last_error=truncated, completed_at=now)
         if outcome is not None:
-            _report_failure(
+            report_failure(
                 row,
                 status=DeliveryStatus.DEAD,
                 attempt=attempt,
@@ -533,7 +532,7 @@ def _defer(
         available_at=now + min(requested * (1 + random.random()), ceiling),
     )
     if outcome is not None:
-        _report_failure(
+        report_failure(
             row,
             status=DeliveryStatus.FAILED,
             attempt=attempt,
@@ -626,54 +625,6 @@ def _capped(row: Any, seconds: float) -> timedelta:
         )
         seconds = ceiling
     return timedelta(seconds=seconds)
-
-
-def _report_failure(
-    row: Any, *, status: DeliveryStatus, attempt: int, error: str, error_type: str | None
-) -> None:
-    """Log a failed attempt this worker recorded, then tell its receiver."""
-    _log_failure(row, status=status, attempt=attempt, error_type=error_type)
-    _notify_failure(row, status=status, attempt=attempt, error=error)
-
-
-def _log_failure(row: Any, *, status: DeliveryStatus, attempt: int, error_type: str | None) -> None:
-    """The one warning line a failed attempt writes, in one shape everywhere."""
-    logger.warning(
-        "receiver %s failed delivery %s on attempt %s with %s; the row is %s",
-        row.receiver_key,
-        row.pk,
-        attempt,
-        error_type if error_type is not None else "no exception",
-        status,
-    )
-
-
-def _notify_failure(row: Any, *, status: DeliveryStatus, attempt: int, error: str) -> None:
-    """Tell the receiver its attempt failed, if it asked to be told."""
-    receiver = registry.receiver_for_key(row.receiver_key)
-    if receiver is None or receiver.on_failure is None:
-        return
-    try:
-        run_to_completion(
-            receiver.on_failure,
-            DeliveryFailure(
-                delivery_id=row.pk,
-                event_id=row.event_id,
-                event_name=row.event.name,
-                receiver_key=row.receiver_key,
-                attempt=attempt,
-                status=status,
-                error=error,
-                target=row.target,
-            ),
-        )
-    except Exception:
-        logger.exception(
-            "on_failure hook for receiver %s raised while recording delivery %s; "
-            "the delivery row is correct and the hook's record is lost",
-            row.receiver_key,
-            row.pk,
-        )
 
 
 def deliver_pending(
