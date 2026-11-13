@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `delivery_tally(event_id)`, exported from the package: one event's deliveries counted by
+  outcome in a single query, as a frozen `DeliveryTally` with `owed` (pending, failed and
+  claimed), `succeeded`, `cancelled` (a `Moot` settlement included), `dead`, `orphaned` and
+  `total`. An unknown event gives all zeros.
+
 ## [0.15.0] — 2026-11-13
 
 ### Added

@@ -273,6 +273,31 @@ receiver, and a `"lanes"` list beside `"receivers"`: each lane's `lane`,
 `"paused"`, a list of `{"worker_id", "paused_for_seconds"}` where
 `paused_for_seconds` is the time left until the pause ends.
 
+## How did one event go?
+
+```python
+from django_domain_events import delivery_tally
+
+tally = delivery_tally(event_id)
+```
+
+Where `outbox_health()` answers for the whole queue, this answers for one event:
+how many of its deliveries are still owed, and how the rest settled. It runs a
+single `GROUP BY` query and returns a frozen `DeliveryTally`.
+
+| Field | Means |
+| --- | --- |
+| `owed` | Pending, failed or claimed: not settled yet, whether due or scheduled |
+| `succeeded` | Delivered |
+| `cancelled` | Cancelled with `cancel_deliveries`, or settled by a receiver raising `Moot`, which stores the same status |
+| `dead` | Dead-lettered |
+| `orphaned` | Addressed to a receiver key the registry no longer has |
+| `total` | Every delivery the event has: the sum of the five above |
+
+An event id nothing was recorded under gives all zeros. `owed` reads the same
+settled set as the rest of the package, so a status added later is counted in
+one place.
+
 ## System checks
 
 Run with `python manage.py check`.
