@@ -171,10 +171,10 @@ with attributed(actor=request.user, club_id=club.id):
 !!! warning "The header goes to every broker the process publishes to"
     Installing is process-wide on the publishing side. Celery's publish signal
     does not say which app published, so once any app is installed, every task
-    message the process publishes inside a scope carries the header, whichever
-    app sends it and whichever broker receives it. The actor's key, label and
-    user id and the whole scope data travel as plain JSON to that broker and to
-    whatever consumes its queue. The label is `str(user)` unless you pass
+    message the process publishes inside a scope or a receiver's chain carries
+    the header, whichever app sends it and whichever broker receives it. The
+    actor's key, label and user id, the whole scope data and the correlation id
+    travel as plain JSON to that broker and to whatever consumes its queue. The label is `str(user)` unless you pass
     `actor_label`, so it can be an email address. Only the apps you install
     run their tasks in the carried scope; the others' tasks ignore it, but
     their messages still carry it.
