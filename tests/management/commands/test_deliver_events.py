@@ -4,6 +4,7 @@ import re
 import signal
 import threading
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -696,6 +697,7 @@ def test_one_worker_and_no_rate_keeps_a_batch_size_and_several_lanes(
 _TENANT: ContextVar[str | None] = ContextVar("_TENANT", default=None)
 _LOCAL = threading.local()
 _SEEN: list[tuple[str | None, str | None, bool]] = []
+_THREADS: list[tuple[str, int]] = []
 
 
 @dataclass(frozen=True, slots=True)
@@ -711,14 +713,26 @@ def tenant_startup(**kwargs: object) -> None:
 def _ping(evt: Pinged) -> None:
     on_main = threading.current_thread() is threading.main_thread()
     _SEEN.append((_TENANT.get(), getattr(_LOCAL, "tenant", None), on_main))
+    transaction.on_commit(lambda: _THREADS.append(("on_commit", threading.get_ident())))
+
+
+@contextmanager
+def thread_around(ctx: object) -> Iterator[None]:
+    _THREADS.append(("enter", threading.get_ident()))
+    yield
+    _THREADS.append(("exit", threading.get_ident()))
 
 
 @pytest.mark.usefixtures("skip_locked_backend")
 def test_threaded_rows_see_relay_startups_context_vars_but_not_its_thread_locals(
     settings,
 ) -> None:
-    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_STARTUP": f"{__name__}.tenant_startup"}
+    settings.DJANGO_DOMAIN_EVENTS = {
+        "RELAY_STARTUP": f"{__name__}.tenant_startup",
+        "AROUND_DELIVERY": f"{__name__}.thread_around",
+    }
     _SEEN.clear()
+    _THREADS.clear()
     entry = RegisteredReceiver(
         key="tests.ping",
         event_class=Pinged,
@@ -752,4 +766,10 @@ def test_threaded_rows_see_relay_startups_context_vars_but_not_its_thread_locals
             vars(_LOCAL).clear()
 
     assert _SEEN == [("acme", None, False), ("acme", None, False)]
+    by_thread: dict[int, list[str]] = {}
+    for step, ident in _THREADS:
+        by_thread.setdefault(ident, []).append(step)
+    assert threading.get_ident() not in by_thread
+    triple = ["enter", "on_commit", "exit"]
+    assert sorted(by_thread.values()) in ([triple, triple], [triple * 2])
     assert f"{DeliveryStatus.SUCCEEDED.value}: 2" in out.getvalue()
