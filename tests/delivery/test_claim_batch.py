@@ -392,7 +392,9 @@ def test_a_cancelled_row_is_never_claimed(
     }
 
 
-def _dying(seen: list[DeliveryFailure], max_attempts: int = 3) -> RegisteredReceiver:
+def _dying(
+    seen: list[DeliveryFailure], max_attempts: int = 3, site: str = "relay"
+) -> RegisteredReceiver:
     """A receiver whose relay dies under it: its claims are left to lapse."""
     return RegisteredReceiver(
         key="tests.dying",
@@ -402,7 +404,7 @@ def _dying(seen: list[DeliveryFailure], max_attempts: int = 3) -> RegisteredRece
         takes_context=False,
         max_attempts=max_attempts,
         eager=False,
-        site="relay",
+        site=site,
         on_failure=seen.append,
     )
 
@@ -445,11 +447,13 @@ def test_a_receiver_that_kills_its_relay_goes_dead_after_max_attempts_claims(
     assert seen[0].error == row.last_error
 
 
+@pytest.mark.parametrize("site", ["relay", "task"])
 def test_a_lapsed_claim_spends_an_attempt_when_it_is_claimed_again(
-    order: OrderPlaced, record: list[str]
+    order: OrderPlaced, record: list[str], site: str
 ) -> None:
+    """A task row whose message outwaited its lease counts too: the owner's call."""
     seen: list[DeliveryFailure] = []
-    with receiver_registered(_dying(seen)):
+    with receiver_registered(_dying(seen, site=site)):
         with transaction.atomic():
             fire(order)
         row = DeliveryRecord.objects.get(receiver_key="tests.dying")
