@@ -275,7 +275,7 @@ def test_a_write_conditioned_on_a_lapsed_claim_lands_nowhere(
     assert zombie.extend_lease(django_timezone.now()) is False
 
     row = _delivery("testapp.durable_receiver")
-    assert (row.claimed_by, row.attempts) == ("B", 0)
+    assert (row.claimed_by, row.attempts) == ("B", 1), "B's claim spent A's lapse, not the 99"
 
 
 def test_the_receiver_work_rolls_back_when_the_claim_is_lost(

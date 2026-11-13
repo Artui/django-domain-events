@@ -285,7 +285,8 @@ when `LEASE_SECONDS` is the default 300:
   claim of the lane, not only a relay's: a `deliver_events --once --limit`
   claim of the lane's share of the limit, a `deliver_pending()` batch, and the
   eager attempt, which claims every eager row of one `fire()` at once. Past that, the tail of
-  the batch lapses while it waits its turn and another worker takes it.
+  the batch lapses while it waits its turn and another worker takes it,
+  and [spends an attempt](#a-lapse-spends-an-attempt) on rows that never ran.
   Relays with worker ids of their own never both run a row: the first finds
   the row gone when it tries to extend the lease, and logs that it lost the row
   before running it, but the relays churn over each other's batches. Two
@@ -298,6 +299,42 @@ when `LEASE_SECONDS` is the default 300:
   send that is 7 rows for a 60-second lane, which also fits 66 rows inside
   the lease; `--batch-size 5` does both. Rows past that are extended as
   before, so a bigger batch costs writes, not correctness.
+
+#### A lapse spends an attempt
+
+A claim that takes a row whose lease lapsed reads the worker that held it as
+dead, and counts that worker's attempt: the row's `attempts` goes up by one.
+A row that reaches its `max_attempts` that way is not claimed but marked
+`DEAD`, with a `last_error` naming the worker, when it claimed the row and when
+the lease ran out, and the receiver's `on_failure` is told once, with that
+status and attempt, after the claim commits. Without it, a receiver that ends
+its own process - `os._exit()`, a segfault in a C extension, the kernel's OOM
+killer - would be claimed and run forever, since nothing it does is ever
+recorded. Two relays reaching the same lapsed row never both dead-letter it:
+the claim's row lock gives it to one of them.
+
+Which lapses count:
+
+- **Every lapse.** The claim cannot tell a row a dead worker was running from
+  one it had not reached, so each row of the batch a worker held when it died
+  spends an attempt, not only the one in flight.
+- **A relay killed mid-delivery** (`SIGKILL`, the OOM killer, the host going
+  away) spends the attempt of the row it was running, and of every
+  unstarted row it still held. One stopped with a single `SIGTERM` gives the
+  unstarted rows back, which spends nothing, and only the row it finishes is
+  recorded, by its own outcome.
+- **`site="task"` rows** count too: a row whose message waits in the queue
+  past its lease is a lapse when the relay claims it again, and a lease that
+  falls short of the queue `max_attempts` times dead-letters work that never
+  ran ([the lease has to outlast the queue](#the-lease-has-to-outlast-the-queue)).
+- **The tail of a batch** that lapses while it waits its turn counts the same
+  way, so a batch too big for its lease can dead-letter work that never ran.
+
+What does not count: a row given back, by a stopping relay or a lane's
+deferral, which nobody started; a row a receiver answered with `NotYet`, which
+is moved rather than failed; and a pending or failed row, whose attempt is
+counted by its outcome. A relay that dies and a run that then succeeds record
+two attempts.
 
 ### Stopping it
 
@@ -834,6 +871,12 @@ fail the take and do nothing, and that is the claim working. But every one of
 them is a task the workers spend dequeuing, and they arrive behind the
 backlog, making it longer. In one report, a 900-second lease over a
 28,000-task burst produced 12,918 stale messages, every one a no-op.
+
+Each of those claims also [spends an attempt](#a-lapse-spends-an-attempt), since
+the relay cannot tell a message waiting in a queue from a worker that died. A
+row whose lease runs out in the queue `max_attempts` times is dead-lettered
+without ever running, its `last_error` naming the lapsed lease; `requeue_dead`
+sends it again once the lease is sized.
 
 The symptom is a burst of `outbox_health().lapsed_leases` and per-receiver
 `claimed` counts while the queue is long and nothing is failing, and the
