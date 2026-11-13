@@ -642,24 +642,20 @@ def test_a_write_deletes_every_record_whose_pause_has_passed(lanes: None) -> Non
     assert during == [["alive:3", "w1"]]
 
 
-def test_a_relay_restarted_under_its_worker_id_moves_its_old_record(lanes: None) -> None:
-    """A relay given a fixed ``--worker-id`` that died paused left a record under that id."""
+def test_a_relay_restarted_under_its_worker_id_honours_its_old_record(lanes: None) -> None:
+    """A relay given a fixed ``--worker-id`` that died paused left a pause every relay reads."""
     _fire(Sms)
     clock = _Clock()
     at = in_project_time(clock.at)
-    LanePauseRecord.objects.create(
-        lane="sms", worker_id="w1", paused_at=at - timedelta(hours=1), until=at + timedelta(hours=5)
-    )
-    during: list[list[tuple[str, str, datetime, datetime]]] = []
+    old = ("sms", "w1", at - timedelta(hours=1), at + timedelta(hours=5))
+    LanePauseRecord.objects.create(lane=old[0], worker_id=old[1], paused_at=old[2], until=old[3])
+    seen: list[datetime] = []
 
-    def wait(timeout: float) -> bool:
-        during.append(_pauses())
-        return False
+    with receiver_replaced("tests.sms", _deferring(clock, seen)):
+        run_relay(worker_id="w1", passes=2, lane="sms", now=clock, wait=lambda _: False, **UNSAFE)
 
-    with receiver_replaced("tests.sms", _deferring(clock, [])):
-        run_relay(worker_id="w1", passes=2, lane="sms", now=clock, wait=wait, **UNSAFE)
-
-    assert during == [[("sms", "w1", at, at + timedelta(hours=1))]]
+    assert seen == [], "the relay claimed a lane its old record still held"
+    assert _pauses() == [old]
 
 
 def test_a_pause_record_that_cannot_be_written_does_not_stop_the_relay(
@@ -749,7 +745,7 @@ def _the_pass_without_lanes(*, lane: str | None, clock: _Clock) -> None:
 
 
 def test_a_relay_that_never_deferred_sends_what_it_always_sent(lanes: None) -> None:
-    """A single str lane, with no deferral: the same statements as before lanes."""
+    """A single str lane, with no deferral: the statements before lanes, and the pause read."""
     _fire(Sms, 3)
     with _statements() as relayed:
         run_relay(worker_id="w1", passes=1, lane="sms", now=_Clock(), **UNSAFE)
@@ -758,8 +754,9 @@ def test_a_relay_that_never_deferred_sends_what_it_always_sent(lanes: None) -> N
     with _statements() as before:
         _the_pass_without_lanes(lane="sms", clock=_Clock())
 
-    assert relayed == before
-    assert not [sql for sql in relayed if "lanepauserecord" in sql]
+    read = [sql for sql in relayed if "lanepauserecord" in sql]
+    assert len(read) == 1 and read[0].startswith("SELECT"), read
+    assert [sql for sql in relayed if sql not in read] == before
 
 
 def test_with_no_named_lanes_every_lane_sends_what_it_always_sent(
@@ -779,7 +776,7 @@ def test_with_no_named_lanes_every_lane_sends_what_it_always_sent(
     with _statements() as before:
         _the_pass_without_lanes(lane=None, clock=_Clock())
 
-    assert relayed == before
+    assert [sql for sql in relayed if "lanepauserecord" not in sql] == before
     assert [claim["lease"] for claim in made] == [
         timedelta(seconds=registry.claim_lease_seconds(None, default=setting("LEASE_SECONDS")))
     ]

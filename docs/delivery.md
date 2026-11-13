@@ -253,8 +253,11 @@ and the `target` for a fan-out receiver - with the `attempt`, the `status` and
 the stored `error`, rather than the row itself, since another worker may own the
 row by the time the hook runs.
 
-A worker whose lease lapsed does not call it: whoever holds the row now will
-report its own outcome. A hook that raises is logged and swallowed, because a
+A worker whose lease lapsed does not call it, and nor does the claim that takes
+the row back while attempts remain: that lapse
+[spends an attempt](operations.md#a-lapse-spends-an-attempt) silently. The claim
+that finds it at its last attempt dead-letters it instead and calls the hook
+once, with status `dead`. A hook that raises is logged and swallowed, because a
 failure path that fails leaves the operator a traceback about logging instead of
 about the delivery.
 
@@ -283,10 +286,13 @@ deliberately not logged as a failed attempt: no attempt is counted, and no
 receiver failed.
 
 It follows the same rule as the hook: a worker whose lease lapsed recorded
-nothing and logs nothing, so the log never shows an attempt the row does not.
-An attempt whose connection was lost before anything could be written is not
-logged either, because nothing recorded it; the lease lapsing is what puts it
-back in the queue. See
+nothing and logs nothing. The claim that takes the row back
+[spends that attempt](operations.md#a-lapse-spends-an-attempt) without a line
+while attempts remain, so the row can show attempts the log does not; the one
+that dead-letters it logs `... on attempt 3 with a lapsed lease; the row is dead`
+on the same logger. An attempt whose connection was lost before anything could
+be written is not logged either, because nothing recorded it; the lease lapsing
+is what puts it back in the queue. See
 [Side effects inside the acknowledging transaction](operations.md#side-effects-inside-the-acknowledging-transaction).
 
 ## A hook around each delivery
@@ -532,43 +538,41 @@ long the row has been owed.
     naming the receiver is logged once per process. Declare the bound to get
     the deferral.
 
-### The pause is per process
+### The pause is shared
 
-Nothing is shared between relays: each process pauses a lane when a deferral it
-ran says to, measured on its own clock, and every relay serving the lane learns
-of the throttle from its own first deferral - one call each. That is the price
-of having no shared state to keep consistent, and it is small next to one call
-per row. A relay serving the lane claims nothing in it while the pause lasts,
-and takes it up again at the lane's first turn after the pause ends: within
-`POLL_SECONDS` for a relay with nothing else to do, and at the lane's next
-turn in the rotation for one busy with other lanes.
+The relay that ran the deferral pauses the lane at once, measured on its own clock,
+and records the pause in the `LanePauseRecord` table - the lane, its `worker_id`,
+when it paused and until when. Every relay reads the unexpired pauses of the lanes it
+serves once per pass, in one query on that small table, and claims nothing in a lane
+any of them holds: so the first deferral costs one call, and the other relays serving
+the lane learn of the throttle without making their own. A relay takes the lane up
+again at its first turn after the latest pause of it ends: within `POLL_SECONDS` for a
+relay with nothing else to do, and at the lane's next turn in the rotation for one
+busy with other lanes. An operator can pause a lane the same way, and lift any pause,
+with [`pause_lane` and `resume_lane`](operations.md#pausing-a-lane); a relay whose own
+pause was lifted takes the lane up again at its next pass.
 
 Every batch a relay claims is one lane's, so a deferral hands back the whole
 unstarted rest of it with no query to sort it. A relay serving several lanes -
 `--lane default --lane mail`, or `run_relay(lane=None)` - pauses only the
-deferring lane: it skips that lane's turn, without a query, while the pause
+deferring lane: it skips that lane's turn, without a claim, while the pause
 lasts, and goes on delivering the others. `deliver_pending()` and
 `drain_outbox()` have no clock to wait on, so they set the lane aside for the
-rest of the call instead.
+rest of the call instead, and write no record; they read the records once, when
+the call starts, and claim nothing in a lane one holds.
 
-So that operators can see a pause, the relay records it in the
-`LanePauseRecord` table - the lane, its own `worker_id`, when it paused and
-until when - and `outbox_health().lanes` and `events_status` show it
-([introspection](introspection.md#is-the-outbox-keeping-up)). The record is a
-window, not shared state: no relay reads it, so a pause still governs only the
-relay that heard it. A relay deletes its record when the pause ends and when
-it returns, and a relay that never defers never touches the table.
-`deliver_pending()` and `drain_outbox()` write none, since their set-aside
-ends with the call. A write that fails is logged and the relay carries on,
-paused as before.
+`outbox_health().lanes` and `events_status` show every pause
+([introspection](introspection.md#is-the-outbox-keeping-up)). A relay deletes its
+record when its pause ends and when it returns, and a relay that never defers
+writes nothing. A write that fails is logged and the relay carries on, paused as
+before, though the other relays then do not see the pause; a read that fails is
+logged too, and the relay goes on with the pauses it already knows.
 
 A relay that dies without returning - killed, or its pod evicted - leaves its
-record showing a pause no running process honours, until the `until` it
-recorded passes. Every pause any relay records also deletes every record whose
-pause has passed, so such leftovers do not accumulate, but one can show for
-as long as the deferral asked: up to `MAX_RECEIVER_RETRY_DELAY_SECONDS`, a day
-by default, for a quota that resets at midnight. Compare the `worker_id` with the relays running before reading it as a lane
-nobody serves.
+record, and the other relays honour it until the `until` it recorded passes: up to
+`MAX_RECEIVER_RETRY_DELAY_SECONDS`, a day by default, for a quota that resets at
+midnight. Every pause any relay records also deletes every record whose pause has
+passed, so such leftovers do not accumulate. `resume_lane` lifts one at once.
 
 Neither the pause nor the hand-back reaches a row already given to a
 [task backend](operations.md#handing-delivery-to-a-task-queue), and a receiver

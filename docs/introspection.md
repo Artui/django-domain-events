@@ -173,7 +173,7 @@ climbing, while one wedged receiver has a backlog and everything else fine.
 | `oldest_owed_at` | When the oldest still-owed delivery **became owed**: its due time where it has one, its event's recording otherwise; `None` when nothing is owed |
 | `lapsed_leases` | Claimed rows whose lease has expired |
 | `receivers` | Per-receiver backlog, worst first, omitting the ones with nothing owed, dead or scheduled. Each carries its own `owed`, `scheduled`, `claimed`, `dead` and `oldest_owed_at`; one with only scheduled work sorts after every receiver that is behind |
-| `lanes` | The same backlog split by [lane](operations.md#lanes-a-relay-per-kind-of-work), worst first, ranked as `receivers` is. Every lane a relay can serve is listed, the default and each declared one, zeros included, so a dashboard keeps one series per lane. Each `LaneBacklog` carries its own `owed`, `scheduled`, `claimed`, `dead` and `oldest_owed_at`, and `pauses`: a `LanePause` per relay holding the lane paused after a [deferral](delivery.md#the-pause-is-per-process), with its `worker_id`, `paused_at` and `until` |
+| `lanes` | The same backlog split by [lane](operations.md#lanes-a-relay-per-kind-of-work), worst first, ranked as `receivers` is. Every lane a relay can serve is listed, the default and each declared one, zeros included, so a dashboard keeps one series per lane. Each `LaneBacklog` carries its own `owed`, `scheduled`, `claimed`, `dead` and `oldest_owed_at`, and `pauses`: a `LanePause` per relay holding the lane paused after a [deferral](delivery.md#the-pause-is-shared), and one for an operator's [`pause_lane`](operations.md#pausing-a-lane), with its `worker_id`, `paused_at` and `until` |
 
 A cancelled delivery, [withdrawn](operations.md#cancel-owed-work) or found moot
 by its receiver, is settled, so it appears
@@ -221,15 +221,15 @@ since been deleted is counted in the default lane, which is where it drains.
 Its `oldest_owed_at` is the number to alert on per lane
 ([knowing it is working](operations.md#knowing-it-is-working)), against a
 threshold sized to that lane's work rather than one shared by all of them. A
-lane's `pauses` come from the
-records relays write when a receiver defers
-([the pause is per process](delivery.md#the-pause-is-per-process)); a lane no
-receiver declares any more is listed while a relay still holds it paused, as
-happens when a lane is renamed mid-rollout. A pause names its relay because
-one that died leaves its record showing until `until` passes: check the
-`worker_id` and `paused_at` against the relays running and when they started,
-since a relay restarted under the same `worker_id` takes the old record over
-only at its own first deferral.
+lane's `pauses` are the records every delivery path reads before claiming
+([the pause is shared](delivery.md#the-pause-is-shared)): one per relay that
+deferred, and one with the `worker_id` `operator` for a
+[`pause_lane`](operations.md#pausing-a-lane). A lane no receiver declares any
+more is listed while a pause of it is recorded, as happens when a lane is
+renamed mid-rollout. A pause names its relay because one that died leaves its
+record holding the lane until `until` passes: check the `worker_id` and
+`paused_at` against the relays running and when they started, and lift a
+leftover with `resume_lane`.
 
 Every figure here is answered from an index and none of them scans the
 delivery table, so the call is cheap enough to scrape on an interval. It sends
@@ -272,6 +272,31 @@ receiver, and a `"lanes"` list beside `"receivers"`: each lane's `lane`,
 `owed`, `scheduled`, `claimed`, `dead` and `oldest_owed_age_seconds`, and
 `"paused"`, a list of `{"worker_id", "paused_for_seconds"}` where
 `paused_for_seconds` is the time left until the pause ends.
+
+## How did one event go?
+
+```python
+from django_domain_events import delivery_tally
+
+tally = delivery_tally(event_id)
+```
+
+Where `outbox_health()` answers for the whole queue, this answers for one event:
+how many of its deliveries are still owed, and how the rest settled. It runs a
+single `GROUP BY` query and returns a frozen `DeliveryTally`.
+
+| Field | Means |
+| --- | --- |
+| `owed` | Pending, failed or claimed: not settled yet, whether due or scheduled |
+| `succeeded` | Delivered |
+| `cancelled` | Cancelled with `cancel_deliveries`, or settled by a receiver raising `Moot`, which stores the same status |
+| `dead` | Dead-lettered |
+| `orphaned` | Addressed to a receiver key the registry no longer has |
+| `total` | Every delivery the event has: the sum of the five above |
+
+An event id nothing was recorded under gives all zeros. `owed` reads the same
+settled set as the rest of the package, so a status added later is counted in
+one place.
 
 ## System checks
 

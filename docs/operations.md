@@ -159,8 +159,8 @@ The relay visits its lanes in sorted order, one claim each, and claims each
 lane's batch immediately before delivering it, so no batch burns its lease
 while another lane delivers. Each claim is that lane's alone: under its own
 lease ([the lease a claim stamps](#the-lease-a-claim-stamps)) and its own batch
-size. A lane paused after a [deferral](delivery.md#the-pause-is-per-process)
-is skipped without a query while the others go on. One rotation is one pass,
+size. A [paused](#pausing-a-lane) lane is skipped without a claim while the
+others go on. One rotation is one pass,
 so `--passes` counts rotations, and a pass is idle - it waits for work, and may
 [prune](retention.md#how-the-prune-runs) - only when every lane in it was empty
 or paused. A stop is read before each lane's turn as well as before each row.
@@ -221,9 +221,8 @@ moving `mail` out to relays of its own, or back in, is a change to the
 manifests and nothing else. While a rollout runs, the shared relays and the
 lane's own both serve it: the skipped locks keep them from taking the same
 row, each claim stamps the lane's own lease, and a relay that stops hands back
-the unstarted rows it held, so the relays that stay take them at once. Each
-relay learns of a throttle from its own first deferral, as relays of one lane
-always have.
+the unstarted rows it held, so the relays that stay take them at once. A
+throttle's first deferral pauses the lane in all of them.
 
 What sharing costs: an idle pass sends one claim query per lane it serves, and
 each claim of a quiet lane runs beside a burst in a noisy one. That claim does
@@ -286,7 +285,8 @@ when `LEASE_SECONDS` is the default 300:
   claim of the lane, not only a relay's: a `deliver_events --once --limit`
   claim of the lane's share of the limit, a `deliver_pending()` batch, and the
   eager attempt, which claims every eager row of one `fire()` at once. Past that, the tail of
-  the batch lapses while it waits its turn and another worker takes it.
+  the batch lapses while it waits its turn and another worker takes it,
+  and [spends an attempt](#a-lapse-spends-an-attempt) on rows that never ran.
   Relays with worker ids of their own never both run a row: the first finds
   the row gone when it tries to extend the lease, and logs that it lost the row
   before running it, but the relays churn over each other's batches. Two
@@ -300,6 +300,45 @@ when `LEASE_SECONDS` is the default 300:
   the lease; `--batch-size 5` does both. Rows past that are extended as
   before, so a bigger batch costs writes, not correctness.
 
+#### A lapse spends an attempt
+
+A claim that takes a row whose lease lapsed reads the worker that held it as
+dead, and counts that worker's attempt: the row's `attempts` goes up by one.
+A row that reaches its `max_attempts` that way is not claimed but marked
+`DEAD`, with a `last_error` naming the worker, when it claimed the row and when
+the lease ran out, and the receiver's `on_failure` is told once, with that
+status and attempt, after the claim commits. Without it, a receiver that ends
+its own process - `os._exit()`, a segfault in a C extension, the kernel's OOM
+killer - would be claimed and run forever, since nothing it does is ever
+recorded. Two relays reaching the same lapsed row never both dead-letter it:
+the claim's row lock gives it to one of them.
+
+Which lapses count:
+
+- **Every lapse.** The claim cannot tell a row a dead worker was running from
+  one it had not reached, so each row of the batch a worker held when it died
+  spends an attempt, not only the one in flight.
+- **A relay killed mid-delivery** (`SIGKILL`, the OOM killer, the host going
+  away) spends the attempt of the row it was running, and of every
+  unstarted row it still held. One stopped with a single `SIGTERM` gives the
+  unstarted rows back, which spends nothing, and only the row it finishes is
+  recorded, by its own outcome.
+- **`site="task"` rows** count too: a row whose message waits in the queue
+  past its lease is a lapse when the relay claims it again, and a lease that
+  falls short of the queue `max_attempts` times dead-letters work that never
+  ran ([the lease has to outlast the queue](#the-lease-has-to-outlast-the-queue)).
+- **The tail of a batch** that lapses while it waits its turn counts the same
+  way, so a batch too big for its lease can dead-letter work that never ran.
+
+What does not count: a row given back, by a stopping relay or a lane's
+deferral, which nobody started; a row a receiver answered with `NotYet`, which
+is moved rather than failed; a pending or failed row, whose attempt is
+counted by its outcome; and a lapse claimed by `drain_outbox(now=...)` or
+`deliver_pending(now=...)`, whose `now` reads as lapsed a lease the real clock
+stamped a moment ago. A relay given its clock, and either of those on the real
+clock, counts lapses as above. A relay that dies and a run that then succeeds record
+two attempts.
+
 ### Stopping it
 
 `SIGTERM`, or `SIGINT` from Ctrl-C, asks the relay to stop. It finishes the
@@ -312,7 +351,9 @@ relay takes it, it is counted in `outbox_health().lapsed_leases`.
 
 A second signal exits at once, with status 128 plus the signal number. The
 receiver running at that moment is interrupted and its transaction rolls back.
-Its row is reclaimed when the lease lapses, as a crashed worker's would be.
+Nothing is given back: its row and the unstarted rest of the batch are
+reclaimed when the lease lapses, as a crashed worker's would be, and each
+[spends an attempt](#a-lapse-spends-an-attempt) then.
 
 An `async def` receiver is the exception: its transaction rolls back, but the
 coroutine runs on an event loop in another thread that a signal cannot reach,
@@ -345,6 +386,43 @@ started from any other thread, it says so on stderr and runs until `--passes`
 is spent, and stopping it is up to whatever started the thread. An embedding
 process can pass its own callable as `run_relay(stop=...)`. The relay reads it
 before every claim and before every delivery.
+
+### Pausing a lane
+
+Every delivery path stops claiming a lane while any unexpired pause of it is
+recorded. A running relay takes it up again within one poll of the last one ending
+or being lifted; `deliver_events --once`, `deliver_pending()` and `drain_outbox()`
+read the pauses once, when the call starts, so a cron pass skips a paused lane and
+the first pass after the pause delivers it. The relays record a pause themselves when a receiver
+[defers without counting](delivery.md#a-deferral-that-spends-no-attempt), so one
+relay's deferral holds the lane in all of them. An operator records one by hand, for a
+provider outage announced ahead or a destination being migrated:
+
+```bash
+python manage.py pause_lane mail --for 1800
+python manage.py pause_lane mail --until 2026-11-14T06:00:00+00:00
+python manage.py resume_lane mail
+```
+
+`pause_lane` needs `--for` seconds or `--until` a time, and refuses a pause with no
+end: the relays delete a pause record whose `until` has passed, which is what keeps a
+pause left by a relay that died from holding the lane past it. An `--until` with no
+offset is read in `TIME_ZONE`. A lane no receiver declares is refused, since a typo
+would pause nothing. Pausing again moves the operator's pause rather than adding a
+second.
+
+`resume_lane` lifts every pause of the lane, the operator's and every relay's alike,
+including one a relay is honouring for its own deferral (unless that relay could
+not record it, when it holds its own until it ends), and including a lane no
+receiver declares any more. The relays see the lift at their next pass, so within
+`POLL_SECONDS` for an idle one. A lifted throttle that is still in force costs one
+deferral, after which the lane is paused again.
+
+Rows already claimed when the pause lands are not handed back: each relay finishes
+the batch in hand. Nor does a pause reach a row already given to a
+[task backend](#handing-delivery-to-a-task-queue). `outbox_health()` and
+`events_status` list the pause under the lane, the operator's as
+`paused by operator` ([introspection](introspection.md#is-the-outbox-keeping-up)).
 
 ### When the database goes away
 
@@ -798,6 +876,12 @@ fail the take and do nothing, and that is the claim working. But every one of
 them is a task the workers spend dequeuing, and they arrive behind the
 backlog, making it longer. In one report, a 900-second lease over a
 28,000-task burst produced 12,918 stale messages, every one a no-op.
+
+Each of those claims also [spends an attempt](#a-lapse-spends-an-attempt), since
+the relay cannot tell a message waiting in a queue from a worker that died. A
+row whose lease runs out in the queue `max_attempts` times is dead-lettered
+without ever running, its `last_error` naming the lapsed lease; `requeue_dead`
+sends it again once the lease is sized.
 
 The symptom is a burst of `outbox_health().lapsed_leases` and per-receiver
 `claimed` counts while the queue is long and nothing is failing, and the

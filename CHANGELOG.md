@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-11-13
+
+### Added
+- `pause_lane LANE (--for SECONDS | --until ISO)` and `resume_lane LANE` management
+  commands. `pause_lane` stops every delivery path claiming the lane until the pause ends:
+  a running relay, `deliver_events --once`, `deliver_pending()` and `drain_outbox()`. One
+  of `--for` and `--until` is required, an `--until` without an offset is read in `TIME_ZONE`,
+  and a lane no receiver declares is refused. It writes a `LanePauseRecord` under the
+  worker `operator`, which `outbox_health()` and `events_status` show beside the relays'
+  pauses. `resume_lane` deletes every pause of the lane, the operator's and every relay's,
+  and the relays take the lane up again at their next pass, within `POLL_SECONDS` for an
+  idle one.
+- `delivery_tally(event_id)`, exported from the package: one event's deliveries counted by
+  outcome in a single query, as a frozen `DeliveryTally` with `owed` (pending, failed and
+  claimed), `succeeded`, `cancelled` (a `Moot` settlement included), `dead`, `orphaned` and
+  `total`. An unknown event gives all zeros.
+- `install_celery_scope(app)`, exported from the package and needing the `[celery]` extra:
+  a task published inside `attributed()` carries the scope's actor, data and correlation id
+  in a `django_domain_events_scope` message header, and runs inside that scope, so an event
+  it fires records the publisher's actor and data and joins the publisher's chain. The
+  scope is left when the task ends, raised or not. A task published outside any scope
+  carries no header; without the call nothing changes. Installing twice connects once, and
+  another app's tasks ignore the header. Not for `django.tasks`, which has no publish
+  signal.
+
+### Changed
+- **A lane paused by one relay is now paused on every delivery path.** Each pass of
+  `run_relay()`, and each call of `deliver_pending()` (so `deliver_events --once` and
+  `drain_outbox()`) when it starts, reads the unexpired `LanePauseRecord`s of the lanes it
+  serves, one query on that small table, and claims nothing in a lane any of them holds. A
+  `drain_outbox(now=...)` past a pause's end delivers the lane. Until now only
+  the relay whose receiver deferred with `RetryAfter(counts=False)` paused the lane, and
+  every other relay made its own failing call before it learned of the outage. It is on by
+  default, with no setting. A relay that dies while paused leaves its record, which now
+  holds the lane in every relay until its `until` passes (up to
+  `MAX_RECEIVER_RETRY_DELAY_SECONDS`); `resume_lane` lifts it at once.
+- **A lapsed lease now spends an attempt.** When a claim takes a `CLAIMED` row whose lease
+  ran out, it raises the row's `attempts` by one, and a row that reaches `max_attempts` that
+  way is marked `DEAD`, with `last_error` naming the lapsed lease and its receiver's
+  `on_failure` told once. Until now a receiver that killed its own process, with
+  `os._exit()` or a crash, was claimed and run forever. Every lapse counts: the rows a
+  relay killed with `SIGKILL` held, the one it was running included, and `site="task"`
+  rows whose message waited in the queue past its lease, which an undersized lease can now
+  dead-letter without their ever running. A row given back, or answered with `NotYet`,
+  spends nothing, and nor does a lapse that `drain_outbox(now=...)` or
+  `deliver_pending(now=...)` claims, since that `now` reads a lease the real clock stamped
+  as lapsed; `claim_batch(count_lapses=False)` is how they ask. See "A lapse spends an
+  attempt" in the operations guide.
+
 ## [0.15.0] — 2026-11-13
 
 ### Added
@@ -1140,7 +1189,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the concurrent relay is not here yet, which is why `--once` is required rather
   than defaulted.
 
-[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/Artui/django-domain-events/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/Artui/django-domain-events/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/Artui/django-domain-events/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/Artui/django-domain-events/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/Artui/django-domain-events/compare/v0.13.0...v0.14.0

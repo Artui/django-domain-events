@@ -16,6 +16,7 @@ Everything below is exported from `django_domain_events` directly.
 ::: django_domain_events.scope.suppressed.suppressed
 ::: django_domain_events.scope.causation.caused_by
 ::: django_domain_events.scope.propagate_scope.propagate_scope
+::: django_domain_events.scope.install_celery_scope.install_celery_scope
 
 ## Delivery
 
@@ -51,6 +52,7 @@ per-process hook `deliver_events` calls before its first claim: see
 ::: django_domain_events.declaration.listens_for.listens_for
 ::: django_domain_events.introspection.quiet_receivers.quiet_receivers
 ::: django_domain_events.introspection.outbox_health.outbox_health
+::: django_domain_events.introspection.delivery_tally.delivery_tally
 
 ## Testing
 
@@ -70,6 +72,7 @@ per-process hook `deliver_events` calls before its first claim: see
 ::: django_domain_events.types.catalogue_field.CatalogueField
 ::: django_domain_events.types.catalogue_receiver.CatalogueReceiver
 ::: django_domain_events.types.outbox_health.OutboxHealth
+::: django_domain_events.types.delivery_tally.DeliveryTally
 ::: django_domain_events.types.lane_backlog.LaneBacklog
 ::: django_domain_events.types.lane_pause.LanePause
 ::: django_domain_events.types.quiet_receiver.QuietReceiver

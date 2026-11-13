@@ -331,7 +331,9 @@ def test_an_unanswered_offer_expires():
 
 `now=` is the moment every claim of the call is made at - what is due, which
 backoff has run out and which lease has lapsed are all read against it.
-`deliver_pending(now=)` takes the same. **The receiver still runs on the real
+`deliver_pending(now=)` takes the same. A claim told `now=` spends no attempt
+on a lease it reads as lapsed, so a `site="task"` row still in its queue is
+handed off again rather than dead-lettered. **The receiver still runs on the real
 clock**, since its acknowledgement is a fact about when it ran: compare against
 `ctx.due_at`, with the real clock only as the floor that lets a late row
 proceed (`max(ctx.due_at, timezone.now())`), and the receiver behaves the same

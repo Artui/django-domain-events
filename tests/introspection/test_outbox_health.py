@@ -3,9 +3,11 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from io import StringIO
 from typing import Any
 
 import pytest
+from django.core.management import call_command
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone as django_timezone
@@ -555,3 +557,15 @@ def test_the_pause_table_is_read_last_and_the_rollup_costs_no_query() -> None:
     assert len(statements) == 4, statements
     assert pause_table in statements[3]
     assert not any(pause_table in sql for sql in statements[:3])
+
+
+def test_an_operators_pause_is_shown_beside_the_relays() -> None:
+    """``pause_lane`` writes the same record a relay does, under the worker ``operator``."""
+    now = django_timezone.now()
+    _pause("default", "host:1", now + timedelta(minutes=5))
+    call_command("pause_lane", "default", "--for", "3600", stdout=StringIO())
+
+    (default,) = outbox_health().lanes
+
+    assert [p.worker_id for p in default.pauses] == ["host:1", "operator"]
+    assert default.pauses[1].until - default.pauses[1].paused_at == timedelta(hours=1)

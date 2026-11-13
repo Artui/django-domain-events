@@ -21,6 +21,7 @@ from django_domain_events.delivery.fire import fire
 from django_domain_events.delivery.retry_after import RetryAfter
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.models.delivery_record import DeliveryRecord
+from django_domain_events.models.lane_pause_record import LanePauseRecord
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
@@ -399,7 +400,7 @@ def _the_pass_without_lanes(*, lane: str | None, ignore_backoff: bool = False) -
 
 
 def test_a_single_lane_pass_sends_what_it_always_sent(lanes: None) -> None:
-    """A single str lane issues the same statements, in the same order, as before."""
+    """A single str lane issues the statements it did before, after one read of the pauses."""
     _fire(Sms, 3)
     with _statements() as passed:
         assert deliver_pending(lane="sms") == {DeliveryStatus.SUCCEEDED: 3}
@@ -408,7 +409,8 @@ def test_a_single_lane_pass_sends_what_it_always_sent(lanes: None) -> None:
     with _statements() as before:
         _the_pass_without_lanes(lane="sms")
 
-    assert passed == before
+    assert passed[0].startswith("SELECT") and "lanepauserecord" in passed[0], passed[0]
+    assert passed[1:] == before
 
 
 @pytest.mark.parametrize(
@@ -423,7 +425,7 @@ def test_with_no_named_lanes_every_lane_sends_what_it_always_sent(
     run: Callable[[], dict[DeliveryStatus, int]],
     ignore_backoff: bool,
 ) -> None:
-    """lane=None in a lane-less project claims exactly as None always did."""
+    """lane=None in a lane-less project claims as None always did, after reading the pauses."""
     assert registry.lanes() == ["default"]
     for _ in range(2):
         with transaction.atomic():
@@ -437,6 +439,65 @@ def test_with_no_named_lanes_every_lane_sends_what_it_always_sent(
     with _statements() as before:
         _the_pass_without_lanes(lane=None, ignore_backoff=ignore_backoff)
 
-    assert passed == before
+    assert passed[0].startswith("SELECT") and "lanepauserecord" in passed[0], passed[0]
+    assert passed[1:] == before
     lease = timedelta(seconds=registry.claim_lease_seconds(None, default=setting("LEASE_SECONDS")))
     assert [claim["lease"] for claim in made] == [lease, lease]
+
+
+# --- A recorded pause -----------------------------------------------------------
+
+
+def _pause(lane: str, until: timedelta) -> None:
+    moment = django_timezone.now()
+    LanePauseRecord.objects.create(
+        lane=lane, worker_id="host:1", paused_at=moment, until=moment + until
+    )
+
+
+def test_a_lane_a_relay_paused_is_not_claimed_while_the_others_are(
+    lanes: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fire(Push, 2)
+    _fire(Sms, 2)
+    _pause("sms", timedelta(hours=1))
+
+    with _claims(monkeypatch) as made:
+        counts = deliver_pending(lane=None)
+
+    assert counts == {DeliveryStatus.SUCCEEDED: 2}
+    assert ORDER == ["push", "push"]
+    assert "sms" not in {claim["lane"] for claim in made}, "the paused lane was claimed"
+
+
+def test_the_pauses_are_read_once_per_call(lanes: None) -> None:
+    _fire(Push, 2)
+
+    with CaptureQueriesContext(connections[write_alias()]) as queries:
+        deliver_pending(lane=None, batch_size=1)
+
+    reads = [q["sql"] for q in queries.captured_queries if "lanepauserecord" in q["sql"]]
+    assert len(reads) == 1, reads
+
+
+def test_a_pause_that_has_ended_at_the_calls_now_holds_nothing(lanes: None) -> None:
+    """``now`` moves the reading too, so a drain past the pause's end delivers the lane."""
+    _fire(Sms)
+    _pause("sms", timedelta(hours=1))
+
+    assert deliver_pending(lane="sms") == {}
+    later = django_timezone.now() + timedelta(hours=2)
+    assert deliver_pending(lane="sms", now=later) == {DeliveryStatus.SUCCEEDED: 1}
+
+
+def test_a_pause_ending_at_the_calls_now_has_ended(lanes: None) -> None:
+    """A pause holds while its ``until`` is after the moment read, not at it."""
+    _fire(Sms)
+    moment = django_timezone.now()
+    LanePauseRecord.objects.create(
+        lane="sms", worker_id="host:1", paused_at=moment, until=moment + timedelta(hours=1)
+    )
+
+    assert deliver_pending(lane="sms", now=moment + timedelta(hours=1)) == {
+        DeliveryStatus.SUCCEEDED: 1
+    }

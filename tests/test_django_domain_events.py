@@ -44,3 +44,27 @@ def test_an_unknown_name_raises_attribute_error() -> None:
 
     with pytest.raises(AttributeError, match="nope"):
         _ = django_domain_events.nope
+
+
+def test_every_name_the_root_binds_is_in_all_in_sorted_order() -> None:
+    """A name imported or assigned in ``__init__`` but left out of ``__all__`` is lost to ``*``."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(django_domain_events))
+    bound = {
+        alias.asname or alias.name
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    bound |= {
+        target.id
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name) and target.id != "__all__"
+    }
+
+    assert set(django_domain_events.__all__) == bound
+    assert django_domain_events.__all__ == sorted(django_domain_events.__all__)
