@@ -102,6 +102,8 @@ def deliver_one(
     anywhere, but pauses nothing: a pause belongs to the relay process that
     claimed the row's batch, and a call made directly holds no batch.
     """
+    if worker_id is not None:
+        require_worker_id(worker_id)
     return _deliver_one(
         delivery_id,
         worker_id=worker_id,

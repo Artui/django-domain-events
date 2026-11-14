@@ -16,6 +16,8 @@ class Actor:
     the column is a foreign key to."""
 
     def __post_init__(self) -> None:
+        if not self.key and not self.label:
+            return
         from django_domain_events.models.event_record import EventRecord  # AppRegistryNotReady
 
         limit = EventRecord.actor_key.field.max_length

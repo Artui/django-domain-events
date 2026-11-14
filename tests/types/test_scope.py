@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from uuid import uuid4
 
 import pytest
@@ -73,3 +75,25 @@ def test_an_empty_actor_is_falsy_so_it_does_not_overwrite() -> None:
     assert not Actor()
     assert Actor(key="x")
     assert Actor(user_pk=1)
+
+
+def test_the_actor_key_limit_is_read_from_its_column(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(EventRecord.actor_key.field, "max_length", 10)
+    with pytest.raises(ValueError, match="the limit is 10"):
+        Actor(key="k" * 11)
+
+
+def test_the_actor_label_clip_is_read_from_its_column(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(EventRecord.actor_label.field, "max_length", 10)
+    assert Actor(label="l" * 11).label == "l" * 10
+
+
+def test_an_empty_scope_can_be_built_before_the_apps_are_ready() -> None:
+    """In-process the model is already imported, so only a fresh interpreter can tell."""
+    code = (
+        "from django.conf import settings; "
+        "settings.configure(INSTALLED_APPS=['django_domain_events']); "
+        "from django_domain_events import Scope; print(bool(Scope().actor))"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert result.stdout.strip() == "False", result.stderr

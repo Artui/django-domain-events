@@ -77,6 +77,35 @@ def test_deliver_pending_takes_a_worker_id_of_exactly_its_columns_width(
     assert deliver_pending(worker_id="w" * limit) == {DeliveryStatus.SUCCEEDED: 2}
 
 
+def test_deliver_one_refuses_a_worker_id_wider_than_its_columns_before_the_take(
+    order: OrderPlaced,
+) -> None:
+    with transaction.atomic():
+        fire(order)
+    pk = _delivery_id("testapp.durable_receiver")
+    limit = min(
+        LanePauseRecord._meta.get_field("worker_id").max_length,
+        DeliveryRecord._meta.get_field("claimed_by").max_length,
+    )
+    with pytest.raises(ValueError, match="worker_id"):
+        deliver_one(pk, worker_id="w" * (limit + 1))
+    assert DeliveryRecord.objects.filter(pk=pk).values_list("claimed_by", "attempts").get() == (
+        "",
+        0,
+    )
+
+
+@pytest.mark.parametrize(
+    "field", [DeliveryRecord.claimed_by.field, LanePauseRecord.worker_id.field], ids=str
+)
+def test_the_worker_id_limit_is_the_narrower_of_its_columns(
+    field: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(field, "max_length", 10)
+    with pytest.raises(ValueError, match="the limit is 10"):
+        deliver_pending(worker_id="w" * 11)
+
+
 def test_a_successful_delivery_records_its_outcome(order: OrderPlaced, record: list[str]) -> None:
     _fire(order)
     record.clear()

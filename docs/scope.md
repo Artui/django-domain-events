@@ -28,7 +28,9 @@ things that fire events are not users, which is why `actor_key` exists at all.
 `actor_key` is an indexed identity, so it is held whole or not at all: a key longer
 than its column (255 characters) raises `ValueError` naming `actor_key` and the limit
 when the actor is built, at `attributed()` or `Actor(...)`, rather than being clipped
-into another actor's key. `actor_label` is display text and is clipped to its column.
+into another actor's key. That includes a key derived from `attributed(actor=obj)`
+(`app_label.Model:pk`, or `str(obj)` for an object that is not a model); pass a
+shorter `actor_key=` beside the actor to override it. `actor_label` is display text and is clipped to its column.
 
 !!! warning "The scope is captured at fire time, not at delivery time"
     It is read back off the row, so a delivery running hours later in another

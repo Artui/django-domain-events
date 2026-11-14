@@ -13,15 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An `actor_key` longer than its column (255 characters) is refused with a `ValueError`
   naming `actor_key` and the limit, at `attributed()` or `Actor(...)`, where it used to be
   clipped to 255. Two identities sharing a 255-character prefix were stored as one indexed
-  key; shorten the key, or hash the tail of a long one, before passing it. `actor_label`
-  is display text and is still clipped.
+  key; shorten the key, or hash the tail of a long one, before passing it. A key derived
+  from `attributed(actor=obj)` (`str(obj)` for an object that is not a model) is refused
+  the same way; an explicit `actor_key=` overrides it. `actor_label` is display text and
+  is still clipped.
 - A receiver declared with a `lane=` longer than `LanePauseRecord.lane` (255 characters)
   is refused at registration, as an over-long `key=` already was, rather than when the
   lane is first paused.
 - A worker id longer than `DeliveryRecord.claimed_by` and `LanePauseRecord.worker_id`
   (255 characters) is refused before any claim: `deliver_events --worker-id` with a
-  `CommandError` before `RELAY_STARTUP` runs, and `run_relay()` and `deliver_pending()`
-  with a `ValueError`.
+  `CommandError` before `RELAY_STARTUP` runs, and `run_relay()`, `deliver_pending()` and
+  `deliver_one()` with a `ValueError`.
 
 ## [0.17.0] — 2026-11-13
 

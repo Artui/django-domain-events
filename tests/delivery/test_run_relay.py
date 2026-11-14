@@ -47,7 +47,7 @@ def test_a_worker_id_wider_than_its_columns_is_refused_before_any_claim(
         DeliveryRecord._meta.get_field("claimed_by").max_length,
     )
     with pytest.raises(ValueError, match=f"worker_id of {limit + 1} characters"):
-        run_relay(worker_id="w" * (limit + 1), passes=1, **UNSAFE)
+        run_relay(worker_id="w" * (limit + 1), passes=1)
     assert set(DeliveryRecord.objects.values_list("claimed_by", "attempts")) == {("", 0)}
 
 
