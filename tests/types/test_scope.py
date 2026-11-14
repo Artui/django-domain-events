@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from django_domain_events.types.scope import MAX_ACTOR_LENGTH, Actor, Scope
+import pytest
+
+from django_domain_events.models.event_record import EventRecord
+from django_domain_events.types.scope import Actor, Scope
+
+_KEY_LIMIT = EventRecord._meta.get_field("actor_key").max_length
+_LABEL_LIMIT = EventRecord._meta.get_field("actor_label").max_length
 
 
 def test_data_is_merged_not_replaced() -> None:
@@ -41,11 +47,26 @@ def test_an_inner_correlation_id_wins() -> None:
     assert Scope(correlation_id=uuid4()).merged(Scope(correlation_id=inner)).correlation_id == inner
 
 
-def test_actor_strings_are_truncated_at_capture() -> None:
-    """Both columns are varchar(255)."""
-    actor = Actor(key="k" * 400, label="l" * 400)
-    assert len(actor.key) == MAX_ACTOR_LENGTH
-    assert len(actor.label) == MAX_ACTOR_LENGTH
+def test_an_actor_key_over_its_column_is_refused_naming_the_field_and_the_limit() -> None:
+    with pytest.raises(ValueError, match=f"actor_key of {_KEY_LIMIT + 1} characters") as caught:
+        Actor(key="k" * (_KEY_LIMIT + 1))
+    assert f"the limit is {_KEY_LIMIT}" in str(caught.value)
+
+
+def test_two_keys_sharing_the_column_width_as_a_prefix_never_merge_into_one() -> None:
+    """A clip made these one actor; each is refused instead."""
+    prefix = "k" * _KEY_LIMIT
+    for key in (prefix + "a", prefix + "b"):
+        with pytest.raises(ValueError, match="actor_key"):
+            Actor(key=key)
+
+
+def test_an_actor_key_of_exactly_its_column_width_is_kept_whole() -> None:
+    assert Actor(key="k" * _KEY_LIMIT).key == "k" * _KEY_LIMIT
+
+
+def test_the_actor_label_is_display_text_and_is_clipped_to_its_column() -> None:
+    assert Actor(label="l" * (_LABEL_LIMIT + 1)).label == "l" * _LABEL_LIMIT
 
 
 def test_an_empty_actor_is_falsy_so_it_does_not_overwrite() -> None:

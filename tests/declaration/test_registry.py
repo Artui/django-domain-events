@@ -10,6 +10,7 @@ from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.declaration.registry import Registry
 from django_domain_events.models.delivery_record import DeliveryRecord
 from django_domain_events.models.event_record import EventRecord
+from django_domain_events.models.lane_pause_record import LanePauseRecord
 from django_domain_events.models.receiver_last_success import ReceiverLastSuccess
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.registered_event import RegisteredEvent
@@ -211,6 +212,7 @@ def test_the_registry_limits_are_the_widths_of_the_columns_that_store_them() -> 
     assert ReceiverLastSuccess._meta.get_field("receiver_key").max_length == _KEY_LIMIT
     assert registry_module.MAX_KEY_LENGTH == _KEY_LIMIT
     assert registry_module.MAX_NAME_LENGTH == _NAME_LIMIT
+    assert LanePauseRecord._meta.get_field("lane").max_length == registry_module.MAX_LANE_LENGTH
 
 
 def test_a_receiver_key_of_exactly_the_limit_is_registered_directly() -> None:

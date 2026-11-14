@@ -51,6 +51,32 @@ def _delivery_id(key: str) -> int:
     return DeliveryRecord.objects.values_list("pk", flat=True).get(receiver_key=key)
 
 
+def test_deliver_pending_refuses_a_worker_id_wider_than_its_columns_before_any_claim(
+    order: OrderPlaced,
+) -> None:
+    with transaction.atomic():
+        fire(order)
+    limit = min(
+        LanePauseRecord._meta.get_field("worker_id").max_length,
+        DeliveryRecord._meta.get_field("claimed_by").max_length,
+    )
+    with pytest.raises(ValueError, match="worker_id"):
+        deliver_pending(worker_id="w" * (limit + 1))
+    assert set(DeliveryRecord.objects.values_list("claimed_by", "attempts")) == {("", 0)}
+
+
+def test_deliver_pending_takes_a_worker_id_of_exactly_its_columns_width(
+    order: OrderPlaced, record: list[str]
+) -> None:
+    with transaction.atomic():
+        fire(order)
+    limit = min(
+        LanePauseRecord._meta.get_field("worker_id").max_length,
+        DeliveryRecord._meta.get_field("claimed_by").max_length,
+    )
+    assert deliver_pending(worker_id="w" * limit) == {DeliveryStatus.SUCCEEDED: 2}
+
+
 def test_a_successful_delivery_records_its_outcome(order: OrderPlaced, record: list[str]) -> None:
     _fire(order)
     record.clear()

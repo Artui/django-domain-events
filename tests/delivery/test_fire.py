@@ -695,9 +695,22 @@ def test_an_over_long_dedupe_key_is_refused_for_a_suppressed_event_that_is_recor
     assert not EventRecord.objects.exists()
 
 
-def test_an_over_long_actor_is_stored_truncated_rather_than_refused(order: OrderPlaced) -> None:
-    """Actor truncates key and label at capture, so only the dedupe key needs refusal."""
-    with transaction.atomic(), attributed(actor_key="x" * 300, actor_label="y" * 300):
+def test_an_over_long_actor_key_is_refused_at_capture_and_nothing_is_recorded(
+    order: OrderPlaced,
+) -> None:
+    """A clipped key would merge two actors sharing a prefix into one indexed identity."""
+    limit = EventRecord._meta.get_field("actor_key").max_length
+    with (
+        transaction.atomic(),
+        pytest.raises(ValueError, match="actor_key"),
+        attributed(actor_key="x" * (limit + 1)),
+    ):
+        fire(order)
+    assert not EventRecord.objects.exists()
+
+
+def test_an_over_long_actor_label_is_stored_clipped(order: OrderPlaced) -> None:
+    limit = EventRecord._meta.get_field("actor_label").max_length
+    with transaction.atomic(), attributed(actor_key="k", actor_label="y" * (limit + 1)):
         event_id = fire(order)
-    row = EventRecord.objects.get(pk=event_id)
-    assert (len(row.actor_key), len(row.actor_label)) == (255, 255)
+    assert len(EventRecord.objects.get(pk=event_id).actor_label) == limit

@@ -25,6 +25,11 @@ A log that loses its actor when the user row is deleted is a log that lies,
 which is why the FK is `SET_NULL` and the snapshot sits beside it. Plenty of
 things that fire events are not users, which is why `actor_key` exists at all.
 
+`actor_key` is an indexed identity, so it is held whole or not at all: a key longer
+than its column (255 characters) raises `ValueError` naming `actor_key` and the limit
+when the actor is built, at `attributed()` or `Actor(...)`, rather than being clipped
+into another actor's key. `actor_label` is display text and is clipped to its column.
+
 !!! warning "The scope is captured at fire time, not at delivery time"
     It is read back off the row, so a delivery running hours later in another
     process still knows. Reading a `ContextVar` inside deferred code would read

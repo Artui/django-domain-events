@@ -7,6 +7,7 @@ import pytest
 from django_domain_events.declaration.any_event import AnyEvent
 from django_domain_events.declaration.receiver import receiver
 from django_domain_events.declaration.registry import registry
+from django_domain_events.models.lane_pause_record import LanePauseRecord
 from django_domain_events.types.delivery_context import DeliveryContext
 from django_domain_events.types.delivery_mode import DeliveryMode
 from tests.testapp.events import OrderPlaced
@@ -186,6 +187,28 @@ def test_a_lane_is_recorded_and_defaults_to_the_default_lane() -> None:
         assert registry.receiver_for_key("testapp.durable_receiver").lane == "default"
     finally:
         registry._receivers.pop("tests.mail", None)
+
+
+def test_a_lane_wider_than_its_pause_column_is_refused_at_declaration() -> None:
+    limit = LanePauseRecord._meta.get_field("lane").max_length
+
+    def handler(evt: OrderPlaced) -> None: ...
+
+    with pytest.raises(ValueError, match=f"lane of {limit + 1} characters"):
+        receiver(OrderPlaced, key="tests.long_lane", lane="l" * (limit + 1))(handler)
+    assert registry.receiver_for_key("tests.long_lane") is None
+
+
+def test_a_lane_of_exactly_its_pause_column_width_is_declared() -> None:
+    lane = "l" * LanePauseRecord._meta.get_field("lane").max_length
+
+    @receiver(OrderPlaced, key="tests.wide_lane", lane=lane)
+    def handler(evt: OrderPlaced) -> None: ...
+
+    try:
+        assert registry.receiver_for_key("tests.wide_lane").lane == lane
+    finally:
+        registry._receivers.pop("tests.wide_lane", None)
 
 
 @pytest.mark.parametrize("value", ["", None, 3])

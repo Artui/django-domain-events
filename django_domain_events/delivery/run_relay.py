@@ -25,6 +25,7 @@ from django_domain_events.delivery.utils import (
     lane_claim_sizes,
     lane_pauses,
     lane_threads,
+    require_worker_id,
     served_lanes,
 )
 from django_domain_events.delivery.wake import wait_for_work
@@ -208,6 +209,7 @@ def run_relay(
     the pauses it already holds, and drops one of its own only when a read that
     succeeded finds the record it wrote gone.
     """
+    require_worker_id(worker_id)
     connection = connections[write_alias()]
     if not (allow_unsafe_concurrency or connection.features.has_select_for_update_skip_locked):
         raise RuntimeError(

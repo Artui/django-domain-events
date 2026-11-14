@@ -77,7 +77,7 @@ def reserve_stock(evt: OrderPlaced) -> None: ...
 | `targets` | `None` | One delivery per target this returns. See [fan-out](#fan-out-one-delivery-per-target). |
 | `backoff_base_seconds` | `None` | Override `BACKOFF_BASE_SECONDS` for this receiver's retries. See [delivery](delivery.md#a-curve-per-receiver). |
 | `backoff_cap_seconds` | `None` | Override `BACKOFF_CAP_SECONDS` for this receiver's retries. |
-| `lane` | `"default"` | Which relay processes claim its rows. See [lanes](operations.md#lanes-a-relay-per-kind-of-work). |
+| `lane` | `"default"` | Which relay processes claim its rows. At most 255 characters, the width of the column a lane's pause is stored in; a longer one is refused at registration. See [lanes](operations.md#lanes-a-relay-per-kind-of-work). |
 | `give_up_after` | `None` | A `timedelta`: how long a row may stay owed while it [defers without counting](delivery.md#a-deferral-that-spends-no-attempt). |
 | `due` | `None` | A `timedelta` after the event occurred, or a callable of the event returning an aware `datetime`: when the delivery runs. See [scheduled reactions](scheduling.md). |
 

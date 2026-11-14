@@ -12,7 +12,7 @@ from django.core.management.base import BaseCommand, CommandError, OutputWrapper
 
 from django_domain_events.delivery.deliver import deliver_pending
 from django_domain_events.delivery.run_relay import run_relay
-from django_domain_events.delivery.utils import lane_threads
+from django_domain_events.delivery.utils import lane_threads, require_worker_id
 from django_domain_events.settings import get_relay_startup
 from django_domain_events.types.registered_receiver import DEFAULT_LANE
 
@@ -111,6 +111,7 @@ class Command(BaseCommand):
                 "the relay."
             )
         try:
+            require_worker_id(worker_id)
             lane_threads(
                 tuple(sorted(set(lanes))),
                 lane_concurrency=lane_concurrency,
@@ -221,6 +222,7 @@ def _in_flags(message: str) -> str:
         ("batch_size", "--batch-size"),
         ("lane_concurrency", "--lane-concurrency"),
         ("lane_rates", "--lane-rate"),
+        ("worker_id", "--worker-id"),
     ):
         message = message.replace(keyword, flag)
     return message
