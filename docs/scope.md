@@ -30,7 +30,8 @@ than its column (255 characters) raises `ValueError` naming `actor_key` and the 
 when the actor is built, at `attributed()` or `Actor(...)`, rather than being clipped
 into another actor's key. That includes a key derived from `attributed(actor=obj)`
 (`app_label.Model:pk`, or `str(obj)` for an object that is not a model); pass a
-shorter `actor_key=` beside the actor to override it. `actor_label` is display text and is clipped to its column.
+shorter `actor_key=` beside the actor to override it. `actor_label` is display text
+and is clipped to its column.
 
 !!! warning "The scope is captured at fire time, not at delivery time"
     It is read back off the row, so a delivery running hours later in another
