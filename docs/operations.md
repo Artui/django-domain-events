@@ -20,6 +20,11 @@ python manage.py deliver_events --lane mail --lane-concurrency mail=6   # six at
 python manage.py deliver_events --lane mail --lane-rate mail=5          # five starts a second
 ```
 
+`--worker-id` is stored on every row the relay claims and on every pause it writes,
+so one longer than those columns (255 characters) is refused before `RELAY_STARTUP`
+runs and before any claim; `run_relay()`, `deliver_pending()` and `deliver_one()`
+refuse it the same way.
+
 `--limit` caps a single pass, so it needs `--once`: a relay delivers until it is
 stopped and has no total to cap, and the command refuses `--limit` beside it
 rather than accepting a cap nothing reads. Bound a relay with `--passes`.

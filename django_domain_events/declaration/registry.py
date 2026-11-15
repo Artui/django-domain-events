@@ -17,14 +17,15 @@ not a setting, because its only meaning is WAL against recovery time."""
 
 
 # The widths of the columns a registration is later written to: ``receiver_key`` on
-# ``DeliveryRecord`` and on ``ReceiverLastSuccess``, ``name`` on ``EventRecord``, each
-# ``CharField(max_length=255)``. Carried as numbers rather than read off the fields
-# because a decorator reaches the registry while apps are still loading - declaring a
-# receiver with an explicit ``key=`` works before ``django.setup()`` - and importing a
-# model there raises ``AppRegistryNotReady``. Held to the columns by
-# test_the_registry_limits_are_the_widths_of_the_columns_that_store_them.
+# ``DeliveryRecord`` and on ``ReceiverLastSuccess``, ``name`` on ``EventRecord``, ``lane``
+# on ``LanePauseRecord``, each ``CharField(max_length=255)``. Carried as numbers rather
+# than read off the fields because a decorator reaches the registry while apps are still
+# loading - declaring a receiver with an explicit ``key=`` works before
+# ``django.setup()`` - and importing a model there raises ``AppRegistryNotReady``. Held to
+# the columns by test_the_registry_limits_are_the_widths_of_the_columns_that_store_them.
 MAX_KEY_LENGTH = 255
 MAX_NAME_LENGTH = 255
+MAX_LANE_LENGTH = 255
 
 
 class Registry:
@@ -62,6 +63,13 @@ class Registry:
                 f"store a key in, and it applies in every mode so that a key stays valid "
                 f"when its mode changes. A longer one is truncated or rejected by the "
                 f"database only when an event fires. Set a shorter key=."
+            )
+        if len(receiver.lane) > MAX_LANE_LENGTH:
+            raise ValueError(
+                f"Receiver {receiver.key!r} was given a lane of {len(receiver.lane)} "
+                f"characters; the limit is {MAX_LANE_LENGTH}, the width of the indexed column "
+                f"a lane's pause is stored in. A longer one is rejected by the database on "
+                f"Postgres only when the lane is first paused. Set a shorter lane=."
             )
         # Compare the whole record: stacked decorators must not silently replace each other.
         existing = self._receivers.get(receiver.key)

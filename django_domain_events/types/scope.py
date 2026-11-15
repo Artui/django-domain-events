@@ -4,11 +4,6 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 from uuid import UUID
 
-MAX_ACTOR_LENGTH = 255
-"""Both actor columns are varchar(255). Postgres refuses a longer value with a
-DataError raised inside the caller's transaction; SQLite stores it happily, so
-the version matrix cannot see the difference."""
-
 
 @dataclass(frozen=True, slots=True)
 class Actor:
@@ -21,8 +16,22 @@ class Actor:
     the column is a foreign key to."""
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "key", self.key[:MAX_ACTOR_LENGTH])
-        object.__setattr__(self, "label", self.label[:MAX_ACTOR_LENGTH])
+        if not self.key and not self.label:
+            return
+        from django_domain_events.models.event_record import EventRecord  # AppRegistryNotReady
+
+        limit = EventRecord.actor_key.field.max_length
+        assert limit is not None
+        if len(self.key) > limit:
+            raise ValueError(
+                f"Actor was given an actor_key of {len(self.key)} characters; the limit is "
+                f"{limit}, the width of the indexed column the event row stores it in. "
+                f"Clipping it would merge two actors sharing a prefix into one, and a longer "
+                f"one is rejected by the database on Postgres and stored whole on SQLite. "
+                f"Shorten the actor_key."
+            )
+        label_limit = EventRecord.actor_label.field.max_length
+        object.__setattr__(self, "label", self.label[:label_limit])
 
     def __bool__(self) -> bool:
         return bool(self.key or self.label or self.user_pk is not None)

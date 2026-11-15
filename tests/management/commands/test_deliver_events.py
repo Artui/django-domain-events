@@ -21,6 +21,7 @@ from django_domain_events.delivery.fire import fire
 from django_domain_events.delivery.run_relay import run_relay
 from django_domain_events.management.commands import deliver_events
 from django_domain_events.models.delivery_record import DeliveryRecord
+from django_domain_events.models.lane_pause_record import LanePauseRecord
 from django_domain_events.types.delivery_mode import DeliveryMode
 from django_domain_events.types.delivery_status import DeliveryStatus
 from django_domain_events.types.registered_receiver import RegisteredReceiver
@@ -460,6 +461,23 @@ def test_an_exception_from_relay_startup_stops_the_command_before_any_claim(
 
     rows = set(DeliveryRecord.objects.values_list("claimed_by", "attempts"))
     assert rows == {("", 0)}, "the command claimed rows anyway"
+
+
+@pytest.mark.parametrize("argv", [["--passes", "1"], ["--once"]], ids=["relay", "once"])
+def test_a_worker_id_wider_than_its_columns_is_refused_before_startup_and_any_claim(
+    argv: list[str], order: OrderPlaced, settings, steps: list[tuple[str, object]]
+) -> None:
+    settings.DJANGO_DOMAIN_EVENTS = {"RELAY_STARTUP": f"{__name__}.startup"}
+    with transaction.atomic():
+        fire(order)
+    limit = min(
+        LanePauseRecord._meta.get_field("worker_id").max_length,
+        DeliveryRecord._meta.get_field("claimed_by").max_length,
+    )
+    with pytest.raises(CommandError, match=f"--worker-id of {limit + 1} characters"):
+        call_command("deliver_events", *argv, "--worker-id", "w" * (limit + 1), stdout=StringIO())
+    assert steps == []
+    assert set(DeliveryRecord.objects.values_list("claimed_by", "attempts")) == {("", 0)}
 
 
 def test_relay_startup_does_not_run_for_an_invalid_command(

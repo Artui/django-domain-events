@@ -121,6 +121,25 @@ def close_after(exc: Exception, connection: Any, worker_id: str, log: logging.Lo
         log.exception("relay %s could not close its connection", worker_id)
 
 
+def require_worker_id(worker_id: str) -> None:
+    """Refuse a worker id wider than the columns a claim and a lane's pause store it in."""
+    from django_domain_events.models.delivery_record import DeliveryRecord
+    from django_domain_events.models.lane_pause_record import LanePauseRecord
+
+    widths = (
+        DeliveryRecord.claimed_by.field.max_length,
+        LanePauseRecord.worker_id.field.max_length,
+    )
+    limit = min(width for width in widths if width is not None)
+    if len(worker_id) > limit:
+        raise ValueError(
+            f"worker_id of {len(worker_id)} characters; the limit is {limit}, the width of "
+            f"the columns a claim and a lane's pause store it in, the pause's one indexed. A "
+            f"longer one is rejected by the database on Postgres at the first claim and "
+            f"stored whole on SQLite. Shorten the worker_id."
+        )
+
+
 def lane_pauses(lanes: Collection[str], moment: datetime) -> dict[str, datetime]:
     """The latest pause of each of ``lanes`` still unexpired at ``moment``, by any writer."""
     from django_domain_events.models.lane_pause_record import LanePauseRecord

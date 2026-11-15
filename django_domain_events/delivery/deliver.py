@@ -27,6 +27,7 @@ from django_domain_events.delivery.utils import (
     lane_pauses,
     log_failure,
     report_failure,
+    require_worker_id,
     served_lanes,
 )
 from django_domain_events.delivery.write_alias import write_alias
@@ -101,6 +102,8 @@ def deliver_one(
     anywhere, but pauses nothing: a pause belongs to the relay process that
     claimed the row's batch, and a call made directly holds no batch.
     """
+    if worker_id is not None:
+        require_worker_id(worker_id)
     return _deliver_one(
         delivery_id,
         worker_id=worker_id,
@@ -722,6 +725,7 @@ def deliver_pending(
     lapsed; on the real clock a lapse spends an attempt as it does in the relay
     (``test_a_real_clock_pass_dead_letters_a_lapse_at_its_last_attempt``).
     """
+    require_worker_id(worker_id)
     if limit is not None and batch_size is not None:
         raise ValueError(
             f"limit={limit} sizes each claim as its lane's share of it, so "

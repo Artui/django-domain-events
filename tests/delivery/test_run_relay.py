@@ -19,6 +19,7 @@ from django_domain_events.delivery.run_relay import run_relay
 from django_domain_events.delivery.wake import wait_for_work
 from django_domain_events.delivery.write_alias import write_alias
 from django_domain_events.models.delivery_record import DeliveryRecord
+from django_domain_events.models.lane_pause_record import LanePauseRecord
 from django_domain_events.settings import setting
 from django_domain_events.types.delivery_failure import DeliveryFailure
 from django_domain_events.types.delivery_mode import DeliveryMode
@@ -33,6 +34,21 @@ pytestmark = pytest.mark.django_db(transaction=True)
 # them is what keeps the whole relay testable on the default backend, the same
 # way the clock and the sleep are arguments.
 UNSAFE = {"allow_unsafe_concurrency": True}
+
+
+def test_a_worker_id_wider_than_its_columns_is_refused_before_any_claim(
+    order: OrderPlaced,
+) -> None:
+    """Before the skip-locked guard too, so the refusal holds on every backend."""
+    with transaction.atomic():
+        fire(order)
+    limit = min(
+        LanePauseRecord._meta.get_field("worker_id").max_length,
+        DeliveryRecord._meta.get_field("claimed_by").max_length,
+    )
+    with pytest.raises(ValueError, match=f"worker_id of {limit + 1} characters"):
+        run_relay(worker_id="w" * (limit + 1), passes=1)
+    assert set(DeliveryRecord.objects.values_list("claimed_by", "attempts")) == {("", 0)}
 
 
 def test_it_refuses_where_locks_cannot_be_skipped() -> None:

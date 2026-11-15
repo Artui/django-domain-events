@@ -162,14 +162,20 @@ def test_an_actor_that_is_a_model_but_not_a_user_stays_out_of_the_foreign_key(
     assert row.actor_key.startswith("contenttypes.ContentType:")
 
 
-def test_a_long_actor_string_does_not_break_the_write(
+def test_a_long_actor_key_is_refused_when_the_block_opens() -> None:
+    """Before the block runs, so nothing inside it fires under a clipped identity."""
+    entered = []
+    with pytest.raises(ValueError, match="actor_key"), attributed(actor_key="k" * 400):
+        entered.append(True)
+    assert entered == []
+
+
+def test_a_long_actor_label_is_clipped_and_does_not_break_the_write(
     order: OrderPlaced, record: list[str]
 ) -> None:
-    """Both columns are varchar(255)."""
-    with attributed(actor_key="k" * 400, actor_label="l" * 400), transaction.atomic():
+    with attributed(actor_key="k", actor_label="l" * 400), transaction.atomic():
         fire(order)
-    row = EventRecord.objects.get()
-    assert (len(row.actor_key), len(row.actor_label)) == (255, 255)
+    assert len(EventRecord.objects.get().actor_label) == 255
 
 
 def test_scope_data_is_copied_onto_the_row(order: OrderPlaced, record: list[str]) -> None:
