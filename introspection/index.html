@@ -1190,8 +1190,8 @@ psycopg2 would run a mode it never chose and never be told. Set <code>WAKE</code
 (<a href="../operations/#listen-notify"><code>LISTEN</code> / <code>NOTIFY</code></a>).</p>
 <p><code>W009</code> is about the one Postgres encoding that has none. Every limit this package
 holds a string to counts characters - the refusals of a long receiver key, event
-name, <code>dedupe_key</code> or suppression reason, and the truncation of the actor's two
-strings - because a <code>varchar(255)</code> counts characters. A <code>SQL_ASCII</code> database
+name, lane, <code>dedupe_key</code>, suppression reason, <code>actor_key</code> or worker id, and the
+truncation of the actor's label - because a <code>varchar(255)</code> counts characters. A <code>SQL_ASCII</code> database
 counts bytes, so a value of 255 characters that are not all ASCII passes those
 checks and is refused by the insert with <code>DataError</code>, inside the caller's
 transaction. Counting bytes everywhere would refuse keys a UTF8 database stores,

@@ -1318,6 +1318,10 @@ real interface; the commands are thin wrappers, so anything cron can do a
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>python<span class="w"> </span>manage.py<span class="w"> </span>deliver_events<span class="w"> </span>--lane<span class="w"> </span>mail<span class="w"> </span>--lane-concurrency<span class="w"> </span><span class="nv">mail</span><span class="o">=</span><span class="m">6</span><span class="w">   </span><span class="c1"># six at once</span>
 </span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>python<span class="w"> </span>manage.py<span class="w"> </span>deliver_events<span class="w"> </span>--lane<span class="w"> </span>mail<span class="w"> </span>--lane-rate<span class="w"> </span><span class="nv">mail</span><span class="o">=</span><span class="m">5</span><span class="w">          </span><span class="c1"># five starts a second</span>
 </span></code></pre></div>
+<p><code>--worker-id</code> is stored on every row the relay claims and on every pause it writes,
+so one longer than those columns (255 characters) is refused before <code>RELAY_STARTUP</code>
+runs and before any claim; <code>run_relay()</code>, <code>deliver_pending()</code> and <code>deliver_one()</code>
+refuse it the same way.</p>
 <p><code>--limit</code> caps a single pass, so it needs <code>--once</code>: a relay delivers until it is
 stopped and has no total to cap, and the command refuses <code>--limit</code> beside it
 rather than accepting a cap nothing reads. Bound a relay with <code>--passes</code>.</p>

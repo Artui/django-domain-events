@@ -797,6 +797,13 @@ row's <code>scope</code> JSON.</p>
 <p>A log that loses its actor when the user row is deleted is a log that lies,
 which is why the FK is <code>SET_NULL</code> and the snapshot sits beside it. Plenty of
 things that fire events are not users, which is why <code>actor_key</code> exists at all.</p>
+<p><code>actor_key</code> is an indexed identity, so it is held whole or not at all: a key longer
+than its column (255 characters) raises <code>ValueError</code> naming <code>actor_key</code> and the limit
+when the actor is built, at <code>attributed()</code> or <code>Actor(...)</code>, rather than being clipped
+into another actor's key. That includes a key derived from <code>attributed(actor=obj)</code>
+(<code>app_label.Model:pk</code>, or <code>str(obj)</code> for an object that is not a model); pass a
+shorter <code>actor_key=</code> beside the actor to override it. <code>actor_label</code> is display text
+and is clipped to its column.</p>
 <div class="admonition warning">
 <p class="admonition-title">The scope is captured at fire time, not at delivery time</p>
 <p>It is read back off the row, so a delivery running hours later in another
